@@ -343,6 +343,13 @@ class ManifestValidatorTests(unittest.TestCase):
         self.assertLess(workflow.index(builder_command), workflow.index(test_command))
         self.assertLess(workflow.index(test_command), workflow.index(bundle_command))
 
+    def test_flatpak_job_uses_builder_with_current_appstream_compose_support(self):
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        flatpak_job = workflow[workflow.index("  build-flatpak-dev:") :]
+        flatpak_job = flatpak_job[: flatpak_job.index("\n  build-raspberry-pi-dev:")]
+
+        self.assertIn("runs-on: ubuntu-24.04", flatpak_job)
+
     def test_workflow_allows_local_submodule_mirrors_before_flatpak_builder(self):
         workflow = WORKFLOW.read_text(encoding="utf-8")
         mirror_configuration = "git config --global protocol.file.allow always"

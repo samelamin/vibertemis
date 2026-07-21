@@ -1512,7 +1512,7 @@ jobs:
   build-flatpak-dev:
     name: Flatpak Development Build
     needs: setup-version
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     if: needs.setup-version.outputs.should_build == 'true'
     
     steps:
