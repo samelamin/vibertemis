@@ -33,14 +33,43 @@ SCP_STYLE_DOTTED_HOST_PATTERN = re.compile(
     r"(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,63}:"
     r"(?:[^\\\s:]+/[^\\\s]+|[^\\\s:]+\.git)"
 )
+SCP_STYLE_ALIAS_PATTERN = re.compile(r"[A-Za-z0-9._-]+:[^\\\s:]+/[^\\\s]+")
+WINDOWS_DRIVE_PATH_PATTERN = re.compile(r"[A-Za-z]:[\\/].*")
 
 
 def walk_modules(modules):
     for module in modules if isinstance(modules, list) else ():
         if not isinstance(module, dict):
             continue
+        if module.get("disabled") is True:
+            continue
         yield module
         yield from walk_modules(module.get("modules", []))
+
+
+def active_sources(module):
+    for source in module.get("sources", []):
+        if isinstance(source, dict) and source.get("disabled") is not True:
+            yield source
+
+
+def validate_string_includes(modules):
+    errors = []
+    for module in modules if isinstance(modules, list) else ():
+        if isinstance(module, str):
+            errors.append(f"string module includes are not supported: {module}")
+            continue
+        if not isinstance(module, dict):
+            continue
+        module_name = module.get("name", "<unnamed>")
+        for source in module.get("sources", []):
+            if isinstance(source, str):
+                errors.append(
+                    "string source includes are not supported in module "
+                    f"{module_name}: {source}"
+                )
+        errors.extend(validate_string_includes(module.get("modules", [])))
+    return errors
 
 
 def has_key(value, key):
@@ -51,24 +80,32 @@ def has_key(value, key):
     return False
 
 
-def is_network_url(url):
-    return isinstance(url, str) and (
-        urlparse(url).scheme in {"ftp", "ftps", "git", "http", "https", "ssh"}
-        or SCP_STYLE_WITH_USER_PATTERN.fullmatch(url) is not None
-        or SCP_STYLE_DOTTED_HOST_PATTERN.fullmatch(url) is not None
+def is_network_url(url, source_type):
+    if not isinstance(url, str):
+        return False
+    if urlparse(url).scheme in {"ftp", "ftps", "git", "http", "https", "ssh"}:
+        return True
+    if source_type != "git" or WINDOWS_DRIVE_PATH_PATTERN.fullmatch(url):
+        return False
+    return any(
+        pattern.fullmatch(url) is not None
+        for pattern in (
+            SCP_STYLE_WITH_USER_PATTERN,
+            SCP_STYLE_DOTTED_HOST_PATTERN,
+            SCP_STYLE_ALIAS_PATTERN,
+        )
     )
 
 
 def validate_network_sources(modules):
     errors = []
     for module in modules:
-        for source in module.get("sources", []):
-            if not isinstance(source, dict):
-                continue
+        for source in active_sources(module):
             url = source.get("url")
-            if not is_network_url(url):
+            source_type = source.get("type")
+            if not is_network_url(url, source_type):
                 continue
-            if source.get("type") == "git":
+            if source_type == "git":
                 if COMMIT_PATTERN.fullmatch(str(source.get("commit", ""))) is None:
                     errors.append(
                         f"network git source {url} must use a pinned 40-character commit"
@@ -95,7 +132,9 @@ def validate_manifest(manifest):
     if has_key(manifest, "add-extensions"):
         errors.append("custom add-extensions are not allowed")
 
-    modules = list(walk_modules(manifest.get("modules", [])))
+    module_entries = manifest.get("modules", [])
+    errors.extend(validate_string_includes(module_entries))
+    modules = list(walk_modules(module_entries))
     errors.extend(validate_network_sources(modules))
 
     ffmpeg_options = {
@@ -116,8 +155,7 @@ def validate_manifest(manifest):
     if not any(
         source.get("type") == "dir" and source.get("path") == "../.."
         for module in artemis_modules
-        for source in module.get("sources", [])
-        if isinstance(source, dict)
+        for source in active_sources(module)
     ):
         errors.append(
             "Artemis module must include a local source with type=dir and path=../.."
@@ -132,8 +170,7 @@ def validate_manifest(manifest):
         source.get("type") == "patch"
         and source.get("path") == LIBPLACEBO_PATCH
         for module in libplacebo_modules
-        for source in module.get("sources", [])
-        if isinstance(source, dict)
+        for source in active_sources(module)
     ):
         errors.append(f"libplacebo module must include {LIBPLACEBO_PATCH}")
 

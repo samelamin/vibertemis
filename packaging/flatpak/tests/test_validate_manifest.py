@@ -144,6 +144,23 @@ class ManifestValidatorTests(unittest.TestCase):
             result.stderr,
         )
 
+    def test_rejects_string_module_and_source_includes(self):
+        manifest = valid_manifest()
+        manifest["modules"].append("modules/extra.json")
+        manifest["modules"][0]["sources"].append("sources/extra.json")
+
+        result = self.run_validator(manifest)
+
+        self.assertIn(
+            "string module includes are not supported: modules/extra.json",
+            result.stderr,
+        )
+        self.assertIn(
+            "string source includes are not supported in module libplacebo: "
+            "sources/extra.json",
+            result.stderr,
+        )
+
     def test_rejects_scp_style_git_url_without_username(self):
         manifest = valid_manifest()
         manifest["modules"][1]["modules"][0]["sources"] = [
@@ -168,12 +185,24 @@ class ManifestValidatorTests(unittest.TestCase):
             "40-character commit",
         )
 
+    def test_rejects_unpinned_git_source_using_ssh_host_alias(self):
+        manifest = valid_manifest()
+        manifest["modules"][1]["modules"][0]["sources"] = [
+            {"type": "git", "url": "github:owner/repo.git"}
+        ]
+
+        self.assert_contract_error(
+            manifest,
+            "network git source github:owner/repo.git must use a pinned "
+            "40-character commit",
+        )
+
     def test_does_not_treat_local_paths_or_ordinary_colons_as_network_urls(self):
         manifest = valid_manifest()
         manifest["modules"][1]["modules"][0]["sources"].extend(
             [
-                {"type": "file", "url": "C:/artemis/local.patch"},
-                {"type": "file", "url": r"C:\artemis\local.patch"},
+                {"type": "git", "url": "C:/artemis/local.git"},
+                {"type": "git", "url": r"C:\artemis\local.git"},
                 {"type": "file", "url": "label:value/with/slash"},
             ]
         )
@@ -250,6 +279,41 @@ class ManifestValidatorTests(unittest.TestCase):
             manifest,
             "libplacebo module must include "
             "libplacebo-disable-internally-synchronized-queues.patch",
+        )
+
+    def test_disabled_modules_do_not_satisfy_required_contracts(self):
+        manifest = valid_manifest()
+        for module in manifest["modules"]:
+            module["disabled"] = True
+
+        result = self.run_validator(manifest)
+
+        self.assertIn("FFmpeg must include --enable-decoder=h264", result.stderr)
+        self.assertIn(
+            "Artemis module must include a local source with type=dir and path=../..",
+            result.stderr,
+        )
+        self.assertIn(
+            "libplacebo module must include "
+            "libplacebo-disable-internally-synchronized-queues.patch",
+            result.stderr,
+        )
+
+    def test_disabled_sources_do_not_satisfy_required_contracts(self):
+        manifest = valid_manifest()
+        manifest["modules"][0]["sources"][1]["disabled"] = True
+        manifest["modules"][2]["sources"][0]["disabled"] = True
+
+        result = self.run_validator(manifest)
+
+        self.assertIn(
+            "Artemis module must include a local source with type=dir and path=../..",
+            result.stderr,
+        )
+        self.assertIn(
+            "libplacebo module must include "
+            "libplacebo-disable-internally-synchronized-queues.patch",
+            result.stderr,
         )
 
     def test_reports_each_missing_contract_as_a_separate_error(self):
