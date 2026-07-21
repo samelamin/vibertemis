@@ -354,17 +354,19 @@ bool Session::chooseDecoder(StreamingPreferences::VideoDecoderSelection vds,
 
 int Session::drSetup(int videoFormat, int width, int height, int frameRate, void *, int)
 {
+    const int actualFrameRate = RefreshRateParser::toActualFps(
+        frameRate, s_ActiveSession->m_Preferences->fps);
     s_ActiveSession->m_ActiveVideoFormat = videoFormat;
     s_ActiveSession->m_ActiveVideoWidth = width;
     s_ActiveSession->m_ActiveVideoHeight = height;
-    s_ActiveSession->m_ActiveVideoFrameRate = frameRate;
+    s_ActiveSession->m_ActiveVideoFrameRate = actualFrameRate;
 
     // Defer decoder setup until we've started streaming so we
     // don't have to hide and show the SDL window (which seems to
     // cause pointer hiding to break on Windows).
 
     SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Video stream is %dx%dx%d (format 0x%x)",
-                width, height, frameRate, videoFormat);
+                width, height, actualFrameRate, videoFormat);
 
     return 0;
 }
@@ -503,15 +505,7 @@ void Session::getDecoderInfo(SDL_Window* window,
 
 int Session::getActualFpsForDecoderTest() const
 {
-    int fps = m_StreamConfig.fps;
-    
-    // If fractional refresh rate is enabled, the fps might be multiplied by 1000 for Apollo
-    if (m_Preferences->enableFractionalRefreshRate && fps > 1000) {
-        // Convert back from Apollo's internal representation (fps * 1000) to actual fps
-        fps = fps / 1000;
-    }
-    
-    return fps;
+    return RefreshRateParser::toActualFps(m_StreamConfig.fps, m_Preferences->fps);
 }
 
 Session::DecoderAvailability
@@ -1818,15 +1812,17 @@ bool Session::startConnectionAsync()
     // had if the host supported YUV444 (though obviously with 4:2:0 subsampling).
     // If the user has adjusted the bitrate from default, we'll assume they really wanted
     // that value and not second guess them.
+    const int actualStreamFps = RefreshRateParser::toActualFps(
+        m_StreamConfig.fps, m_Preferences->fps);
     if (m_Preferences->enableYUV444 &&
         !(m_StreamConfig.supportedVideoFormats & VIDEO_FORMAT_MASK_YUV444) &&
         m_StreamConfig.bitrate == StreamingPreferences::getDefaultBitrate(m_StreamConfig.width,
                                                                           m_StreamConfig.height,
-                                                                          m_StreamConfig.fps,
+                                                                          actualStreamFps,
                                                                           true)) {
         m_StreamConfig.bitrate = StreamingPreferences::getDefaultBitrate(m_StreamConfig.width,
                                                                          m_StreamConfig.height,
-                                                                         m_StreamConfig.fps,
+                                                                         actualStreamFps,
                                                                          false);
     }
 

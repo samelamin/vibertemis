@@ -2,6 +2,7 @@
 #include "nvhttp.h"
 #include "nvcomputer.h"
 #include "identitymanager.h"
+#include "settings/refreshrateparser.h"
 #include "settings/streamingpreferences.h"
 #include <Limelight.h>
 
@@ -225,17 +226,20 @@ NvHTTP::startApp(QString verb,
     //baseParams += "&mode=" + QString::number(streamConfig->width) + "x" +
     //            QString::number(streamConfig->height) + "x";
     
-    // Handle fractional refresh rate for Apollo servers
-    if (prefs->enableFractionalRefreshRate) {
-        // Send fractional rate directly (Apollo will handle the conversion)
-        baseParams += QString::number(prefs->customRefreshRate, 'f', 2);
-        qInfo() << "Using fractional refresh rate:" << prefs->customRefreshRate << "Hz";
-    } else {
-        // Using an FPS value over 60 causes SOPS to default to 720p60,
-        // so force it to 0 to ensure the correct resolution is set. We
-        // used to use 60 here but that locked the frame rate to 60 FPS
-        // on GFE 3.20.3. We don't need this hack for Sunshine.
-        baseParams += QString::number((streamConfig->fps > 60 && isGfe) ? 0 : streamConfig->fps);
+    const int actualFps = RefreshRateParser::toActualFps(streamConfig->fps, prefs->fps);
+    // Using an FPS value over 60 causes SOPS to default to 720p60,
+    // so force it to 0 to ensure the correct resolution is set. We
+    // used to use 60 here but that locked the frame rate to 60 FPS
+    // on GFE 3.20.3. We don't need this hack for Sunshine.
+    if (actualFps > 60 && isGfe) {
+        baseParams += QStringLiteral("0");
+    }
+    else {
+        const QString modeFps = RefreshRateParser::formatModeFps(streamConfig->fps, prefs->fps);
+        baseParams += modeFps;
+        if (streamConfig->fps > 4000) {
+            qInfo() << "Using fractional refresh rate:" << modeFps << "Hz";
+        }
     }
 
     // TODO: Remove this block in future state

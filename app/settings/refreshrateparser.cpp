@@ -9,6 +9,7 @@
 namespace {
 const double kMinimumRefreshRateHz = 10.0;
 const double kMaximumRefreshRateHz = 500.0;
+const int kFractionalFpsThreshold = 4000;
 }
 
 RefreshRateParser::RefreshRateParser(QObject* parent)
@@ -109,4 +110,32 @@ int RefreshRateParser::resolveStreamFps(bool customEnabled,
         *usedCustomRate = true;
     }
     return milliHz;
+}
+
+int RefreshRateParser::toActualFps(int protocolFps, int fallbackFps)
+{
+    const int safeProtocolFps = protocolFps > 0 ? protocolFps : fallbackFps;
+    if (safeProtocolFps <= 0) {
+        return 0;
+    }
+
+    if (safeProtocolFps > kFractionalFpsThreshold) {
+        return qRound(static_cast<double>(safeProtocolFps) / 1000.0);
+    }
+
+    return safeProtocolFps;
+}
+
+QString RefreshRateParser::formatModeFps(int protocolFps, int fallbackFps)
+{
+    const int safeProtocolFps = protocolFps > 0 ? protocolFps : fallbackFps;
+    if (safeProtocolFps <= 0) {
+        return QStringLiteral("0");
+    }
+
+    if (safeProtocolFps > kFractionalFpsThreshold) {
+        return QString::number(static_cast<double>(safeProtocolFps) / 1000.0, 'f', 3);
+    }
+
+    return QString::number(safeProtocolFps);
 }
