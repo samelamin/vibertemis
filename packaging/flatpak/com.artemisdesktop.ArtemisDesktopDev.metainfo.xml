@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>com.artemisdesktop.ArtemisDesktopDev</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <name>Artemis</name>
+  <summary>Stream games and applications from another PC</summary>
+  <description>
+    <p>Artemis streams games and other applications from another PC running Sunshine or GeForce Experience.</p>
+    <p>It supports hardware-accelerated H.264, HEVC, and AV1 video, surround sound, gamepads, multitouch, and remote desktop input.</p>
+  </description>
+  <launchable type="desktop-id">com.artemisdesktop.ArtemisDesktopDev.desktop</launchable>
+  <url type="homepage">https://github.com/wjbeckett/artemis</url>
+  <url type="bugtracker">https://github.com/wjbeckett/artemis/issues</url>
+  <url type="help">https://github.com/wjbeckett/artemis/wiki</url>
+  <developer id="com.artemisdesktop">
+    <name>Artemis Desktop Project</name>
+  </developer>
+  <content_rating type="oars-1.1" />
+</component>

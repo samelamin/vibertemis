@@ -696,10 +696,15 @@ int main(int argc, char *argv[])
     app.setWindowIcon(QIcon(":/res/artemis.svg"));
 #endif
 
-    // This is necessary to show our icon correctly on Wayland
-    app.setDesktopFileName("com.moonlight_stream.Moonlight.desktop");
-    qputenv("SDL_VIDEO_WAYLAND_WMCLASS", "com.moonlight_stream.Moonlight");
-    qputenv("SDL_VIDEO_X11_WMCLASS", "com.moonlight_stream.Moonlight");
+    // Keep the desktop identity aligned with the active Flatpak sandbox while
+    // retaining the native package identity outside Flatpak.
+    const QByteArray flatpakId = qgetenv("FLATPAK_ID");
+    const QByteArray desktopId = qEnvironmentVariableIsSet("FLATPAK_ID")
+        ? flatpakId
+        : QByteArrayLiteral("com.artemis_desktop.Artemis");
+    app.setDesktopFileName(QString::fromUtf8(desktopId) + QStringLiteral(".desktop"));
+    qputenv("SDL_VIDEO_WAYLAND_WMCLASS", desktopId);
+    qputenv("SDL_VIDEO_X11_WMCLASS", desktopId);
 
     // Register our C++ types for QML
     qmlRegisterType<ComputerModel>("ComputerModel", 1, 0, "ComputerModel");
@@ -759,6 +764,11 @@ int main(int argc, char *argv[])
     }
     if (!qEnvironmentVariableIsSet("QT_QUICK_CONTROLS_MATERIAL_VARIANT")) {
         qputenv("QT_QUICK_CONTROLS_MATERIAL_VARIANT", "Dense");
+    }
+    if (!qEnvironmentVariableIsSet("QT_QUICK_CONTROLS_MATERIAL_PRIMARY")) {
+        // Qt 6.9 changed the dark-theme Material.Indigo shade. Preserve the
+        // established toolbar color unless the user has explicitly set one.
+        qputenv("QT_QUICK_CONTROLS_MATERIAL_PRIMARY", "#3F51B5");
     }
 
     QQmlApplicationEngine engine;

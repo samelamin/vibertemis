@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=Artemis
+Comment=Stream games and other applications from a Sunshine or GeForce Experience host
+Exec=artemis
+Icon=com.artemisdesktop.ArtemisDesktopDev
+Terminal=false
+Type=Application
+Categories=Qt;Game;Network;RemoteAccess;
+Keywords=nvidia;gamestream;stream;sunshine;remote play;
+StartupWMClass=com.artemisdesktop.ArtemisDesktopDev
