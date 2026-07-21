@@ -1,7 +1,7 @@
 # Steam Deck Reliability Design
 
-**Date:** 2026-07-21  
-**Branch:** `codex/steam-deck`  
+**Date:** 2026-07-21
+**Branch:** `codex/steam-deck`
 **Scope:** Steam Deck-specific Linux packaging, fractional refresh rates, streaming reliability, and release validation.
 
 ## Objective
