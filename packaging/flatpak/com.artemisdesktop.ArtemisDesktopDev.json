@@ -211,7 +211,8 @@
             "name": "artemis",
             "buildsystem": "qmake",
             "config-opts": [
-                "QMAKE_RPATHDIR=/app/lib"
+                "QMAKE_RPATHDIR=/app/lib",
+                "CONFIG+=build_tests"
             ],
             "build-options": {
                 "config-opts": [

@@ -1542,6 +1542,7 @@ jobs:
         VERSION: ${{ needs.setup-version.outputs.version }}
       run: |
         flatpak-builder --force-clean --install-deps-from=flathub --repo=flatpak-repo flatpak-build packaging/flatpak/com.artemisdesktop.ArtemisDesktopDev.json
+        flatpak build flatpak-build env QT_QPA_PLATFORM=offscreen /app/libexec/tst_refreshrate
         flatpak build-bundle flatpak-repo "artemis-flatpak-$VERSION.flatpak" com.artemisdesktop.ArtemisDesktopDev
 
     - name: Verify Flatpak build result

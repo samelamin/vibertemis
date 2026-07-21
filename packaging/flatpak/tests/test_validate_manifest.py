@@ -8,6 +8,8 @@ import unittest
 
 VALIDATOR = Path(__file__).parents[1] / "validate-manifest.py"
 MAIN_CPP = Path(__file__).parents[3] / "app" / "main.cpp"
+REFRESH_RATE_PRO = Path(__file__).parents[3] / "tests" / "refreshrate" / "refreshrate.pro"
+WORKFLOW = Path(__file__).parents[3] / ".github" / "workflows" / "dev-build.yml"
 
 
 def valid_manifest():
@@ -64,6 +66,7 @@ def valid_manifest():
             },
             {
                 "name": "artemis",
+                "config-opts": ["CONFIG+=build_tests"],
                 "sources": [{"type": "dir", "path": "../.."}],
             },
         ],
@@ -279,6 +282,41 @@ class ManifestValidatorTests(unittest.TestCase):
             manifest,
             "Artemis module must include a local source with type=dir and path=../..",
         )
+
+    def test_requires_fractional_refresh_tests_in_artemis_build(self):
+        manifest = valid_manifest()
+        manifest["modules"][2]["config-opts"] = []
+
+        self.assert_contract_error(
+            manifest,
+            "Artemis module must include CONFIG+=build_tests",
+        )
+
+    def test_installs_fractional_refresh_test_to_stable_libexec_path(self):
+        project = REFRESH_RATE_PRO.read_text(encoding="utf-8")
+
+        self.assertIn("target.path = /app/libexec", project)
+        self.assertIn("INSTALLS += target", project)
+
+    def test_workflow_runs_fractional_refresh_test_before_bundling(self):
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        builder_command = (
+            "flatpak-builder --force-clean --install-deps-from=flathub "
+            "--repo=flatpak-repo flatpak-build "
+            "packaging/flatpak/com.artemisdesktop.ArtemisDesktopDev.json"
+        )
+        test_command = (
+            "flatpak build flatpak-build env QT_QPA_PLATFORM=offscreen "
+            "/app/libexec/tst_refreshrate"
+        )
+        bundle_command = (
+            'flatpak build-bundle flatpak-repo "artemis-flatpak-$VERSION.flatpak" '
+            "com.artemisdesktop.ArtemisDesktopDev"
+        )
+
+        self.assertIn(test_command, workflow)
+        self.assertLess(workflow.index(builder_command), workflow.index(test_command))
+        self.assertLess(workflow.index(test_command), workflow.index(bundle_command))
 
     def test_requires_exact_artemis_module_name(self):
         manifest = valid_manifest()

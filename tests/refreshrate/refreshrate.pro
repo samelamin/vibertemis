@@ -13,3 +13,6 @@ SOURCES += \
 
 HEADERS += \
     ../../app/settings/refreshrateparser.h
+
+target.path = /app/libexec
+INSTALLS += target

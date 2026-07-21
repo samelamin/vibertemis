@@ -155,6 +155,11 @@ def validate_manifest(manifest):
         errors.append(
             "Artemis module must include a local source with type=dir and path=../.."
         )
+    if not any(
+        "CONFIG+=build_tests" in module.get("config-opts", [])
+        for module in artemis_modules
+    ):
+        errors.append("Artemis module must include CONFIG+=build_tests")
 
     libplacebo_modules = [
         module
