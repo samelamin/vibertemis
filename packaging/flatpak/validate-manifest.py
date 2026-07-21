@@ -28,7 +28,10 @@ REQUIRED_FFMPEG_OPTIONS = (
 LIBPLACEBO_PATCH = "libplacebo-disable-internally-synchronized-queues.patch"
 COMMIT_PATTERN = re.compile(r"[0-9a-fA-F]{40}")
 SHA256_PATTERN = re.compile(r"[0-9a-fA-F]{64}")
-SCP_STYLE_URL_PATTERN = re.compile(r"[^@\s/:]+@[^:\s/]+:.+")
+SCP_STYLE_WITH_USER_PATTERN = re.compile(r"[^@\s/:]+@[^:\s/]+:.+")
+SCP_STYLE_DOTTED_HOST_PATTERN = re.compile(
+    r"(?:[A-Za-z0-9-]+\.)+[A-Za-z0-9-]+:[^\\\s:]+/[^\\\s]+"
+)
 
 
 def walk_modules(modules):
@@ -50,7 +53,8 @@ def has_key(value, key):
 def is_network_url(url):
     return isinstance(url, str) and (
         urlparse(url).scheme in {"ftp", "ftps", "git", "http", "https", "ssh"}
-        or SCP_STYLE_URL_PATTERN.fullmatch(url) is not None
+        or SCP_STYLE_WITH_USER_PATTERN.fullmatch(url) is not None
+        or SCP_STYLE_DOTTED_HOST_PATTERN.fullmatch(url) is not None
     )
 
 

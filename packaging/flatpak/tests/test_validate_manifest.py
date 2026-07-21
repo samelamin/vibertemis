@@ -144,6 +144,32 @@ class ManifestValidatorTests(unittest.TestCase):
             result.stderr,
         )
 
+    def test_rejects_scp_style_git_url_without_username(self):
+        manifest = valid_manifest()
+        manifest["modules"][1]["modules"][0]["sources"] = [
+            {"type": "git", "url": "example.com:org/repo.git"}
+        ]
+
+        self.assert_contract_error(
+            manifest,
+            "network git source example.com:org/repo.git must use a pinned "
+            "40-character commit",
+        )
+
+    def test_does_not_treat_local_paths_or_ordinary_colons_as_network_urls(self):
+        manifest = valid_manifest()
+        manifest["modules"][1]["modules"][0]["sources"].extend(
+            [
+                {"type": "file", "url": "C:/artemis/local.patch"},
+                {"type": "file", "url": r"C:\artemis\local.patch"},
+                {"type": "file", "url": "label:value/with/slash"},
+            ]
+        )
+
+        result = self.run_validator(manifest)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_requires_all_ffmpeg_decoder_and_vaapi_vulkan_flags(self):
         manifest = valid_manifest()
         ffmpeg = manifest["modules"][1]
