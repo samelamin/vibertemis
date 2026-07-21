@@ -7,6 +7,7 @@ import unittest
 
 
 VALIDATOR = Path(__file__).parents[1] / "validate-manifest.py"
+MAIN_CPP = Path(__file__).parents[3] / "app" / "main.cpp"
 
 
 def valid_manifest():
@@ -297,6 +298,17 @@ class ManifestValidatorTests(unittest.TestCase):
             "libplacebo module must include "
             "libplacebo-disable-internally-synchronized-queues.patch",
         )
+
+    def test_desktop_file_name_uses_id_without_desktop_suffix(self):
+        main_cpp = MAIN_CPP.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "app.setDesktopFileName(QString::fromUtf8(desktopId));", main_cpp
+        )
+        self.assertIn(
+            'qputenv("SDL_VIDEO_WAYLAND_WMCLASS", desktopId);', main_cpp
+        )
+        self.assertIn('qputenv("SDL_VIDEO_X11_WMCLASS", desktopId);', main_cpp)
 
     def test_disabled_modules_do_not_satisfy_required_contracts(self):
         manifest = valid_manifest()

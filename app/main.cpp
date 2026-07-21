@@ -702,7 +702,7 @@ int main(int argc, char *argv[])
     const QByteArray desktopId = qEnvironmentVariableIsSet("FLATPAK_ID")
         ? flatpakId
         : QByteArrayLiteral("com.artemis_desktop.Artemis");
-    app.setDesktopFileName(QString::fromUtf8(desktopId) + QStringLiteral(".desktop"));
+    app.setDesktopFileName(QString::fromUtf8(desktopId));
     qputenv("SDL_VIDEO_WAYLAND_WMCLASS", desktopId);
     qputenv("SDL_VIDEO_X11_WMCLASS", desktopId);
 
