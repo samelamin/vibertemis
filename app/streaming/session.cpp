@@ -1,4 +1,5 @@
 #include "session.h"
+#include "settings/refreshrateparser.h"
 #include "settings/streamingpreferences.h"
 #include "streaming/streamutils.h"
 #include "backend/richpresencemanager.h"
@@ -719,20 +720,28 @@ bool Session::initialize()
     LiInitializeVideoCallbacks(&m_VideoCallbacks);
     m_VideoCallbacks.setup = drSetup;
 
-    m_StreamConfig.fps = m_Preferences->fps;
+    bool usedCustomRefreshRate = false;
+    m_StreamConfig.fps = RefreshRateParser::resolveStreamFps(
+        m_Preferences->enableFractionalRefreshRate,
+        m_Preferences->customRefreshRate,
+        m_Preferences->fps,
+        &usedCustomRefreshRate);
     m_StreamConfig.bitrate = m_Preferences->bitrateKbps;
 
     // Artemis Apollo integration: Apply fractional refresh rate if enabled
     if (m_Preferences->enableFractionalRefreshRate) {
-        // Convert fractional refresh rate to integer (multiply by 1000 for precision)
-        // This matches Apollo's internal representation: fps * 1000
-        int fractionalFps = (int)(m_Preferences->customRefreshRate * 1000);
-        m_StreamConfig.fps = fractionalFps;
-        
-        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                    "Applied fractional refresh rate: %.2f Hz (internal: %d)",
-                    m_Preferences->customRefreshRate,
-                    fractionalFps);
+        if (usedCustomRefreshRate) {
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                        "Applied fractional refresh rate: %.3f Hz (internal: %d)",
+                        m_Preferences->customRefreshRate,
+                        m_StreamConfig.fps);
+        }
+        else {
+            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                        "Invalid persisted fractional refresh rate %.3f Hz; using %d FPS",
+                        m_Preferences->customRefreshRate,
+                        m_Preferences->fps);
+        }
     }
 
 #ifndef STEAM_LINK
@@ -2578,4 +2587,3 @@ DispatchDeferredCleanup:
     // reference.
     QThreadPool::globalInstance()->start(new DeferredSessionCleanupTask(this));
 }
-

@@ -4,6 +4,7 @@ import QtQuick.Layouts 1.2
 import QtQuick.Window 2.2
 
 import StreamingPreferences 1.0
+import RefreshRateParser 1.0
 import ComputerManager 1.0
 import SdlGamepadKeyNavigation 1.0
 import SystemProperties 1.0
@@ -467,13 +468,8 @@ Flickable {
                             property bool isRefreshRateMode: false
                             
                             function isInputValid() {
-                                // If we have text that isn't valid, reject the input.
-                                if (!fpsField.acceptableInput && fpsField.text) {
-                                    return false
-                                }
-
-                                // Allow empty field (will use placeholder text) or valid input
-                                return true
+                                var hasValue = fpsField.text && fpsField.text.trim() !== ""
+                                return !hasValue || RefreshRateParser.parse(fpsField.text).valid
                             }
 
                             id: customFpsDialog
@@ -514,27 +510,30 @@ Flickable {
                                 }
 
                                 // Check if user entered a value
-                                var enteredValue = fpsField.text ? fpsField.text : fpsField.placeholderText
                                 var hasCustomValue = fpsField.text && fpsField.text.trim() !== ""
                                 
                                 if (hasCustomValue) {
                                     // User entered a custom refresh rate - enable fractional refresh rate mode
-                                    var refreshRate = parseFloat(enteredValue)
-                                    if (!isNaN(refreshRate)) {
-                                        StreamingPreferences.customRefreshRate = refreshRate
-                                        StreamingPreferences.enableFractionalRefreshRate = true
-                                        StreamingPreferences.fps = Math.round(refreshRate)
-                                        
-                                        // Update the FPS dropdown to reflect the new value
-                                        for (var i = 0; i < fpsListModel.count; i++) {
-                                            if (fpsListModel.get(i).is_custom) {
-                                                fpsListModel.setProperty(i, "video_fps", Math.round(refreshRate).toString())
-                                                fpsListModel.setProperty(i, "text", qsTr("Custom (%1 Hz)").arg(refreshRate.toFixed(2)))
-                                                fpsComboBox.currentIndex = i
-                                                fpsComboBox.updateBitrateForSelection()
-                                                fpsComboBox.recalculateWidth()
-                                                break
-                                            }
+                                    var parsedRefreshRate = RefreshRateParser.parse(fpsField.text)
+                                    if (!parsedRefreshRate.valid) {
+                                        reject()
+                                        return
+                                    }
+
+                                    var refreshRate = parsedRefreshRate.hz
+                                    StreamingPreferences.customRefreshRate = refreshRate
+                                    StreamingPreferences.enableFractionalRefreshRate = true
+                                    StreamingPreferences.fps = Math.round(refreshRate)
+
+                                    // Update the FPS dropdown to reflect the new value
+                                    for (var i = 0; i < fpsListModel.count; i++) {
+                                        if (fpsListModel.get(i).is_custom) {
+                                            fpsListModel.setProperty(i, "video_fps", Math.round(refreshRate).toString())
+                                            fpsListModel.setProperty(i, "text", qsTr("Custom (%1 Hz)").arg(refreshRate.toFixed(2)))
+                                            fpsComboBox.currentIndex = i
+                                            fpsComboBox.updateBitrateForSelection()
+                                            fpsComboBox.recalculateWidth()
+                                            break
                                         }
                                     }
                                 } else {
@@ -578,45 +577,30 @@ Flickable {
                                 RowLayout {
                                         TextField {
                                             id: fpsField
-                                            maximumLength: 6
+                                            maximumLength: 32
                                             inputMethodHints: Qt.ImhFormattedNumbersOnly
                                             placeholderText: "144.0"
-                                            validator: refreshRateValidator
                                             focus: true
 
-                                            IntValidator {
-                                                id: intValidator
-                                                bottom: 10
-                                                top: 500
-                                            }
-                                            
-                                            DoubleValidator {
-                                                id: refreshRateValidator
-                                                bottom: 10.0
-                                                top: 500.0
-                                                decimals: 2
+                                            onTextChanged: {
+                                                // Automatically enable fractional refresh rate if there's a value
+                                                var hasValue = fpsField.text && fpsField.text.trim() !== ""
+                                                customFpsDialog.isRefreshRateMode = hasValue
+
+                                                // standardButton() was added in Qt 5.10, so we must check for it first
+                                                if (customFpsDialog.standardButton) {
+                                                    customFpsDialog.standardButton(Dialog.Ok).enabled = customFpsDialog.isInputValid()
+                                                }
                                             }
 
-                                        onTextChanged: {
-                                            // Automatically enable fractional refresh rate if there's a value
-                                            var hasValue = fpsField.text && fpsField.text.trim() !== ""
-                                            customFpsDialog.isRefreshRateMode = hasValue
-                                            StreamingPreferences.enableFractionalRefreshRate = hasValue
-                                            
-                                            // standardButton() was added in Qt 5.10, so we must check for it first
-                                            if (customFpsDialog.standardButton) {
-                                                customFpsDialog.standardButton(Dialog.Ok).enabled = customFpsDialog.isInputValid()
+                                            Keys.onReturnPressed: {
+                                                customFpsDialog.accept()
+                                            }
+
+                                            Keys.onEnterPressed: {
+                                                customFpsDialog.accept()
                                             }
                                         }
-
-                                        Keys.onReturnPressed: {
-                                            customFpsDialog.accept()
-                                        }
-
-                                        Keys.onEnterPressed: {
-                                            customFpsDialog.accept()
-                                        }
-                                    }
                                 }
                             }
                         }

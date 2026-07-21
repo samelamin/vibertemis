@@ -5,6 +5,10 @@ SUBDIRS = \
     app \
     h264bitstream
 
+contains(CONFIG, build_tests) {
+    SUBDIRS += tests
+}
+
 # Build the dependencies in parallel before the final app
 app.depends = qmdnsengine moonlight-common-c h264bitstream
 win32:!winrt {
