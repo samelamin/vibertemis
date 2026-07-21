@@ -43,6 +43,34 @@ class PlVkFfmpegCompatibilityContractTests(unittest.TestCase):
         self.assertNotIn("vkDeviceContext->qf[", legacy)
         self.assertNotIn("vkDeviceContext->nb_qf", legacy)
 
+    def test_new_libplacebo_queue_api_is_version_guarded(self):
+        source = PLVK_SOURCE.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "#if PL_API_VER >= 287\n"
+            "    PlVkRenderer* me = (PlVkRenderer*)dev_ctx->user_opaque;\n"
+            "    me->m_Vulkan->lock_queue(me->m_Vulkan, queue_family, index);",
+            source,
+        )
+        self.assertIn(
+            "#if PL_API_VER >= 287\n"
+            "    vkParams.extra_queues = m_HwAccelBackend ? VK_QUEUE_FLAG_BITS_MAX_ENUM : 0;",
+            source,
+        )
+        self.assertIn(
+            "LIBAVUTIL_VERSION_MAJOR < 62 && PL_API_VER >= 287",
+            source,
+        )
+
+    def test_ffmpeg_vulkan_proc_loader_is_version_guarded(self):
+        source = PLVK_SOURCE.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "#if LIBAVUTIL_VERSION_MAJOR >= 57\n"
+            "        vkDeviceContext->get_proc_addr = m_PlVkInstance->get_proc_addr;",
+            source,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

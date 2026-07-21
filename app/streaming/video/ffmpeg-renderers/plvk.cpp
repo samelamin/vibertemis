@@ -135,14 +135,26 @@ static void pl_log_cb(void*, enum pl_log_level level, const char *msg)
 
 void PlVkRenderer::lockQueue(struct AVHWDeviceContext *dev_ctx, uint32_t queue_family, uint32_t index)
 {
+#if PL_API_VER >= 287
     PlVkRenderer* me = (PlVkRenderer*)dev_ctx->user_opaque;
     me->m_Vulkan->lock_queue(me->m_Vulkan, queue_family, index);
+#else
+    Q_UNUSED(dev_ctx);
+    Q_UNUSED(queue_family);
+    Q_UNUSED(index);
+#endif
 }
 
 void PlVkRenderer::unlockQueue(struct AVHWDeviceContext *dev_ctx, uint32_t queue_family, uint32_t index)
 {
+#if PL_API_VER >= 287
     PlVkRenderer* me = (PlVkRenderer*)dev_ctx->user_opaque;
     me->m_Vulkan->unlock_queue(me->m_Vulkan, queue_family, index);
+#else
+    Q_UNUSED(dev_ctx);
+    Q_UNUSED(queue_family);
+    Q_UNUSED(index);
+#endif
 }
 
 void PlVkRenderer::overlayUploadComplete(void* opaque)
@@ -372,7 +384,9 @@ bool PlVkRenderer::tryInitializeDevice(VkPhysicalDevice device, VkPhysicalDevice
     vkParams.device = device;
     vkParams.opt_extensions = k_OptionalDeviceExtensions;
     vkParams.num_opt_extensions = SDL_arraysize(k_OptionalDeviceExtensions);
+#if PL_API_VER >= 287
     vkParams.extra_queues = m_HwAccelBackend ? VK_QUEUE_FLAG_BITS_MAX_ENUM : 0;
+#endif
     m_Vulkan = pl_vulkan_create(m_Log, &vkParams);
     if (m_Vulkan == nullptr) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
@@ -548,7 +562,9 @@ bool PlVkRenderer::initialize(PDECODER_PARAMETERS params)
         hwDeviceContext->user_opaque = this; // Used by lockQueue()/unlockQueue()
 
         auto vkDeviceContext = (AVVulkanDeviceContext*)((AVHWDeviceContext *)m_HwDeviceCtx->data)->hwctx;
+#if LIBAVUTIL_VERSION_MAJOR >= 57
         vkDeviceContext->get_proc_addr = m_PlVkInstance->get_proc_addr;
+#endif
         vkDeviceContext->inst = m_PlVkInstance->instance;
         vkDeviceContext->phys_dev = m_Vulkan->phys_device;
         vkDeviceContext->act_dev = m_Vulkan->device;
@@ -557,7 +573,7 @@ bool PlVkRenderer::initialize(PDECODER_PARAMETERS params)
         vkDeviceContext->nb_enabled_inst_extensions = m_PlVkInstance->num_extensions;
         vkDeviceContext->enabled_dev_extensions = m_Vulkan->extensions;
         vkDeviceContext->nb_enabled_dev_extensions = m_Vulkan->num_extensions;
-#if LIBAVUTIL_VERSION_INT > AV_VERSION_INT(58, 9, 100) && LIBAVUTIL_VERSION_MAJOR < 62
+#if LIBAVUTIL_VERSION_INT > AV_VERSION_INT(58, 9, 100) && LIBAVUTIL_VERSION_MAJOR < 62 && PL_API_VER >= 287
         vkDeviceContext->lock_queue = lockQueue;
         vkDeviceContext->unlock_queue = unlockQueue;
 #endif
