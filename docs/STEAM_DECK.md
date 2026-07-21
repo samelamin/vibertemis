@@ -131,8 +131,9 @@ not a passed requirement; use Desktop Mode SDR as the supported comparison.
   frames may wait in the queue, trading some latency for smoother cadence.
 - **V-Sync on, Frame pacing off:** keeps tear-free presentation but removes the
   extra pacing delay; compare when queue delay or periodic stutter is high.
-- **V-Sync off:** lowest presentation latency, but visible tearing is expected.
-  Artemis disables the frame-pacing control when V-Sync is off.
+- **V-Sync off:** lowest presentation latency, but visible tearing may occur;
+  compositor behavior such as Gamescope can affect the result. Artemis disables
+  the frame-pacing control when V-Sync is off.
 
 Test one setting at a time in a repeatable moving scene. At 60, 90, and 59.94
 FPS, one frame interval is about 16.67 ms, 11.11 ms, and 16.68 ms respectively.
@@ -189,19 +190,20 @@ Gaming Mode and once in Desktop Mode SDR, and capture:
 - a statistics-overlay screenshot during motion; and
 - the Artemis log from the same reproduction.
 
-Artemis writes the session log inside the sandbox's temporary directory. From
-Desktop Mode, this wrapper keeps the sandbox alive long enough to copy it into
-your home directory after Artemis exits:
+On Linux, Artemis writes diagnostic output to standard error. Capture it from a
+Desktop Mode terminal without adding sandbox permissions:
 
 ```bash
-flatpak run --command=sh --filesystem=home \
-  com.artemisdesktop.ArtemisDesktopDev -c \
-  'mkdir -p "$HOME/artemis-logs"; /app/bin/artemis; cp -v /tmp/Artemis-*.log "$HOME/artemis-logs/"'
+mkdir -p "$HOME/artemis-logs"
+set -o pipefail
+flatpak run com.artemisdesktop.ArtemisDesktopDev 2>&1 \
+  | tee "$HOME/artemis-logs/artemis-$(date +%Y%m%d-%H%M%S).log"
 ```
 
-Reproduce the issue, quit Artemis normally, then attach the newest file from
-`~/artemis-logs/`. Review logs before sharing because they can contain hostnames,
-IP addresses, application names, and other local details.
+Reproduce the issue, then quit Artemis. `pipefail` preserves a non-zero Artemis
+exit status instead of hiding it behind a successful `tee`. Attach the newest
+file from `~/artemis-logs/`. Review logs before sharing because they can contain
+hostnames, IP addresses, application names, and other local details.
 
 ## What CI verifies—and what it cannot
 
