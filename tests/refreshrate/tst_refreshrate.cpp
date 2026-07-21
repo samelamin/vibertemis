@@ -32,6 +32,7 @@ private slots:
     void protocolFpsFormatsNvHttpModeConsistently_data();
     void protocolFpsFormatsNvHttpModeConsistently();
     void roundedCustomRateStaysConsistentAcrossProtocolConsumers();
+    void quantizedHalfBoundaryStaysConsistentAcrossUiAndProtocol();
     void invalidCustomRateUsesFallbackAcrossProtocolConsumers();
     void qmlSingletonCanParseCommaDecimal();
 };
@@ -204,6 +205,21 @@ void RefreshRateParserTest::roundedCustomRateStaysConsistentAcrossProtocolConsum
     QCOMPARE(protocolFps, 60000);
     QCOMPARE(RefreshRateParser::toActualFps(protocolFps, 60), 60);
     QCOMPARE(RefreshRateParser::formatModeFps(protocolFps, 60), QStringLiteral("60.000"));
+}
+
+void RefreshRateParserTest::quantizedHalfBoundaryStaysConsistentAcrossUiAndProtocol()
+{
+    RefreshRateParser parser;
+    const QVariantMap parsed = parser.parse(QStringLiteral("59.4996"));
+    const int protocolFps = parsed.value(QStringLiteral("milliHz")).toInt();
+    const double storedCustomHz = static_cast<double>(protocolFps) / 1000.0;
+
+    QCOMPARE(parsed.value(QStringLiteral("valid")).toBool(), true);
+    QCOMPARE(protocolFps, 59500);
+    QCOMPARE(storedCustomHz, 59.5);
+    QCOMPARE(RefreshRateParser::resolveStreamFps(true, storedCustomHz, 60), protocolFps);
+    QCOMPARE(RefreshRateParser::formatModeFps(protocolFps, 60), QStringLiteral("59.500"));
+    QCOMPARE(RefreshRateParser::toActualFps(protocolFps, 60), 60);
 }
 
 void RefreshRateParserTest::invalidCustomRateUsesFallbackAcrossProtocolConsumers()

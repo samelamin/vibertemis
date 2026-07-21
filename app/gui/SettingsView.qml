@@ -520,15 +520,16 @@ Flickable {
                                         return
                                     }
 
-                                    var refreshRate = parsedRefreshRate.hz
+                                    var refreshRate = parsedRefreshRate.milliHz / 1000.0
+                                    var actualFps = Math.round(refreshRate)
                                     StreamingPreferences.customRefreshRate = refreshRate
                                     StreamingPreferences.enableFractionalRefreshRate = true
-                                    StreamingPreferences.fps = Math.round(refreshRate)
+                                    StreamingPreferences.fps = actualFps
 
                                     // Update the FPS dropdown to reflect the new value
                                     for (var i = 0; i < fpsListModel.count; i++) {
                                         if (fpsListModel.get(i).is_custom) {
-                                            fpsListModel.setProperty(i, "video_fps", Math.round(refreshRate).toString())
+                                            fpsListModel.setProperty(i, "video_fps", actualFps.toString())
                                             fpsListModel.setProperty(i, "text", qsTr("Custom (%1 Hz)").arg(refreshRate.toFixed(2)))
                                             fpsComboBox.currentIndex = i
                                             fpsComboBox.updateBitrateForSelection()
