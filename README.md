@@ -64,6 +64,9 @@ Artemis Qt is specifically optimized for handheld gaming devices like the Steam 
 - **Power Efficient** - Optimized for battery life
 - **Gamepad Shortcuts** - Built-in gamepad combinations for quick access to features
 
+For installation, recommended settings, troubleshooting, and the unverified
+hardware acceptance matrix, see the [Steam Deck setup and validation guide](docs/STEAM_DECK.md).
+
 ## 🎮 Keyboard and Gamepad Shortcuts
 
 ### Quick Menu Toggle
