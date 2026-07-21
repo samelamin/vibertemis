@@ -40,6 +40,20 @@ class UpstreamPortContractTests(unittest.TestCase):
             source,
         )
 
+    def test_combo_boxes_handle_left_and_right_navigation(self):
+        source = (
+            REPOSITORY_ROOT / "app/gui/AutoResizingComboBox.qml"
+        ).read_text(encoding="utf-8")
+
+        self.assertRegex(
+            source,
+            re.compile(r"Keys\.onLeftPressed:\s*\{\s*decrementCurrentIndex\(\)\s*\}"),
+        )
+        self.assertRegex(
+            source,
+            re.compile(r"Keys\.onRightPressed:\s*\{\s*incrementCurrentIndex\(\)\s*\}"),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
