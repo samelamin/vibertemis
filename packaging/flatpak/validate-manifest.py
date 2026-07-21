@@ -28,6 +28,7 @@ REQUIRED_FFMPEG_OPTIONS = (
 LIBPLACEBO_PATCH = "libplacebo-disable-internally-synchronized-queues.patch"
 COMMIT_PATTERN = re.compile(r"[0-9a-fA-F]{40}")
 SHA256_PATTERN = re.compile(r"[0-9a-fA-F]{64}")
+SCP_STYLE_URL_PATTERN = re.compile(r"[^@\s/:]+@[^:\s/]+:.+")
 
 
 def walk_modules(modules):
@@ -47,12 +48,10 @@ def has_key(value, key):
 
 
 def is_network_url(url):
-    return isinstance(url, str) and urlparse(url).scheme in {
-        "http",
-        "https",
-        "git",
-        "ssh",
-    }
+    return isinstance(url, str) and (
+        urlparse(url).scheme in {"ftp", "ftps", "git", "http", "https", "ssh"}
+        or SCP_STYLE_URL_PATTERN.fullmatch(url) is not None
+    )
 
 
 def validate_network_sources(modules):
@@ -107,7 +106,7 @@ def validate_manifest(manifest):
     artemis_modules = [
         module
         for module in modules
-        if "artemis" in str(module.get("name", "")).lower()
+        if module.get("name") == "artemis"
     ]
     if not any(
         source.get("type") == "dir" and source.get("path") == "../.."

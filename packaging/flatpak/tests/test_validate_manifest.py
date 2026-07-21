@@ -111,6 +111,9 @@ class ManifestValidatorTests(unittest.TestCase):
         manifest["modules"][1]["modules"][0]["sources"] = [
             {"type": "git", "url": "https://example.test/unpinned.git"},
             {"type": "archive", "url": "https://example.test/unpinned.tar.gz"},
+            {"type": "archive", "url": "ftp://example.test/unpinned.tar.gz"},
+            {"type": "file", "url": "ftps://example.test/unpinned.patch"},
+            {"type": "git", "url": "git@example.com:org/repo.git"},
         ]
 
         result = self.run_validator(manifest)
@@ -123,6 +126,21 @@ class ManifestValidatorTests(unittest.TestCase):
         self.assertIn(
             "network source https://example.test/unpinned.tar.gz must use a pinned "
             "SHA-256",
+            result.stderr,
+        )
+        self.assertIn(
+            "network source ftp://example.test/unpinned.tar.gz must use a pinned "
+            "SHA-256",
+            result.stderr,
+        )
+        self.assertIn(
+            "network source ftps://example.test/unpinned.patch must use a pinned "
+            "SHA-256",
+            result.stderr,
+        )
+        self.assertIn(
+            "network git source git@example.com:org/repo.git must use a pinned "
+            "40-character commit",
             result.stderr,
         )
 
@@ -171,6 +189,15 @@ class ManifestValidatorTests(unittest.TestCase):
         manifest["modules"][2]["sources"] = [
             {"type": "dir", "path": "../../wrong"}
         ]
+
+        self.assert_contract_error(
+            manifest,
+            "Artemis module must include a local source with type=dir and path=../..",
+        )
+
+    def test_requires_exact_artemis_module_name(self):
+        manifest = valid_manifest()
+        manifest["modules"][2]["name"] = "not-artemis"
 
         self.assert_contract_error(
             manifest,
