@@ -26,6 +26,7 @@ on:
       - 'feature/**'
       - 'feat/**'
       - 'fix/**'
+      - 'codex/**'
   workflow_dispatch:  # Allow manual triggering
 
 env:
@@ -1529,207 +1530,45 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y flatpak flatpak-builder
         sudo flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
-        sudo flatpak install -y flathub org.freedesktop.Platform//23.08 org.freedesktop.Sdk//23.08 org.kde.Platform//6.6 org.kde.Sdk//6.6
+        sudo flatpak install -y flathub org.kde.Platform//6.10 org.kde.Sdk//6.10
 
-    - name: Create Flatpak manifest with libplacebo for Steam Deck compatibility
+    - name: Validate tracked Flatpak manifest
       run: |
-        cat > com.artemisdesktop.ArtemisDesktopDev.yml << 'EOF'
-        app-id: com.artemisdesktop.ArtemisDesktopDev
-        runtime: org.kde.Platform
-        runtime-version: '6.6'
-        sdk: org.kde.Sdk
-        command: artemis-dev
-        finish-args:
-          - --share=ipc
-          - --socket=x11
-          - --socket=wayland
-          - --socket=pulseaudio
-          - --share=network
-          - --filesystem=home
-          # GPU and hardware acceleration access (critical for Steam Deck and desktop)
-          - --device=dri
-          # Enable access to host graphics drivers (Mesa, NVIDIA, etc.)
-          - --filesystem=host-os
-          - --filesystem=/usr/share/drirc.d:ro
-          # Allow access to VA-API and VDPAU hardware decode libraries
-          - --env=LIBVA_DRIVERS_PATH=/run/host/usr/lib/x86_64-linux-gnu/dri:/run/host/usr/lib/dri:/usr/lib/x86_64-linux-gnu/dri
-          - --env=VDPAU_DRIVER_PATH=/run/host/usr/lib/x86_64-linux-gnu/vdpau:/run/host/usr/lib/vdpau:/usr/lib/x86_64-linux-gnu/vdpau
-        add-extensions:
-          # Mount host GL/Vulkan drivers from the Freedesktop runtime
-          org.freedesktop.Platform.GL.default:
-            version: '23.08'
-            directory: gl-default
-            subdirectories: true
-            no-autodownload: true
-            autodelete: false
-            add-ld-path: lib
-          org.freedesktop.Platform.GL.nvidia:
-            version: '23.08'
-            directory: gl-nvidia
-            subdirectories: true
-            no-autodownload: true
-            autodelete: false
-            add-ld-path: lib
-          # Mount host VA-API drivers for hardware video decode
-          org.freedesktop.Platform.VAAPI.Intel:
-            version: '23.08'
-            directory: vaapi-intel
-            subdirectories: true
-            no-autodownload: true
-            autodelete: false
-            add-ld-path: lib
-          org.freedesktop.Platform.VAAPI.AMD:
-            version: '23.08'
-            directory: vaapi-amd
-            subdirectories: true
-            no-autodownload: true
-            autodelete: false
-            add-ld-path: lib
-        modules:
-          - name: opus
-            sources:
-              - type: archive
-                url: https://downloads.xiph.org/releases/opus/opus-1.4.tar.gz
-                sha256: c9b32b4253be5ae63d1ff16eea06b94b5f0f2951b7a02aceef58e3a3ce49c51f
-          
-          - name: sdl2
-            sources:
-              - type: archive
-                url: https://github.com/libsdl-org/SDL/releases/download/release-2.28.5/SDL2-2.28.5.tar.gz
-                sha256: 332cb37d0be20cb9541739c61f79bae5a477427d79ae85e352089afdaf6666e4
-          
-          - name: sdl2-ttf
-            sources:
-              - type: archive
-                url: https://github.com/libsdl-org/SDL_ttf/releases/download/release-2.20.2/SDL2_ttf-2.20.2.tar.gz
-                sha256: 9dc71ed93487521b107a2c4a9ca6bf43fb62f6bddd5c26b055e6b91418a22053
-          
-          # Build libplacebo from source for Vulkan/HDR support (critical for Steam Deck)
-          - name: libplacebo
-            buildsystem: meson
-            config-opts:
-              - -Dvulkan=enabled
-              - -Dopengl=enabled
-              - -Dshaderc=enabled
-              - -Ddemos=false
-              - -Dtests=false
-            sources:
-              - type: archive
-                url: https://code.videolan.org/videolan/libplacebo/-/archive/v7.349.0/libplacebo-v7.349.0.tar.gz
-                sha256: 79120e685a1836344b51b13b6a5661622486a84e4d4a35f6c8d01679a20fbc86
-              # Vendor glad2 into libplacebo's 3rdparty/ so Meson can find it without network access
-              - type: git
-                url: https://github.com/Dav1dde/glad.git
-                branch: glad2
-                dest: 3rdparty/glad
-              - type: git
-                url: https://github.com/pallets/jinja.git
-                branch: main
-                dest: 3rdparty/jinja
-              - type: git
-                url: https://github.com/pallets/markupsafe.git
-                branch: main
-                dest: 3rdparty/markupsafe
-            modules:
-              # Provide spirv-cross for the OpenGL backend (C shared library with pkg-config)
-              - name: spirv-cross
-                buildsystem: cmake-ninja
-                builddir: true
-                config-opts:
-                  - -DCMAKE_BUILD_TYPE=Release
-                  - -DSPIRV_CROSS_ENABLE_TESTS=OFF
-                  - -DSPIRV_CROSS_ENABLE_C_API=ON
-                  - -DSPIRV_CROSS_CLI=OFF
-                  - -DSPIRV_CROSS_ENABLE_PKG_CONFIG=ON
-                  - -DBUILD_SHARED_LIBS=ON
-                  - -DCMAKE_INSTALL_PREFIX=/app
-                sources:
-                  - type: git
-                    url: https://github.com/KhronosGroup/SPIRV-Cross.git
-                    branch: main
-              # Build shaderc and vendor its exact dependencies to ensure compatibility
-              - name: shaderc
-                buildsystem: cmake-ninja
-                builddir: true
-                config-opts:
-                  - -DCMAKE_BUILD_TYPE=Release
-                  - -DSHADERC_SKIP_COPYRIGHT_CHECK=ON
-                  - -DSHADERC_SKIP_EXAMPLES=ON
-                  - -DSHADERC_SKIP_TESTS=ON
-                  - -DSHADERC_ENABLE_WERROR=OFF
-                sources:
-                  - type: git
-                    url: https://github.com/google/shaderc.git
-                    branch: main
-                  # Vendor glslang at the location shaderc expects
-                  - type: git
-                    url: https://github.com/KhronosGroup/glslang.git
-                    branch: main
-                    dest: third_party/glslang
-                  # Vendor SPIRV-Tools and SPIRV-Headers in the expected layout
-                  - type: git
-                    url: https://github.com/KhronosGroup/SPIRV-Tools.git
-                    branch: main
-                    dest: third_party/spirv-tools
-                  - type: git
-                    url: https://github.com/KhronosGroup/SPIRV-Headers.git
-                    branch: main
-                    dest: third_party/spirv-tools/external/spirv-headers
-          
-          - name: artemis-desktop-dev
-            buildsystem: simple
-            build-commands:
-              - install -d /app/lib/GL # Workaround for NVIDIA driver issue
-              # Create extension mount directories for hardware acceleration
-              - install -d /app/lib/gl-default
-              - install -d /app/lib/gl-nvidia
-              - install -d /app/lib/vaapi-intel
-              - install -d /app/lib/vaapi-amd
-              - rm -f .qmake.stash .qmake.cache
-              - find . -name "Makefile*" -delete || true
-              - rm -rf AntiHooking/ || true
-              - rm -rf config.tests/SL/ || true
-              - rm -f app/test_*.cpp || true
-              - qmake6 artemis.pro CONFIG+=release "QMAKE_CXXFLAGS+=-fPIC"
-              - make -j$(nproc)
-              - install -Dm755 app/artemis /app/bin/artemis-dev
-            sources:
-              - type: dir
-                path: .
-            post-install:
-              - |
-                install -Dm644 /dev/stdin /app/share/applications/com.artemisdesktop.ArtemisDesktopDev.desktop << 'EOD'
-                [Desktop Entry]
-                Type=Application
-                Name=Artemis Desktop (Dev)
-                Comment=Artemis Desktop Development Build - Steam Deck Compatible
-                Exec=artemis-dev
-                Icon=com.artemisdesktop.ArtemisDesktopDev
-                Categories=Game;Network;
-                Keywords=gaming;streaming;nvidia;gamestream;sunshine;steam;deck;
-                EOD
-              # Copy icon files if they exist
-              - |
-                if [ -f app/artemis.png ]; then
-                  install -Dm644 app/artemis.png /app/share/icons/hicolor/256x256/apps/com.artemisdesktop.ArtemisDesktopDev.png
-                fi
-                if [ -f app/res/artemis.svg ]; then
-                  install -Dm644 app/res/artemis.svg /app/share/icons/hicolor/scalable/apps/com.artemisdesktop.ArtemisDesktopDev.svg
-                fi
-        EOF
+        python3 -m unittest discover -s packaging/flatpak/tests -p 'test_*.py' -v
+        python3 packaging/flatpak/validate-manifest.py packaging/flatpak/com.artemisdesktop.ArtemisDesktopDev.json
     
-    - name: Build Flatpak
+    - name: Build tracked Flatpak
       env:
         VERSION: ${{ needs.setup-version.outputs.version }}
       run: |
-        flatpak-builder --force-clean --repo=repo build-dir com.artemisdesktop.ArtemisDesktopDev.yml
-        flatpak build-bundle repo artemis-flatpak-$VERSION.flatpak com.artemisdesktop.ArtemisDesktopDev
+        flatpak-builder --force-clean --install-deps-from=flathub --repo=flatpak-repo flatpak-build packaging/flatpak/com.artemisdesktop.ArtemisDesktopDev.json
+        flatpak build-bundle flatpak-repo "artemis-flatpak-$VERSION.flatpak" com.artemisdesktop.ArtemisDesktopDev
+
+    - name: Verify Flatpak build result
+      run: |
+        flatpak build flatpak-build /app/libexec/artemis-codec-probe
+        flatpak build flatpak-build test -x /app/bin/artemis
+        flatpak build flatpak-build appstreamcli validate --no-net /app/share/metainfo/com.artemisdesktop.ArtemisDesktopDev.metainfo.xml
+        flatpak build flatpak-build sh -euxc 'ldd /app/bin/artemis | tee /tmp/artemis-ldd.txt; ! grep -q "not found" /tmp/artemis-ldd.txt; for lib in libavcodec libplacebo libSDL2-2.0 libSDL2_ttf-2.0; do find /app/lib -name "$lib.so*" -print -quit | grep -q .; done'
+
+    - name: Smoke test Flatpak application
+      run: |
+        set +e
+        timeout 10s flatpak build flatpak-build env QT_QPA_PLATFORM=offscreen SDL_VIDEODRIVER=dummy /app/bin/artemis >artemis-smoke.log 2>&1
+        status=$?
+        set -e
+        if [ "$status" -ne 0 ] && [ "$status" -ne 124 ]; then
+          cat artemis-smoke.log
+          exit "$status"
+        fi
     
     - name: Upload Flatpak Development Artifacts
       uses: actions/upload-artifact@v4
       with:
         name: artemis-flatpak-${{ needs.setup-version.outputs.version }}
-        path: artemis-flatpak-${{ needs.setup-version.outputs.version }}.flatpak
+        path: |
+          artemis-flatpak-${{ needs.setup-version.outputs.version }}.flatpak
+          artemis-smoke.log
         retention-days: 30
 
   build-raspberry-pi-dev:
