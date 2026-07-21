@@ -1,8 +1,11 @@
 # Steam Deck Moonlight Upstream Audit
 
-**Audit date:** 2026-07-21  
-**Artemis branch:** `codex/steam-deck`  
-**Upstream reference:** `research/moonlight-master`  
+**Audit date:** 2026-07-21
+
+**Artemis branch:** `codex/steam-deck`
+
+**Upstream reference:** `research/moonlight-master`
+
 **Common history:** `1bf86f52d368935e60780acc2d9d3c5265f6bce8`
 
 ## Method and acceptance criteria
