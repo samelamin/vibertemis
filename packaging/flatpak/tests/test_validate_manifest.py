@@ -156,6 +156,18 @@ class ManifestValidatorTests(unittest.TestCase):
             "40-character commit",
         )
 
+    def test_rejects_host_only_scp_git_url_without_path_separator(self):
+        manifest = valid_manifest()
+        manifest["modules"][1]["modules"][0]["sources"] = [
+            {"type": "git", "url": "example.com:repo.git"}
+        ]
+
+        self.assert_contract_error(
+            manifest,
+            "network git source example.com:repo.git must use a pinned "
+            "40-character commit",
+        )
+
     def test_does_not_treat_local_paths_or_ordinary_colons_as_network_urls(self):
         manifest = valid_manifest()
         manifest["modules"][1]["modules"][0]["sources"].extend(

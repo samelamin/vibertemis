@@ -30,7 +30,8 @@ COMMIT_PATTERN = re.compile(r"[0-9a-fA-F]{40}")
 SHA256_PATTERN = re.compile(r"[0-9a-fA-F]{64}")
 SCP_STYLE_WITH_USER_PATTERN = re.compile(r"[^@\s/:]+@[^:\s/]+:.+")
 SCP_STYLE_DOTTED_HOST_PATTERN = re.compile(
-    r"(?:[A-Za-z0-9-]+\.)+[A-Za-z0-9-]+:[^\\\s:]+/[^\\\s]+"
+    r"(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,63}:"
+    r"(?:[^\\\s:]+/[^\\\s]+|[^\\\s:]+\.git)"
 )
 
 
