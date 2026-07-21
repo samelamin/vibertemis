@@ -1,8 +1,10 @@
 #include <QtTest>
 
+#include <QFile>
 #include <QJSEngine>
 #include <QQmlComponent>
 #include <QQmlEngine>
+#include <QRegularExpression>
 #include <QScopedPointer>
 #include <qqml.h>
 
@@ -35,7 +37,20 @@ private slots:
     void quantizedHalfBoundaryStaysConsistentAcrossUiAndProtocol();
     void invalidCustomRateUsesFallbackAcrossProtocolConsumers();
     void qmlSingletonCanParseCommaDecimal();
+    void settingsViewSelectsPersistedFractionalCustomRow();
+    void settingsViewDisablesFractionalModeForStandardSelection();
+    void settingsViewDisplaysCustomRateAtMilliHzPrecision();
 };
+
+static QString readSettingsViewQml()
+{
+    const QString path = QFINDTESTDATA("../../app/gui/SettingsView.qml");
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        return QString();
+    }
+    return QString::fromUtf8(file.readAll());
+}
 
 void RefreshRateParserTest::parseValueAcceptsValidInput_data()
 {
@@ -261,6 +276,44 @@ void RefreshRateParserTest::qmlSingletonCanParseCommaDecimal()
     QCOMPARE(object->property("parsedValid").toBool(), true);
     QCOMPARE(object->property("parsedHz").toDouble(), 59.94);
     QCOMPARE(object->property("parsedMilliHz").toInt(), 59940);
+}
+
+void RefreshRateParserTest::settingsViewSelectsPersistedFractionalCustomRow()
+{
+    const QString source = readSettingsViewQml();
+    QVERIFY(!source.isEmpty());
+    QVERIFY(source.contains(QStringLiteral(
+        "if (StreamingPreferences.enableFractionalRefreshRate && parsedCustomRefreshRate.valid)")));
+    QVERIFY(source.contains(QStringLiteral(
+        "currentIndex = updateCustomRefreshRate(actualFps, "
+        "qsTr(\"Custom (%1 Hz)\").arg(customRefreshRate.toFixed(3)))")));
+}
+
+void RefreshRateParserTest::settingsViewDisablesFractionalModeForStandardSelection()
+{
+    const QString source = readSettingsViewQml();
+    QVERIFY(!source.isEmpty());
+
+    const QRegularExpression standardSelectionPattern(
+        QStringLiteral(
+            "else\\s*\\{\\s*"
+            "StreamingPreferences\\.enableFractionalRefreshRate = false\\s*"
+            "updateBitrateForSelection\\(\\)"));
+    QVERIFY(standardSelectionPattern.match(source).hasMatch());
+}
+
+void RefreshRateParserTest::settingsViewDisplaysCustomRateAtMilliHzPrecision()
+{
+    const QString source = readSettingsViewQml();
+    QVERIFY(!source.isEmpty());
+    QVERIFY(source.contains(QStringLiteral(
+        "qsTr(\"Custom (%1 Hz)\").arg(refreshRate.toFixed(3))")));
+    QVERIFY(source.contains(QStringLiteral(
+        "qsTr(\"Custom (%1 Hz)\").arg(customRefreshRate.toFixed(3))")));
+    QVERIFY(!source.contains(QStringLiteral(
+        "qsTr(\"Custom (%1 Hz)\").arg(refreshRate.toFixed(2))")));
+    QVERIFY(!source.contains(QStringLiteral(
+        "qsTr(\"Custom (%1 Hz)\").arg(customRefreshRate.toFixed(2))")));
 }
 
 QTEST_GUILESS_MAIN(RefreshRateParserTest)

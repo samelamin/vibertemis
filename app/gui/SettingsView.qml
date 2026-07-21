@@ -530,7 +530,7 @@ Flickable {
                                     for (var i = 0; i < fpsListModel.count; i++) {
                                         if (fpsListModel.get(i).is_custom) {
                                             fpsListModel.setProperty(i, "video_fps", actualFps.toString())
-                                            fpsListModel.setProperty(i, "text", qsTr("Custom (%1 Hz)").arg(refreshRate.toFixed(2)))
+                                            fpsListModel.setProperty(i, "text", qsTr("Custom (%1 Hz)").arg(refreshRate.toFixed(3)))
                                             fpsComboBox.currentIndex = i
                                             fpsComboBox.updateBitrateForSelection()
                                             fpsComboBox.recalculateWidth()
@@ -640,6 +640,24 @@ Flickable {
                             return indexToAdd
                         }
 
+                        function updateCustomRefreshRate(refreshRate, description) {
+                            for (var i = 0; i < model.count; i++) {
+                                if (model.get(i).is_custom) {
+                                    model.setProperty(i, "video_fps", ""+refreshRate)
+                                    model.setProperty(i, "text", description)
+                                    return i
+                                }
+                            }
+
+                            // Custom values always live at the end and may match a standard FPS.
+                            model.append({
+                                             "text": description,
+                                             "video_fps": ""+refreshRate,
+                                             "is_custom": true
+                                         })
+                            return model.count - 1
+                        }
+
                         function reinitialize() {
                             // Add native refresh rate for all attached displays
                             var done = false
@@ -655,24 +673,33 @@ Flickable {
                             }
 
                             var saved_fps = StreamingPreferences.fps
-                            var found = false
-                            for (var i = 0; i < model.count; i++) {
-                                var el_fps = parseInt(model.get(i).video_fps);
-
-                                // Look for a matching frame rate
-                                if (saved_fps === el_fps) {
-                                    currentIndex = i
-                                    found = true
-                                    break
-                                }
-                            }
-
-                            // If we didn't find one, add a custom frame rate for the current value
-                            if (!found) {
-                                currentIndex = addRefreshRateOrdered(model, saved_fps, qsTr("Custom (%1 FPS)").arg(saved_fps), true)
+                            var parsedCustomRefreshRate = RefreshRateParser.parse(
+                                        StreamingPreferences.customRefreshRate.toString())
+                            if (StreamingPreferences.enableFractionalRefreshRate && parsedCustomRefreshRate.valid) {
+                                var customRefreshRate = parsedCustomRefreshRate.milliHz / 1000.0
+                                var actualFps = Math.round(customRefreshRate)
+                                currentIndex = updateCustomRefreshRate(actualFps, qsTr("Custom (%1 Hz)").arg(customRefreshRate.toFixed(3)))
                             }
                             else {
-                                addRefreshRateOrdered(model, "", qsTr("Custom"), true)
+                                var found = false
+                                for (var i = 0; i < model.count; i++) {
+                                    var el_fps = parseInt(model.get(i).video_fps);
+
+                                    // Look for a matching non-custom frame rate
+                                    if (!model.get(i).is_custom && saved_fps === el_fps) {
+                                        currentIndex = i
+                                        found = true
+                                        break
+                                    }
+                                }
+
+                                // If we didn't find one, select a custom frame rate for the current value
+                                if (!found) {
+                                    currentIndex = updateCustomRefreshRate(saved_fps, qsTr("Custom (%1 FPS)").arg(saved_fps))
+                                }
+                                else {
+                                    updateCustomRefreshRate("", qsTr("Custom"))
+                                }
                             }
 
                             recalculateWidth()
@@ -710,6 +737,7 @@ Flickable {
                                 customFpsDialog.open()
                             }
                             else {
+                                StreamingPreferences.enableFractionalRefreshRate = false
                                 updateBitrateForSelection()
                             }
                         }
