@@ -54,6 +54,29 @@ class UpstreamPortContractTests(unittest.TestCase):
             re.compile(r"Keys\.onRightPressed:\s*\{\s*incrementCurrentIndex\(\)\s*\}"),
         )
 
+    def test_dialog_focus_starts_on_buttons_and_cycles_horizontally(self):
+        source = (
+            REPOSITORY_ROOT / "app/gui/NavigableMessageDialog.qml"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn(
+            "dialogButtonBox.itemAt(dialogButtonBox.count - 1).forceActiveFocus(Qt.TabFocus)",
+            source,
+        )
+        self.assertRegex(
+            source,
+            re.compile(
+                r"delegate:\s*Button\s*\{.*?"
+                r"Keys\.onReturnPressed:\s*clicked\(\).*?"
+                r"Keys\.onEnterPressed:\s*clicked\(\).*?"
+                r"Keys\.onRightPressed:\s*nextItemInFocusChain\(true\)"
+                r"\.forceActiveFocus\(Qt\.TabFocus\).*?"
+                r"Keys\.onLeftPressed:\s*nextItemInFocusChain\(false\)"
+                r"\.forceActiveFocus\(Qt\.TabFocus\)",
+                re.DOTALL,
+            ),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
