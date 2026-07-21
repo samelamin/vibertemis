@@ -1536,6 +1536,12 @@ jobs:
       run: |
         python3 -m unittest discover -s packaging/flatpak/tests -p 'test_*.py' -v
         python3 packaging/flatpak/validate-manifest.py packaging/flatpak/com.artemisdesktop.ArtemisDesktopDev.json
+
+    - name: Allow Flatpak local submodule mirrors
+      run: |
+        # This runner is ephemeral. Flatpak-builder uses local Git mirrors to
+        # populate the pinned submodules after downloading their exact commits.
+        git config --global protocol.file.allow always
     
     - name: Build tracked Flatpak
       env:

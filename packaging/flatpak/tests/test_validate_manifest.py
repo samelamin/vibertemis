@@ -318,6 +318,20 @@ class ManifestValidatorTests(unittest.TestCase):
         self.assertLess(workflow.index(builder_command), workflow.index(test_command))
         self.assertLess(workflow.index(test_command), workflow.index(bundle_command))
 
+    def test_workflow_allows_local_submodule_mirrors_before_flatpak_builder(self):
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        mirror_configuration = "git config --global protocol.file.allow always"
+        builder_command = (
+            "flatpak-builder --force-clean --install-deps-from=flathub "
+            "--repo=flatpak-repo flatpak-build "
+            "packaging/flatpak/com.artemisdesktop.ArtemisDesktopDev.json"
+        )
+
+        self.assertIn(mirror_configuration, workflow)
+        self.assertLess(
+            workflow.index(mirror_configuration), workflow.index(builder_command)
+        )
+
     def test_requires_exact_artemis_module_name(self):
         manifest = valid_manifest()
         manifest["modules"][2]["name"] = "not-artemis"
