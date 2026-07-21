@@ -627,6 +627,7 @@ bool PlVkRenderer::populateQueues(int videoFormat)
 {
     auto vkDeviceContext = (AVVulkanDeviceContext*)((AVHWDeviceContext *)m_HwDeviceCtx->data)->hwctx;
 
+#if LIBAVUTIL_VERSION_MAJOR >= 57
     uint32_t queueFamilyCount = 0;
     fn_vkGetPhysicalDeviceQueueFamilyProperties2(m_Vulkan->phys_device, &queueFamilyCount, nullptr);
     if (queueFamilyCount == 0) {
@@ -644,6 +645,7 @@ bool PlVkRenderer::populateQueues(int videoFormat)
     }
 
     fn_vkGetPhysicalDeviceQueueFamilyProperties2(m_Vulkan->phys_device, &queueFamilyCount, queueFamilies.data());
+#endif
 
 #if LIBAVUTIL_VERSION_INT >= AV_VERSION_INT(59, 34, 100)
     Q_UNUSED(videoFormat);
@@ -662,7 +664,7 @@ bool PlVkRenderer::populateQueues(int videoFormat)
         vkDeviceContext->qf[i].video_caps = (VkVideoCodecOperationFlagBitsKHR)queueFamilyVideoProps[i].videoCodecOperations;
     }
     vkDeviceContext->nb_qf = queueFamilyCount;
-#else
+#elif LIBAVUTIL_VERSION_MAJOR >= 57
     vkDeviceContext->queue_family_index = m_Vulkan->queue_graphics.index;
     vkDeviceContext->nb_graphics_queues = m_Vulkan->queue_graphics.count;
     vkDeviceContext->queue_family_tx_index = m_Vulkan->queue_transfer.index;
@@ -712,6 +714,15 @@ bool PlVkRenderer::populateQueues(int videoFormat)
                      "Unable to find compatible video decode queue!");
         return false;
     }
+#else
+    Q_UNUSED(videoFormat);
+
+    vkDeviceContext->queue_family_index = m_Vulkan->queue_graphics.index;
+    vkDeviceContext->nb_graphics_queues = m_Vulkan->queue_graphics.count;
+    vkDeviceContext->queue_family_tx_index = m_Vulkan->queue_transfer.index;
+    vkDeviceContext->nb_tx_queues = m_Vulkan->queue_transfer.count;
+    vkDeviceContext->queue_family_comp_index = m_Vulkan->queue_compute.index;
+    vkDeviceContext->nb_comp_queues = m_Vulkan->queue_compute.count;
 #endif
 
     return true;
