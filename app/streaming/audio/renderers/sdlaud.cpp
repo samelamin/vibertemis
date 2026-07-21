@@ -39,6 +39,7 @@ bool SdlAudioRenderer::prepareForPlayback(const OPUS_MULTISTREAM_CONFIGURATION* 
     want.samples = SDL_max(480, opusConfig->samplesPerFrame);
 #endif
 
+    m_FrameDurationMs = opusConfig->samplesPerFrame / (opusConfig->sampleRate / 1000);
     m_FrameSize = opusConfig->samplesPerFrame *
                   opusConfig->channelCount *
                   getAudioBufferSampleSize();
@@ -122,8 +123,8 @@ bool SdlAudioRenderer::submitAudio(int bytesWritten)
             return false;
         }
 
-        // Only queue more samples where there are 10 frames or less in SDL's queue
-        if (SDL_GetQueuedAudioSize(m_AudioDevice) / m_FrameSize <= 10) {
+        // Only queue more samples where there is 50 ms or less in SDL's queue
+        if (SDL_GetQueuedAudioSize(m_AudioDevice) / m_FrameSize * m_FrameDurationMs <= 50) {
             break;
         }
 
