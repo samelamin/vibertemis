@@ -197,12 +197,29 @@ class ManifestValidatorTests(unittest.TestCase):
             "40-character commit",
         )
 
+    def test_rejects_unpinned_no_slash_ssh_host_aliases(self):
+        manifest = valid_manifest()
+        manifest["modules"][1]["modules"][0]["sources"] = [
+            {"type": "git", "url": "github:repo.git"},
+            {"type": "git", "url": "buildhost:src"},
+        ]
+
+        result = self.run_validator(manifest)
+
+        for url in ("github:repo.git", "buildhost:src"):
+            with self.subTest(url=url):
+                self.assertIn(
+                    f"network git source {url} must use a pinned 40-character commit",
+                    result.stderr,
+                )
+
     def test_does_not_treat_local_paths_or_ordinary_colons_as_network_urls(self):
         manifest = valid_manifest()
         manifest["modules"][1]["modules"][0]["sources"].extend(
             [
                 {"type": "git", "url": "C:/artemis/local.git"},
                 {"type": "git", "url": r"C:\artemis\local.git"},
+                {"type": "git", "url": r"C:artemis\local.git"},
                 {"type": "file", "url": "label:value/with/slash"},
             ]
         )

@@ -29,12 +29,8 @@ LIBPLACEBO_PATCH = "libplacebo-disable-internally-synchronized-queues.patch"
 COMMIT_PATTERN = re.compile(r"[0-9a-fA-F]{40}")
 SHA256_PATTERN = re.compile(r"[0-9a-fA-F]{64}")
 SCP_STYLE_WITH_USER_PATTERN = re.compile(r"[^@\s/:]+@[^:\s/]+:.+")
-SCP_STYLE_DOTTED_HOST_PATTERN = re.compile(
-    r"(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,63}:"
-    r"(?:[^\\\s:]+/[^\\\s]+|[^\\\s:]+\.git)"
-)
-SCP_STYLE_ALIAS_PATTERN = re.compile(r"[A-Za-z0-9._-]+:[^\\\s:]+/[^\\\s]+")
-WINDOWS_DRIVE_PATH_PATTERN = re.compile(r"[A-Za-z]:[\\/].*")
+SCP_STYLE_ALIAS_PATTERN = re.compile(r"[A-Za-z0-9._-]+:[^\\\s:]+")
+WINDOWS_DRIVE_PATH_PATTERN = re.compile(r"[A-Za-z]:.*")
 
 
 def walk_modules(modules):
@@ -91,7 +87,6 @@ def is_network_url(url, source_type):
         pattern.fullmatch(url) is not None
         for pattern in (
             SCP_STYLE_WITH_USER_PATTERN,
-            SCP_STYLE_DOTTED_HOST_PATTERN,
             SCP_STYLE_ALIAS_PATTERN,
         )
     )
