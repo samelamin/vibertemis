@@ -69,6 +69,15 @@ def valid_manifest():
                 "config-opts": ["CONFIG+=build_tests"],
                 "sources": [{"type": "dir", "path": "../.."}],
             },
+            *(
+                {
+                    "name": module_name,
+                    "build-options": {
+                        "config-opts": ["-DCMAKE_INSTALL_LIBDIR=lib"]
+                    },
+                }
+                for module_name in ("SDL3", "SDL2-compat", "SDL2_ttf")
+            ),
         ],
     }
 
@@ -291,6 +300,21 @@ class ManifestValidatorTests(unittest.TestCase):
             manifest,
             "Artemis module must include CONFIG+=build_tests",
         )
+
+    def test_requires_sdl_cmake_modules_to_install_in_flatpak_libdir(self):
+        manifest = valid_manifest()
+        for module in manifest["modules"]:
+            if module.get("name") in ("SDL3", "SDL2-compat", "SDL2_ttf"):
+                module["build-options"]["config-opts"] = []
+
+        result = self.run_validator(manifest)
+
+        for module_name in ("SDL3", "SDL2-compat", "SDL2_ttf"):
+            with self.subTest(module_name=module_name):
+                self.assertIn(
+                    f"{module_name} must include -DCMAKE_INSTALL_LIBDIR=lib",
+                    result.stderr,
+                )
 
     def test_installs_fractional_refresh_test_to_stable_libexec_path(self):
         project = REFRESH_RATE_PRO.read_text(encoding="utf-8")

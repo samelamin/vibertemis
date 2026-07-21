@@ -26,6 +26,8 @@ REQUIRED_FFMPEG_OPTIONS = (
     "--enable-hwaccel=av1_vulkan",
 )
 LIBPLACEBO_PATCH = "libplacebo-disable-internally-synchronized-queues.patch"
+REQUIRED_SDL_MODULES = ("SDL3", "SDL2-compat", "SDL2_ttf")
+FLATPAK_CMAKE_LIBDIR = "-DCMAKE_INSTALL_LIBDIR=lib"
 COMMIT_PATTERN = re.compile(r"[0-9a-fA-F]{40}")
 SHA256_PATTERN = re.compile(r"[0-9a-fA-F]{64}")
 SCP_STYLE_WITH_USER_PATTERN = re.compile(r"[^@\s/:]+@[^:\s/]+:.+")
@@ -74,6 +76,18 @@ def has_key(value, key):
     if isinstance(value, list):
         return any(has_key(child, key) for child in value)
     return False
+
+
+def module_config_options(module):
+    options = module.get("config-opts", [])
+    if not isinstance(options, list):
+        options = []
+    build_options = module.get("build-options", {})
+    if isinstance(build_options, dict):
+        build_config_options = build_options.get("config-opts", [])
+        if isinstance(build_config_options, list):
+            options = [*options, *build_config_options]
+    return options
 
 
 def is_network_url(url, source_type):
@@ -141,6 +155,16 @@ def validate_manifest(manifest):
     for option in REQUIRED_FFMPEG_OPTIONS:
         if option not in ffmpeg_options:
             errors.append(f"FFmpeg must include {option}")
+
+    for module_name in REQUIRED_SDL_MODULES:
+        matching_modules = [
+            module for module in modules if module.get("name") == module_name
+        ]
+        if not matching_modules or any(
+            FLATPAK_CMAKE_LIBDIR not in module_config_options(module)
+            for module in matching_modules
+        ):
+            errors.append(f"{module_name} must include {FLATPAK_CMAKE_LIBDIR}")
 
     artemis_modules = [
         module

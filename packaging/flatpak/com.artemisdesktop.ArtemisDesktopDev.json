@@ -82,7 +82,8 @@
                     "-DSDL_KMSDRM=OFF",
                     "-DSDL_INSTALL_DOCS=OFF",
                     "-DSDL_TEST_LIBRARY=OFF",
-                    "-DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON"
+                    "-DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON",
+                    "-DCMAKE_INSTALL_LIBDIR=lib"
                 ]
             },
             "sources": [
@@ -100,7 +101,8 @@
             "builddir": true,
             "build-options": {
                 "config-opts": [
-                    "-DSDL2COMPAT_TESTS=OFF"
+                    "-DSDL2COMPAT_TESTS=OFF",
+                    "-DCMAKE_INSTALL_LIBDIR=lib"
                 ]
             },
             "sources": [
@@ -119,7 +121,8 @@
             "build-options": {
                 "config-opts": [
                     "-DSDL2TTF_VENDORED=ON",
-                    "-DSDL2TTF_SAMPLES=OFF"
+                    "-DSDL2TTF_SAMPLES=OFF",
+                    "-DCMAKE_INSTALL_LIBDIR=lib"
                 ]
             },
             "sources": [
