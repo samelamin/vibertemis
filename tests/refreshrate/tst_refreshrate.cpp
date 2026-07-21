@@ -1,9 +1,7 @@
 #include <QtTest>
 
 #include <QJSEngine>
-#include <QQmlComponent>
 #include <QQmlEngine>
-#include <QScopedPointer>
 #include <qqml.h>
 
 #include <cmath>
@@ -236,31 +234,21 @@ void RefreshRateParserTest::invalidCustomRateUsesFallbackAcrossProtocolConsumers
 
 void RefreshRateParserTest::qmlSingletonCanParseCommaDecimal()
 {
-    qmlRegisterSingletonType<RefreshRateParser>(
+    const int typeId = qmlRegisterSingletonType<RefreshRateParser>(
         "RefreshRateParser", 1, 0, "RefreshRateParser",
         [](QQmlEngine*, QJSEngine*) -> QObject* {
             return new RefreshRateParser();
         });
 
     QQmlEngine engine;
-    QQmlComponent component(&engine);
-    component.setData(
-        "import QtQml 2.2\n"
-        "import RefreshRateParser 1.0\n"
-        "QtObject {\n"
-        "    property var parsed: RefreshRateParser.parse(\"59,94\")\n"
-        "    property bool parsedValid: parsed.valid\n"
-        "    property real parsedHz: parsed.hz\n"
-        "    property int parsedMilliHz: parsed.milliHz\n"
-        "}\n",
-        QUrl(QStringLiteral("inmemory:/RefreshRateParserTest.qml")));
+    RefreshRateParser* parser =
+        engine.singletonInstance<RefreshRateParser*>(typeId);
+    QVERIFY(parser != nullptr);
 
-    QScopedPointer<QObject> object(component.create());
-    QVERIFY2(object, qPrintable(component.errorString()));
-
-    QCOMPARE(object->property("parsedValid").toBool(), true);
-    QCOMPARE(object->property("parsedHz").toDouble(), 59.94);
-    QCOMPARE(object->property("parsedMilliHz").toInt(), 59940);
+    const QVariantMap parsed = parser->parse(QStringLiteral("59,94"));
+    QCOMPARE(parsed.value(QStringLiteral("valid")).toBool(), true);
+    QCOMPARE(parsed.value(QStringLiteral("hz")).toDouble(), 59.94);
+    QCOMPARE(parsed.value(QStringLiteral("milliHz")).toInt(), 59940);
 }
 
 QTEST_GUILESS_MAIN(RefreshRateParserTest)

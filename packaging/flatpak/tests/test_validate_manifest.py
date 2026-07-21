@@ -9,6 +9,9 @@ import unittest
 VALIDATOR = Path(__file__).parents[1] / "validate-manifest.py"
 MAIN_CPP = Path(__file__).parents[3] / "app" / "main.cpp"
 REFRESH_RATE_PRO = Path(__file__).parents[3] / "tests" / "refreshrate" / "refreshrate.pro"
+REFRESH_RATE_TEST = (
+    Path(__file__).parents[3] / "tests" / "refreshrate" / "tst_refreshrate.cpp"
+)
 WORKFLOW = Path(__file__).parents[3] / ".github" / "workflows" / "dev-build.yml"
 CODEC_PROBE = Path(__file__).parents[1] / "artemis-codec-probe.cpp"
 
@@ -322,6 +325,14 @@ class ManifestValidatorTests(unittest.TestCase):
 
         self.assertIn("target.path = /app/libexec", project)
         self.assertIn("INSTALLS += target", project)
+
+    def test_fractional_refresh_qml_singleton_test_uses_registered_instance(self):
+        source = REFRESH_RATE_TEST.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "engine.singletonInstance<RefreshRateParser*>(typeId)", source
+        )
+        self.assertNotIn("QQmlComponent", source)
 
     def test_workflow_runs_fractional_refresh_test_before_bundling(self):
         workflow = WORKFLOW.read_text(encoding="utf-8")
