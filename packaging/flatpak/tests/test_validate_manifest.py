@@ -10,6 +10,7 @@ VALIDATOR = Path(__file__).parents[1] / "validate-manifest.py"
 MAIN_CPP = Path(__file__).parents[3] / "app" / "main.cpp"
 REFRESH_RATE_PRO = Path(__file__).parents[3] / "tests" / "refreshrate" / "refreshrate.pro"
 WORKFLOW = Path(__file__).parents[3] / ".github" / "workflows" / "dev-build.yml"
+CODEC_PROBE = Path(__file__).parents[1] / "artemis-codec-probe.cpp"
 
 
 def valid_manifest():
@@ -355,6 +356,16 @@ class ManifestValidatorTests(unittest.TestCase):
         self.assertLess(
             workflow.index(mirror_configuration), workflow.index(builder_command)
         )
+
+    def test_codec_probe_checks_every_registered_decoder(self):
+        probe = CODEC_PROBE.read_text(encoding="utf-8")
+
+        self.assertIn("av_codec_iterate", probe)
+        self.assertIn(
+            "hasHardwareDevice(AVCodecID codecId, AVHWDeviceType deviceType)",
+            probe,
+        )
+        self.assertNotIn("avcodec_find_decoder", probe)
 
     def test_requires_exact_artemis_module_name(self):
         manifest = valid_manifest()

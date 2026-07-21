@@ -11,17 +11,38 @@ struct CodecRequirement
     const char* name;
 };
 
-static bool hasHardwareDevice(const AVCodec* decoder, AVHWDeviceType deviceType)
+static bool hasDecoder(AVCodecID codecId)
 {
-    for (int index = 0; ; ++index) {
-        const AVCodecHWConfig* config = avcodec_get_hw_config(decoder, index);
-        if (config == nullptr) {
-            return false;
-        }
-        if (config->device_type == deviceType) {
+    void* opaque = nullptr;
+    const AVCodec* decoder;
+    while ((decoder = av_codec_iterate(&opaque)) != nullptr) {
+        if (av_codec_is_decoder(decoder) && decoder->id == codecId) {
             return true;
         }
     }
+    return false;
+}
+
+static bool hasHardwareDevice(AVCodecID codecId, AVHWDeviceType deviceType)
+{
+    void* opaque = nullptr;
+    const AVCodec* decoder;
+    while ((decoder = av_codec_iterate(&opaque)) != nullptr) {
+        if (!av_codec_is_decoder(decoder) || decoder->id != codecId) {
+            continue;
+        }
+
+        for (int index = 0; ; ++index) {
+            const AVCodecHWConfig* config = avcodec_get_hw_config(decoder, index);
+            if (config == nullptr) {
+                break;
+            }
+            if (config->device_type == deviceType) {
+                return true;
+            }
+        }
+    }
+    return false;
 }
 
 int main()
@@ -38,15 +59,14 @@ int main()
 
     bool failed = false;
     for (const CodecRequirement& codec : codecs) {
-        const AVCodec* decoder = avcodec_find_decoder(codec.id);
-        if (decoder == nullptr) {
+        if (!hasDecoder(codec.id)) {
             fprintf(stderr, "%s decoder not found\n", codec.name);
             failed = true;
             continue;
         }
 
         for (AVHWDeviceType device : devices) {
-            if (!hasHardwareDevice(decoder, device)) {
+            if (!hasHardwareDevice(codec.id, device)) {
                 const char* deviceName = av_hwdevice_get_type_name(device);
                 fprintf(stderr,
                         "%s decoder has no %s hardware configuration\n",
