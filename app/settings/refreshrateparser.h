@@ -20,5 +20,7 @@ public:
                                 int fallbackFps,
                                 bool* usedCustomRate = nullptr);
     static int toActualFps(int protocolFps, int fallbackFps = 0);
+    static int protocolFpsToClientRefreshRateX100(int protocolFps,
+                                                  int fallbackFps = 0);
     static QString formatModeFps(int protocolFps, int fallbackFps = 0);
 };

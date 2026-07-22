@@ -126,6 +126,42 @@ int RefreshRateParser::toActualFps(int protocolFps, int fallbackFps)
     return safeProtocolFps;
 }
 
+int RefreshRateParser::protocolFpsToClientRefreshRateX100(int protocolFps,
+                                                          int fallbackFps)
+{
+    if (protocolFps <= 0) {
+        if (fallbackFps <= 0) {
+            return 0;
+        }
+
+        const qint64 fallbackX100 = static_cast<qint64>(fallbackFps) * 100;
+        return fallbackX100 <= std::numeric_limits<int>::max()
+            ? static_cast<int>(fallbackX100)
+            : 0;
+    }
+
+    if (protocolFps <= kFractionalFpsThreshold) {
+        const qint64 integerFpsX100 = static_cast<qint64>(protocolFps) * 100;
+        return integerFpsX100 <= std::numeric_limits<int>::max()
+            ? static_cast<int>(integerFpsX100)
+            : 0;
+    }
+
+    const qint64 milliHz = protocolFps;
+    const qint64 nearestX100 = (milliHz + 5) / 10;
+    const qint64 wholeFps = (milliHz + 500) / 1000;
+    const qint64 bandMinimum = qMax<qint64>(0, wholeFps * 100 - 50);
+    const qint64 bandMaximum = wholeFps * 100 + 49;
+    const qint64 consistentX100 = qMin(qMax(nearestX100, bandMinimum), bandMaximum);
+
+    if (consistentX100 < std::numeric_limits<int>::min() ||
+            consistentX100 > std::numeric_limits<int>::max()) {
+        return 0;
+    }
+
+    return static_cast<int>(consistentX100);
+}
+
 QString RefreshRateParser::formatModeFps(int protocolFps, int fallbackFps)
 {
     const int safeProtocolFps = protocolFps > 0 ? protocolFps : fallbackFps;
