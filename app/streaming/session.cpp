@@ -720,6 +720,12 @@ bool Session::initialize()
         m_Preferences->customRefreshRate,
         m_Preferences->fps,
         &usedCustomRefreshRate);
+    m_StreamConfig.clientRefreshRateX100 = RefreshRateParser::protocolFpsToClientRefreshRateX100(
+        m_StreamConfig.fps, m_Preferences->fps);
+    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                "Stream refresh metadata: maxFPS=%d, clientRefreshRateX100=%d",
+                m_StreamConfig.fps,
+                m_StreamConfig.clientRefreshRateX100);
     m_StreamConfig.bitrate = m_Preferences->bitrateKbps;
 
     // Artemis Apollo integration: Apply fractional refresh rate if enabled
