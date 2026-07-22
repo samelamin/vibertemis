@@ -48,7 +48,7 @@ List the games you've tried that exhibit the issue. To see if the issue is game-
 **Artemis Logs (please attach)**
 - On Windows, `Artemis-###.log` files can be found in `%TEMP%`. Simply type that into the File Explorer path field to navigate there.
 - On macOS, `Artemis-###.log` files can be found in `/tmp`. In Finder, press Cmd+Shift+G, then type `/tmp` to navigate there.
-- On Linux with the Flatpak, logs print to the terminal when running with the command: `flatpak run com.moonlight_stream.Moonlight`
+- On Linux with the Flatpak, logs print to the terminal when running with the command: `flatpak run com.artemisdesktop.ArtemisDesktopDev`
 - On Linux with the Snap, logs print to the terminal when running with the command: `moonlight`
 
 **Additional context**
