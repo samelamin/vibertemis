@@ -1,7 +1,7 @@
 from pathlib import Path
-import re
 import subprocess
 import unittest
+from urllib.parse import unquote
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
@@ -26,34 +26,39 @@ FORK_README_DISTRIBUTION_ROUTES = {
     "release downloads": "https://github.com/samelamin/artemis/releases",
 }
 
-UPSTREAM_ATTRIBUTION_ALLOWLIST = {
-    (
-        "README.md",
+README_UPSTREAM_LINE_ALLOWLIST = {
+    "README.md": {
         "[Artemis Qt](https://github.com/wjbeckett/artemis) is an enhanced cross-platform client for NVIDIA GameStream and [Apollo](https://github.com/ClassicOldSong/Apollo)/[Sunshine](https://github.com/LizardByte/Sunshine) servers. It brings the advanced features from [Artemis Android](https://github.com/ClassicOldSong/moonlight-android) to desktop platforms.",
-    ),
+        *TEMPORARY_README_ALLOWLIST,
+    },
 }
 
-UPSTREAM_WIKI_ALLOWLIST = {
+RENDERABLE_HELP_LINE_ALLOWLIST = {
     ".github/ISSUE_TEMPLATE/bug_report.md": {
-        "https://github.com/wjbeckett/artemis/wiki/Troubleshooting",
-        "https://github.com/wjbeckett/artemis/wiki/Setup-Guide",
-    },
-    "app/deploy/linux/com.artemis_desktop.Artemis.appdata.xml": {
-        "https://github.com/wjbeckett/artemis/wiki",
+        "If you're here because something basic is not working (like gamepad input, video, or similar), it's probably something specific to your setup, so make sure you've gone through the Upstream Artemis Troubleshooting Guide first: https://github.com/wjbeckett/artemis/wiki/Troubleshooting",
+        "- Instructions for streaming the desktop are in the Upstream Artemis Setup Guide: https://github.com/wjbeckett/artemis/wiki/Setup-Guide",
     },
     "app/gui/main.qml": {
-        "https://github.com/wjbeckett/artemis/wiki/Setup-Guide",
-        "https://github.com/wjbeckett/artemis/wiki/Fixing-Hardware-Decoding-Problems",
-        "https://github.com/wjbeckett/artemis/wiki/Gamepad-Mapping",
+        'onClicked: Qt.openUrlExternally("https://github.com/wjbeckett/artemis/wiki/Setup-Guide");',
+        'helpUrl: "https://github.com/wjbeckett/artemis/wiki/Fixing-Hardware-Decoding-Problems"',
+        'helpUrl: "https://github.com/wjbeckett/artemis/wiki/Gamepad-Mapping"',
+    },
+}
+
+# These formats expose only a URL field to consuming platforms. The nearby source
+# comments document why the exceptions remain, but are not treated as UI labels.
+NON_RENDERED_METADATA_HELP_EXCEPTIONS = {
+    "app/deploy/linux/com.artemis_desktop.Artemis.appdata.xml": {
+        '<url type="help">https://github.com/wjbeckett/artemis/wiki</url>',
     },
     "packaging/flatpak/com.artemisdesktop.ArtemisDesktopDev.metainfo.xml": {
-        "https://github.com/wjbeckett/artemis/wiki",
+        '<url type="help">https://github.com/wjbeckett/artemis/wiki</url>',
     },
     "wix/ArtemisSetup/Bundle.wxs": {
-        "https://github.com/wjbeckett/artemis/wiki/Setup-Guide",
+        'HelpUrl="https://github.com/wjbeckett/artemis/wiki/Setup-Guide"',
     },
     "wix/MoonlightSetup/Bundle.wxs": {
-        "https://github.com/wjbeckett/artemis/wiki/Setup-Guide",
+        'HelpUrl="https://github.com/wjbeckett/artemis/wiki/Setup-Guide"',
     },
 }
 
@@ -73,10 +78,37 @@ def tracked_identity_files():
             continue
         if relative_path == "packaging/flatpak/tests/test_fork_identity.py":
             continue
-        if relative_path == "README.md" or relative_path.startswith(
-            ("app/", "docs/", "packaging/", "wix/", ".github/")
-        ):
-            yield relative_path
+        yield relative_path
+
+
+def repeatedly_url_decode(value):
+    for _ in range(8):
+        decoded = unquote(value)
+        if decoded == value:
+            break
+        value = decoded
+    return value
+
+
+def allowed_upstream_lines(relative_path):
+    return set().union(
+        README_UPSTREAM_LINE_ALLOWLIST.get(relative_path, set()),
+        RENDERABLE_HELP_LINE_ALLOWLIST.get(relative_path, set()),
+        NON_RENDERED_METADATA_HELP_EXCEPTIONS.get(relative_path, set()),
+    )
+
+
+def unexpected_upstream_occurrences(relative_path, text):
+    unexpected = []
+    allowed_lines = allowed_upstream_lines(relative_path)
+    for line_number, line in enumerate(text.splitlines(), start=1):
+        normalized_line = repeatedly_url_decode(line).casefold()
+        if UPSTREAM_REPOSITORY.casefold() not in normalized_line:
+            continue
+        if line.strip() in allowed_lines:
+            continue
+        unexpected.append(f"{relative_path}:{line_number}: {line.strip()}")
+    return unexpected
 
 
 def validate_readme_distribution_phase(readme):
@@ -112,20 +144,8 @@ def validate_readme_distribution_phase(readme):
     return errors
 
 
-def is_explicit_readme_upstream_attribution(line):
-    upstream_urls = set(
-        re.findall(
-            r"https://github\.com/wjbeckett/artemis(?:/[^\s)\"'<>]*)?",
-            line,
-        )
-    )
-    return upstream_urls == {"https://github.com/wjbeckett/artemis"} and bool(
-        re.search(r"\b(?:upstream|fork(?:ed)?)\b", line, flags=re.IGNORECASE)
-    )
-
-
 class ForkIdentityTests(unittest.TestCase):
-    def test_upstream_routes_are_narrowly_allowlisted_and_labelled(self):
+    def test_upstream_routes_are_exactly_allowlisted(self):
         unexpected = []
 
         for relative_path in tracked_identity_files():
@@ -137,45 +157,7 @@ class ForkIdentityTests(unittest.TestCase):
             except UnicodeDecodeError:
                 continue
 
-            if UPSTREAM_REPOSITORY not in text:
-                continue
-
-            lines = text.splitlines()
-            for line_number, line in enumerate(lines, start=1):
-                if UPSTREAM_REPOSITORY not in line:
-                    continue
-                stripped_line = line.strip()
-                occurrence = (relative_path, stripped_line)
-                if occurrence in UPSTREAM_ATTRIBUTION_ALLOWLIST:
-                    continue
-                if (
-                    relative_path == "README.md"
-                    and is_explicit_readme_upstream_attribution(stripped_line)
-                ):
-                    continue
-                if (
-                    relative_path == "README.md"
-                    and stripped_line in TEMPORARY_README_ALLOWLIST
-                ):
-                    continue
-                upstream_urls = set(
-                    re.findall(
-                        r"https://github\.com/wjbeckett/artemis(?:/[^\s)\"'<>]*)?",
-                        line,
-                    )
-                )
-                allowed_wiki_urls = UPSTREAM_WIKI_ALLOWLIST.get(relative_path, set())
-                if upstream_urls and upstream_urls <= allowed_wiki_urls:
-                    label_window = "\n".join(
-                        lines[max(0, line_number - 8):line_number + 7]
-                    )
-                    self.assertIn(
-                        "Upstream Artemis",
-                        label_window,
-                        f"{relative_path}:{line_number} must label its upstream-only wiki route",
-                    )
-                    continue
-                unexpected.append(f"{relative_path}:{line_number}: {stripped_line}")
+            unexpected.extend(unexpected_upstream_occurrences(relative_path, text))
 
         self.assertEqual(
             [],
@@ -239,6 +221,61 @@ class ForkIdentityTests(unittest.TestCase):
 
         reintroduced = final_readme + "\n" + first_legacy_line
         self.assertTrue(validate_readme_distribution_phase(reintroduced))
+
+    def test_audit_rejects_root_doc_uppercase_and_encoded_bypasses(self):
+        self.assertIn("CONTRIBUTING.md", set(tracked_identity_files()))
+
+        mutations = {
+            "root document": "https://github.com/wjbeckett/artemis/releases",
+            "uppercase owner": "https://github.com/WJBECKETT/ARTEMIS/releases",
+            "repeatedly encoded separator": (
+                "https://github.com/wjbeckett%252Fartemis/issues"
+            ),
+        }
+
+        for mutation_name, route in mutations.items():
+            with self.subTest(mutation=mutation_name):
+                self.assertTrue(
+                    unexpected_upstream_occurrences("CONTRIBUTING.md", route)
+                )
+
+    def test_renderable_upstream_help_is_visibly_labelled(self):
+        qml = (REPOSITORY_ROOT / "app/gui/main.qml").read_text(encoding="utf-8")
+        issue_template = (
+            REPOSITORY_ROOT / ".github/ISSUE_TEMPLATE/bug_report.md"
+        ).read_text(encoding="utf-8")
+
+        help_button_start = qml.index("id: helpButton")
+        help_button_end = qml.index(
+            "\n            NavigableToolButton {", help_button_start
+        )
+        help_button = qml[help_button_start:help_button_end]
+        self.assertIn('ToolTip.text: qsTr("Upstream Artemis Help")', help_button)
+        self.assertIn(
+            'Qt.openUrlExternally("https://github.com/wjbeckett/artemis/wiki/Setup-Guide")',
+            help_button,
+        )
+
+        labelled_dialog_routes = (
+            (
+                'helpText: qsTr("Click the Help button to open the Upstream Artemis documentation for solving this problem.")',
+                'helpUrl: "https://github.com/wjbeckett/artemis/wiki/Fixing-Hardware-Decoding-Problems"',
+            ),
+            (
+                'helpText: qsTr("Click the Help button to open the Upstream Artemis documentation.")',
+                'helpUrl: "https://github.com/wjbeckett/artemis/wiki/Fixing-Hardware-Decoding-Problems"',
+            ),
+            (
+                'helpText: qsTr("Click the Help button to open the Upstream Artemis documentation for mapping gamepads.")',
+                'helpUrl: "https://github.com/wjbeckett/artemis/wiki/Gamepad-Mapping"',
+            ),
+        )
+        for help_text, help_url in labelled_dialog_routes:
+            with self.subTest(help_url=help_url):
+                self.assertIn(f"{help_text}\n        {help_url}", qml)
+
+        self.assertIn("Upstream Artemis Troubleshooting Guide", issue_template)
+        self.assertIn("Upstream Artemis Setup Guide", issue_template)
 
 
 if __name__ == "__main__":
