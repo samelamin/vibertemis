@@ -10,22 +10,31 @@ from urllib.parse import unquote
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 UPSTREAM_REPOSITORY = "wjbeckett/artemis"
+FORK_REPOSITORY = "samelamin/vibertemis"
+OBSOLETE_FORK_REPOSITORY = "samelamin/artemis"
 
 FORK_README_DISTRIBUTION_ROUTES = {
-    "build badge": "https://github.com/samelamin/artemis/actions/workflows/dev-build.yml/badge.svg?branch=codex%2Fsteam-deck",
-    "build actions": "https://github.com/samelamin/artemis/actions/workflows/dev-build.yml?query=branch%3Acodex%2Fsteam-deck",
-    "download badge": "https://img.shields.io/github/downloads/samelamin/artemis/total",
-    "clone command": "git clone https://github.com/samelamin/artemis.git",
-    "release downloads": "https://github.com/samelamin/artemis/releases",
-    "rolling Flatpak": "https://github.com/samelamin/artemis/releases/download/steam-deck-latest/artemis-steam-deck.flatpak",
-    "rolling checksum": "https://github.com/samelamin/artemis/releases/download/steam-deck-latest/artemis-steam-deck.flatpak.sha256",
-    "atomic bundle": "https://github.com/samelamin/artemis/releases/download/steam-deck-latest/artemis-steam-deck-bundle.tar.gz",
+    "build badge": "https://github.com/samelamin/vibertemis/actions/workflows/dev-build.yml/badge.svg?branch=codex%2Fsteam-deck",
+    "build actions": "https://github.com/samelamin/vibertemis/actions/workflows/dev-build.yml?query=branch%3Acodex%2Fsteam-deck",
+    "download badge": "https://img.shields.io/github/downloads/samelamin/vibertemis/total",
+    "clone command": "git clone https://github.com/samelamin/vibertemis.git",
+    "release downloads": "https://github.com/samelamin/vibertemis/releases",
+    "rolling Flatpak": "https://github.com/samelamin/vibertemis/releases/download/steam-deck-latest/artemis-steam-deck.flatpak",
+    "rolling checksum": "https://github.com/samelamin/vibertemis/releases/download/steam-deck-latest/artemis-steam-deck.flatpak.sha256",
+    "atomic bundle": "https://github.com/samelamin/vibertemis/releases/download/steam-deck-latest/artemis-steam-deck-bundle.tar.gz",
 }
 
 README_FORK_ATTRIBUTION = (
-    "Sam Elamin ported and maintains this Steam Deck-focused fork of "
+    "Sam Elamin maintains Vibertemis, a Steam Deck-focused fork of "
     "[upstream Artemis](https://github.com/wjbeckett/artemis), originally "
     "created by William Beckett."
+)
+
+README_REQUIRED_HEADINGS = (
+    "Why Vibertemis?",
+    "AI-enhanced development",
+    "Beta testers wanted",
+    "Known validation gaps",
 )
 
 README_UPSTREAM_LINE_ALLOWLIST = {
@@ -112,6 +121,17 @@ def unexpected_upstream_occurrences(relative_path, text):
     return unexpected
 
 
+def obsolete_fork_occurrences(relative_path, text):
+    occurrences = []
+    for line_number, line in enumerate(text.splitlines(), start=1):
+        normalized_line = repeatedly_url_decode(line).casefold()
+        if OBSOLETE_FORK_REPOSITORY.casefold() in normalized_line:
+            occurrences.append(
+                f"{relative_path}:{line_number}: {line.strip()}"
+            )
+    return occurrences
+
+
 def validate_final_readme_distribution(readme):
     errors = []
     readme_urls = set(re.findall(r"https?://[^\s)\]>]+", readme))
@@ -187,23 +207,23 @@ class ForkIdentityTests(unittest.TestCase):
     def test_runtime_and_distribution_routes_use_the_fork(self):
         expected_routes = {
             "app/backend/autoupdatechecker.cpp":
-                "https://api.github.com/repos/samelamin/artemis/releases",
+                "https://api.github.com/repos/samelamin/vibertemis/releases",
             "app/deploy/linux/com.artemis_desktop.Artemis.appdata.xml": (
-                '<url type="homepage">https://github.com/samelamin/artemis</url>',
-                '<url type="bugtracker">https://github.com/samelamin/artemis/issues</url>',
+                '<url type="homepage">https://github.com/samelamin/vibertemis</url>',
+                '<url type="bugtracker">https://github.com/samelamin/vibertemis/issues</url>',
             ),
             "packaging/flatpak/com.artemisdesktop.ArtemisDesktopDev.metainfo.xml": (
-                '<url type="homepage">https://github.com/samelamin/artemis</url>',
-                '<url type="bugtracker">https://github.com/samelamin/artemis/issues</url>',
+                '<url type="homepage">https://github.com/samelamin/vibertemis</url>',
+                '<url type="bugtracker">https://github.com/samelamin/vibertemis/issues</url>',
             ),
             "app/gui/main.qml":
-                'Qt.openUrlExternally("https://github.com/samelamin/artemis/releases")',
+                'Qt.openUrlExternally("https://github.com/samelamin/vibertemis/releases")',
             "wix/ArtemisSetup/Bundle.wxs":
-                'UpdateUrl="https://github.com/samelamin/artemis/releases"',
+                'UpdateUrl="https://github.com/samelamin/vibertemis/releases"',
             "wix/MoonlightSetup/Bundle.wxs":
-                'UpdateUrl="https://github.com/samelamin/artemis/releases"',
+                'UpdateUrl="https://github.com/samelamin/vibertemis/releases"',
             "docs/DEVELOPMENT.md":
-                "**Repository**: https://github.com/samelamin/artemis",
+                "**Repository**: https://github.com/samelamin/vibertemis",
         }
 
         for relative_path, routes in expected_routes.items():
@@ -213,6 +233,125 @@ class ForkIdentityTests(unittest.TestCase):
             for route in routes:
                 with self.subTest(path=relative_path, route=route):
                     self.assertIn(route, text)
+
+    def test_public_product_identity_is_vibertemis(self):
+        expected_identity = {
+            "app/deploy/linux/com.artemis_desktop.Artemis.desktop":
+                "Name=Vibertemis",
+            "app/deploy/linux/com.artemis_desktop.Artemis.appdata.xml":
+                "<name>Vibertemis</name>",
+            "packaging/flatpak/com.artemisdesktop.ArtemisDesktopDev.desktop":
+                "Name=Vibertemis",
+            "packaging/flatpak/com.artemisdesktop.ArtemisDesktopDev.metainfo.xml":
+                "<name>Vibertemis</name>",
+            "app/main.cpp":
+                'QCoreApplication::setApplicationDisplayName("Vibertemis")',
+            "app/Info.plist": (
+                "<key>CFBundleDisplayName</key>\n"
+                "\t<string>Vibertemis</string>"
+            ),
+        }
+
+        for relative_path, identity in expected_identity.items():
+            text = (REPOSITORY_ROOT / relative_path).read_text(
+                encoding="utf-8-sig"
+            )
+            with self.subTest(path=relative_path):
+                self.assertIn(identity, text)
+
+    def test_macos_public_packages_use_vibertemis_names(self):
+        expected_packaging = {
+            "scripts/generate-dmg.sh": (
+                'APP_PATH="$BUILD_FOLDER/app/Vibertemis.app"',
+                'DMG_NAME="Vibertemis-$VERSION.dmg"',
+            ),
+            "scripts/verify-macos-bundle.sh":
+                'verify_app "$MOUNT_DIR/Vibertemis.app"',
+            ".github/workflows/dev-build.yml": (
+                "build/build-Release/app/Vibertemis.app",
+                "name: vibertemis-macos-${{ steps.macos_arch.outputs.suffix }}-${{ needs.setup-version.outputs.version }}",
+                "path: build/installer-Release/Vibertemis-${{ needs.setup-version.outputs.version }}.dmg",
+            ),
+        }
+
+        for relative_path, contracts in expected_packaging.items():
+            text = (REPOSITORY_ROOT / relative_path).read_text(
+                encoding="utf-8-sig"
+            )
+            if isinstance(contracts, str):
+                contracts = (contracts,)
+            for contract in contracts:
+                with self.subTest(path=relative_path, contract=contract):
+                    self.assertIn(contract, text)
+
+    def test_readme_has_vibertemis_launch_sections(self):
+        readme = (REPOSITORY_ROOT / "README.md").read_text(encoding="utf-8")
+        for heading in README_REQUIRED_HEADINGS:
+            with self.subTest(heading=heading):
+                self.assertRegex(
+                    readme,
+                    rf"(?m)^##+ {re.escape(heading)}$",
+                )
+
+    def test_obsolete_fork_routes_are_absent_from_maintained_files(self):
+        obsolete = []
+
+        for relative_path in tracked_identity_files():
+            path = REPOSITORY_ROOT / relative_path
+            if not path.is_file():
+                continue
+            try:
+                text = path.read_text(encoding="utf-8-sig")
+            except UnicodeDecodeError:
+                continue
+            obsolete.extend(obsolete_fork_occurrences(relative_path, text))
+
+        self.assertEqual(
+            [],
+            obsolete,
+            "maintained fork routes must use " + FORK_REPOSITORY,
+        )
+
+    def test_compatibility_identifiers_and_assets_remain_stable(self):
+        compatibility_contracts = {
+            "packaging/flatpak/com.artemisdesktop.ArtemisDesktopDev.json": (
+                '"app-id": "com.artemisdesktop.ArtemisDesktopDev"',
+                '"command": "artemis"',
+            ),
+            "app/deploy/linux/com.artemis_desktop.Artemis.appdata.xml":
+                "<id>com.artemis_desktop.Artemis</id>",
+            "app/Info.plist": (
+                "<string>com.artemis_desktop.Artemis</string>",
+                "<key>CFBundleExecutable</key>\n\t<string>Artemis</string>",
+            ),
+            "app/main.cpp":
+                'QCoreApplication::setApplicationName("Artemis")',
+            "app/backend/computermanager.cpp":
+                'QUrl::fromUserInput("art://" + address)',
+            "scripts/generate-dmg.sh":
+                "Contents/MacOS/Artemis",
+            "scripts/verify-macos-bundle.sh":
+                "Contents/MacOS/Artemis",
+            ".github/workflows/dev-build.yml": (
+                "artemis-steam-deck.flatpak",
+                "artemis-steam-deck.flatpak.sha256",
+                "artemis-steam-deck-bundle.tar.gz",
+            ),
+        }
+
+        self.assertTrue(
+            (REPOSITORY_ROOT / "artemis.pro").is_file(),
+            "artemis.pro is a compatibility build-system entry point",
+        )
+        for relative_path, contracts in compatibility_contracts.items():
+            text = (REPOSITORY_ROOT / relative_path).read_text(
+                encoding="utf-8-sig"
+            )
+            if isinstance(contracts, str):
+                contracts = (contracts,)
+            for contract in contracts:
+                with self.subTest(path=relative_path, contract=contract):
+                    self.assertIn(contract, text)
 
     def test_readme_has_final_fork_attribution_and_distribution_routes(self):
         readme = (REPOSITORY_ROOT / "README.md").read_text(encoding="utf-8")
@@ -490,7 +629,7 @@ class ForkIdentityTests(unittest.TestCase):
         self.assertIn("    needs: [setup-version, build-flatpak-dev]", job)
         exact_gate = (
             "    if: >-\n"
-            "      github.repository == 'samelamin/artemis' &&\n"
+            "      github.repository == 'samelamin/vibertemis' &&\n"
             "      github.ref == 'refs/heads/codex/steam-deck' &&\n"
             "      needs.setup-version.outputs.should_build == 'true'\n"
         )
