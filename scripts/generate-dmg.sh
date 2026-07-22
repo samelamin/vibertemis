@@ -67,17 +67,17 @@ cp -R "Artemis-$VERSION.dsym" "$INSTALLER_FOLDER/" || fail "dSYM copy failed!"
 popd >/dev/null
 
 echo "Creating app bundle"
-DEPLOY_ARGS=()
 if [[ "$BUILD_CONFIG" == "Debug" ]]; then
-  DEPLOY_ARGS+=("-use-debug-libs")
+  echo "Extra deployment arguments: -use-debug-libs"
+  macdeployqt "$APP_PATH" \
+    -use-debug-libs \
+    "-qmldir=$SOURCE_ROOT/app/gui" \
+    -appstore-compliant || fail "macdeployqt failed!"
+else
+  macdeployqt "$APP_PATH" \
+    "-qmldir=$SOURCE_ROOT/app/gui" \
+    -appstore-compliant || fail "macdeployqt failed!"
 fi
-if [[ ${#DEPLOY_ARGS[@]} -gt 0 ]]; then
-  echo "Extra deployment arguments: ${DEPLOY_ARGS[*]}"
-fi
-macdeployqt "$APP_PATH" \
-  "${DEPLOY_ARGS[@]}" \
-  "-qmldir=$SOURCE_ROOT/app/gui" \
-  -appstore-compliant || fail "macdeployqt failed!"
 
 echo "Removing dSYM files from app bundle"
 find "$APP_PATH" -type d -name '*.dSYM' -prune -exec rm -rf {} +
