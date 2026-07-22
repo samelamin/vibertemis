@@ -1572,6 +1572,16 @@ jobs:
           published_sha="$(sha256sum published-flatpak/artemis-steam-deck.flatpak | awk '{print $1}')"
           test "$expected_sha" = "$published_sha"
 
+      - name: Move and verify rolling release tag
+        if: steps.branch-head.outputs.publish == 'true'
+        run: |
+          set -euo pipefail
+          gh api --method PATCH "repos/$GH_REPO/git/refs/tags/steam-deck-latest" \
+            -f sha="$SOURCE_COMMIT" \
+            -F force=true
+          published_tag_sha="$(gh api "repos/$GH_REPO/git/ref/tags/steam-deck-latest" --jq '.object.sha')"
+          test "$published_tag_sha" = "$SOURCE_COMMIT"
+
       - name: Publish verified checksum companions
         if: steps.branch-head.outputs.publish == 'true'
         run: |

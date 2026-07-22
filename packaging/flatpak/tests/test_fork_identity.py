@@ -376,7 +376,7 @@ class ForkIdentityTests(unittest.TestCase):
         self.assertIn('echo "publish=false" >> "$GITHUB_OUTPUT"', job)
         self.assertIn('echo "publish=true" >> "$GITHUB_OUTPUT"', job)
         self.assertEqual(
-            6,
+            7,
             job.count("if: steps.branch-head.outputs.publish == 'true'"),
             "every mutating or artifact-handling step must be gated by the branch-head check",
         )
@@ -431,6 +431,19 @@ class ForkIdentityTests(unittest.TestCase):
         digest_comparison = job.index(
             'test "$expected_sha" = "$published_sha"'
         )
+        tag_patch_command = (
+            'gh api --method PATCH '
+            '"repos/$GH_REPO/git/refs/tags/steam-deck-latest"'
+        )
+        self.assertIn(tag_patch_command, job)
+        tag_patch = job.index(tag_patch_command)
+        tag_sha_query = job.index(
+            'gh api "repos/$GH_REPO/git/ref/tags/steam-deck-latest" '
+            "--jq '.object.sha'"
+        )
+        tag_sha_comparison = job.index(
+            'test "$published_tag_sha" = "$SOURCE_COMMIT"'
+        )
         companion_upload = job.index(
             "gh release upload steam-deck-latest \\\n"
             "            release-assets/artemis-steam-deck.flatpak.sha256 \\\n"
@@ -439,7 +452,10 @@ class ForkIdentityTests(unittest.TestCase):
 
         self.assertLess(flatpak_upload, published_download)
         self.assertLess(published_download, digest_comparison)
-        self.assertLess(digest_comparison, companion_upload)
+        self.assertLess(digest_comparison, tag_patch)
+        self.assertLess(tag_patch, tag_sha_query)
+        self.assertLess(tag_sha_query, tag_sha_comparison)
+        self.assertLess(tag_sha_comparison, companion_upload)
         self.assertIn("rm -rf published-flatpak", job)
         self.assertIn("mkdir published-flatpak", job)
         self.assertIn("Version: \\`$VERSION\\`", job)
@@ -448,6 +464,26 @@ class ForkIdentityTests(unittest.TestCase):
         self.assertIn("SHA-256: \\`$expected_sha\\`", job)
         self.assertIn("replaced by every later successful build", job)
         self.assertIn("verified after re-downloading", job)
+
+    def test_steam_deck_publisher_force_moves_rolling_tag_each_time(self):
+        workflow = (
+            REPOSITORY_ROOT / ".github/workflows/dev-build.yml"
+        ).read_text(encoding="utf-8")
+        job = workflow_job_block(workflow, "publish-steam-deck-release")
+
+        self.assertIn(
+            'gh api --method PATCH '
+            '"repos/$GH_REPO/git/refs/tags/steam-deck-latest" \\\n'
+            '            -f sha="$SOURCE_COMMIT" \\\n'
+            "            -F force=true",
+            job,
+        )
+        self.assertIn(
+            'published_tag_sha="$(gh api '
+            '"repos/$GH_REPO/git/ref/tags/steam-deck-latest" '
+            "--jq '.object.sha')\"",
+            job,
+        )
 
 
 if __name__ == "__main__":
