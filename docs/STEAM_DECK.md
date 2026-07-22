@@ -11,11 +11,14 @@ Flathub Moonlight application and not a claim of Steam Deck Verified status.
 
 ## Install or update the bundle
 
-Switch to Desktop Mode, download the `.flatpak` artifact, open Konsole in its
-directory, and run:
+Switch to Desktop Mode, open Konsole, and download the current verified build
+from the rolling prerelease:
 
 ```bash
-flatpak install --user --or-update ./artemis-flatpak-<version>.flatpak
+curl -fL \
+  https://github.com/samelamin/artemis/releases/download/steam-deck-latest/artemis-steam-deck.flatpak \
+  -o "$HOME/Downloads/artemis-steam-deck.flatpak"
+flatpak install --user --or-update "$HOME/Downloads/artemis-steam-deck.flatpak"
 flatpak info --user com.artemisdesktop.ArtemisDesktopDev
 flatpak run com.artemisdesktop.ArtemisDesktopDev
 ```
@@ -24,9 +27,32 @@ Review the application ID and requested permissions before accepting the
 install. If Flatpak asks for a runtime source, enable Flathub in Discover or add
 the Flathub remote first. A single-file bundle is not connected to an update
 repository, so install each newer artifact with the same `--or-update` command;
-`flatpak update` alone cannot discover a newer Artemis bundle. Flatpak documents
-these constraints in its [single-file bundle guide][flatpak-bundles] and the
+`flatpak update` alone cannot discover a newer Artemis bundle. Download the
+rolling file again and repeat the same `flatpak install --user --or-update`
+command. Flatpak documents these constraints in its
+[single-file bundle guide][flatpak-bundles] and the
 [`flatpak install` reference][flatpak-install].
+
+The rolling publisher first uploads the direct Flatpak, re-downloads it, and
+compares its digest. It only then publishes the
+[`artemis-steam-deck.flatpak.sha256` sidecar][deck-flatpak-sha] and the
+[`artemis-steam-deck-bundle.tar.gz` atomic archive][deck-flatpak-archive]. A
+later successful branch build replaces all three assets. Because two separate
+downloads can straddle that replacement, retry both files if a direct Flatpak
+and sidecar mismatch while publication is in progress. For an atomic
+Flatpak-plus-checksum snapshot, download and verify the archive instead:
+
+```bash
+curl -fL \
+  https://github.com/samelamin/artemis/releases/download/steam-deck-latest/artemis-steam-deck-bundle.tar.gz \
+  -o "$HOME/Downloads/artemis-steam-deck-bundle.tar.gz"
+mkdir -p "$HOME/Downloads/artemis-steam-deck-bundle"
+tar -xzf "$HOME/Downloads/artemis-steam-deck-bundle.tar.gz" \
+  -C "$HOME/Downloads/artemis-steam-deck-bundle"
+cd "$HOME/Downloads/artemis-steam-deck-bundle"
+sha256sum -c artemis-steam-deck.flatpak.sha256
+flatpak install --user --or-update artemis-steam-deck.flatpak
+```
 
 The development ID is intentionally distinct from other Artemis or Moonlight
 installations. Do not uninstall another app to install this bundle.
@@ -378,6 +404,8 @@ unsupported panel/display rate as failed; record it as blocked with its mode lis
 
 [flatpak-bundles]: https://docs.flatpak.org/en/latest/single-file-bundles.html
 [flatpak-install]: https://docs.flatpak.org/en/latest/flatpak-command-reference.html#flatpak-install
+[deck-flatpak-sha]: https://github.com/samelamin/artemis/releases/download/steam-deck-latest/artemis-steam-deck.flatpak.sha256
+[deck-flatpak-archive]: https://github.com/samelamin/artemis/releases/download/steam-deck-latest/artemis-steam-deck-bundle.tar.gz
 [valve-non-steam]: https://help.steampowered.com/en/faqs/view/4B8B-9697-2338-40EC
 [deck-specs]: https://www.steamdeck.com/en/tech
 [deck-refresh]: https://help.steampowered.com/en/faqs/view/69E3-14AF-9764-4C28

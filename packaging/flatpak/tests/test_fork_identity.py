@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 import subprocess
 import unittest
 from urllib.parse import unquote
@@ -7,29 +8,26 @@ from urllib.parse import unquote
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 UPSTREAM_REPOSITORY = "wjbeckett/artemis"
 
-# README ownership and installation guidance is deliberately migrated in Task 4.
-# These exact pre-migration lines are temporary: variants and new upstream routes
-# are rejected by the general URL audit below.
-TEMPORARY_README_ALLOWLIST = {
-    "[![Build Status](https://github.com/wjbeckett/artemis/workflows/Build%20Artemis%20Qt/badge.svg)](https://github.com/wjbeckett/artemis/actions)",
-    "[![Downloads](https://img.shields.io/github/downloads/wjbeckett/artemis/total)](https://github.com/wjbeckett/artemis/releases)",
-    "All downloads are available in [Releases](https://github.com/wjbeckett/artemis/releases)",
-    "git clone https://github.com/wjbeckett/artemis.git",
-    "Want to help test new features? Check out our [development releases](https://github.com/wjbeckett/artemis/releases?q=prerelease%3Atrue)!",
-}
-
 FORK_README_DISTRIBUTION_ROUTES = {
-    "build badge": "https://github.com/samelamin/artemis/workflows/Build%20Artemis%20Qt/badge.svg",
-    "build actions": "https://github.com/samelamin/artemis/actions",
+    "build badge": "https://github.com/samelamin/artemis/actions/workflows/dev-build.yml/badge.svg?branch=codex%2Fsteam-deck",
+    "build actions": "https://github.com/samelamin/artemis/actions/workflows/dev-build.yml?query=branch%3Acodex%2Fsteam-deck",
     "download badge": "https://img.shields.io/github/downloads/samelamin/artemis/total",
     "clone command": "git clone https://github.com/samelamin/artemis.git",
     "release downloads": "https://github.com/samelamin/artemis/releases",
+    "rolling Flatpak": "https://github.com/samelamin/artemis/releases/download/steam-deck-latest/artemis-steam-deck.flatpak",
+    "rolling checksum": "https://github.com/samelamin/artemis/releases/download/steam-deck-latest/artemis-steam-deck.flatpak.sha256",
+    "atomic bundle": "https://github.com/samelamin/artemis/releases/download/steam-deck-latest/artemis-steam-deck-bundle.tar.gz",
 }
+
+README_FORK_ATTRIBUTION = (
+    "Sam Elamin ported and maintains this Steam Deck-focused fork of "
+    "[upstream Artemis](https://github.com/wjbeckett/artemis), originally "
+    "created by William Beckett."
+)
 
 README_UPSTREAM_LINE_ALLOWLIST = {
     "README.md": {
-        "[Artemis Qt](https://github.com/wjbeckett/artemis) is an enhanced cross-platform client for NVIDIA GameStream and [Apollo](https://github.com/ClassicOldSong/Apollo)/[Sunshine](https://github.com/LizardByte/Sunshine) servers. It brings the advanced features from [Artemis Android](https://github.com/ClassicOldSong/moonlight-android) to desktop platforms.",
-        *TEMPORARY_README_ALLOWLIST,
+        README_FORK_ATTRIBUTION,
     },
 }
 
@@ -111,36 +109,25 @@ def unexpected_upstream_occurrences(relative_path, text):
     return unexpected
 
 
-def validate_readme_distribution_phase(readme):
-    readme_lines = {line.strip() for line in readme.splitlines()}
-    legacy_lines = TEMPORARY_README_ALLOWLIST & readme_lines
-    fork_routes = {
+def validate_final_readme_distribution(readme):
+    errors = []
+    readme_urls = set(re.findall(r"https?://[^\s)\]>]+", readme))
+    missing_fork_routes = {
         route_name
         for route_name, route in FORK_README_DISTRIBUTION_ROUTES.items()
-        if route in readme
+        if (
+            route not in readme
+            if route_name == "clone command"
+            else route not in readme_urls
+        )
     }
-    errors = []
-
-    if fork_routes:
-        missing_fork_routes = set(FORK_README_DISTRIBUTION_ROUTES) - fork_routes
-        if missing_fork_routes:
-            errors.append(
-                "partial README migration; missing fork routes: "
-                + ", ".join(sorted(missing_fork_routes))
-            )
-        if legacy_lines:
-            errors.append(
-                "legacy README routes remain after fork migration: "
-                + " | ".join(sorted(legacy_lines))
-            )
-    else:
-        missing_legacy_lines = TEMPORARY_README_ALLOWLIST - legacy_lines
-        if missing_legacy_lines:
-            errors.append(
-                "pre-migration README must retain the complete deferred route set: "
-                + " | ".join(sorted(missing_legacy_lines))
-            )
-
+    if missing_fork_routes:
+        errors.append(
+            "final README is missing fork routes: "
+            + ", ".join(sorted(missing_fork_routes))
+        )
+    if README_FORK_ATTRIBUTION not in readme:
+        errors.append("final README is missing the exact fork attribution")
     return errors
 
 
@@ -212,32 +199,25 @@ class ForkIdentityTests(unittest.TestCase):
                 with self.subTest(path=relative_path, route=route):
                     self.assertIn(route, text)
 
-    def test_readme_distribution_routes_are_fork_owned_or_exactly_deferred(self):
+    def test_readme_has_final_fork_attribution_and_distribution_routes(self):
         readme = (REPOSITORY_ROOT / "README.md").read_text(encoding="utf-8")
-        self.assertEqual([], validate_readme_distribution_phase(readme))
+        self.assertEqual([], validate_final_readme_distribution(readme))
 
-    def test_readme_phase_rejects_partial_migration_and_legacy_reintroduction(self):
-        current_readme = (REPOSITORY_ROOT / "README.md").read_text(encoding="utf-8")
-        first_legacy_line = sorted(TEMPORARY_README_ALLOWLIST)[0]
+    def test_readme_final_audit_rejects_missing_routes_and_upstream_reintroduction(self):
+        final_fixture = README_FORK_ATTRIBUTION
+        final_fixture += "\n" + "\n".join(FORK_README_DISTRIBUTION_ROUTES.values())
+        self.assertEqual([], validate_final_readme_distribution(final_fixture))
 
-        partial_legacy = current_readme.replace(first_legacy_line, "", 1)
-        self.assertTrue(validate_readme_distribution_phase(partial_legacy))
+        for route_name, route in FORK_README_DISTRIBUTION_ROUTES.items():
+            with self.subTest(missing=route_name):
+                self.assertTrue(
+                    validate_final_readme_distribution(
+                        final_fixture.replace(route, "", 1)
+                    )
+                )
 
-        partial_migration = current_readme.replace(
-            first_legacy_line,
-            "https://github.com/samelamin/artemis/releases",
-            1,
-        )
-        self.assertTrue(validate_readme_distribution_phase(partial_migration))
-
-        final_readme = current_readme
-        for legacy_line in TEMPORARY_README_ALLOWLIST:
-            final_readme = final_readme.replace(legacy_line, "")
-        final_readme += "\n" + "\n".join(FORK_README_DISTRIBUTION_ROUTES.values())
-        self.assertEqual([], validate_readme_distribution_phase(final_readme))
-
-        reintroduced = final_readme + "\n" + first_legacy_line
-        self.assertTrue(validate_readme_distribution_phase(reintroduced))
+        reintroduced = final_fixture + "\nhttps://github.com/wjbeckett/artemis/releases"
+        self.assertTrue(unexpected_upstream_occurrences("README.md", reintroduced))
 
     def test_audit_rejects_root_doc_uppercase_and_encoded_bypasses(self):
         self.assertIn("CONTRIBUTING.md", set(tracked_identity_files()))
