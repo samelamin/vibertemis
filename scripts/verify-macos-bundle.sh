@@ -82,7 +82,7 @@ verify_app()
   done < <(otool -L "$executable" | tail -n +2 | sed -E 's/^[[:space:]]*([^[:space:]]+).*/\1/')
 
   LAUNCH_LOG=$(mktemp "${TMPDIR:-/tmp}/artemis-launch.XXXXXX")
-  QT_QPA_PLATFORM=cocoa SDL_VIDEODRIVER=dummy "$executable" >"$LAUNCH_LOG" 2>&1 &
+  QT_QPA_PLATFORM=cocoa SDL_VIDEODRIVER=cocoa "$executable" >"$LAUNCH_LOG" 2>&1 &
   LAUNCH_PID=$!
 
   sleep 5
