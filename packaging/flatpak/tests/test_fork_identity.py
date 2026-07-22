@@ -43,6 +43,12 @@ README_REQUIRED_HEADINGS = (
 README_UPSTREAM_LINE_ALLOWLIST = {
     "README.md": {
         README_FORK_ATTRIBUTION,
+        "| Steam Deck installation | [#27: Flatpak not working](https://github.com/wjbeckett/artemis/issues/27), [#53: which Steam Deck build?](https://github.com/wjbeckett/artemis/issues/53), [#58: Ubuntu install issues](https://github.com/wjbeckett/artemis/issues/58) | Pinned rolling Flatpak plus explicit install/update instructions, dependency checks, and an offscreen startup check. |",
+        "| Build reliability | [#48: build issues](https://github.com/wjbeckett/artemis/issues/48) | Fork-owned workflows, pinned inputs, CI contracts, and versioned/rolling artifacts. |",
+        "| Apple Silicon and project maintenance | [#63: macOS](https://github.com/wjbeckett/artemis/issues/63) | Native arm64 build and DMG verification are wired into the fork, with the current local-package and CI limits disclosed below. |",
+        "| Maintenance activity | [#49: maintenance question](https://github.com/wjbeckett/artemis/issues/49) | Active fork tracker, rolling beta channel, and a documented AI-assisted workflow with human release ownership. |",
+        "The first headline feature planned after the beta is per-host settings profiles, informed by upstream requests [#54](https://github.com/wjbeckett/artemis/issues/54) and [#67](https://github.com/wjbeckett/artemis/issues/67). It is not implemented yet.",
+        "Other candidates—not commitments or implemented features—are clipboard file sync and drag-and-drop transfer ([#51](https://github.com/wjbeckett/artemis/issues/51), [#52](https://github.com/wjbeckett/artemis/issues/52)), Windows frame pacing ([#50](https://github.com/wjbeckett/artemis/issues/50)), and Steam Link builds ([#59](https://github.com/wjbeckett/artemis/issues/59)).",
     },
 }
 
