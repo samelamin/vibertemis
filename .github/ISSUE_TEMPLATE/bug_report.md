@@ -4,7 +4,7 @@ about: Follow the troubleshooting guide before reporting a bug
 
 ---
 **READ ME FIRST!**
-If you're here because something basic is not working (like gamepad input, video, or similar), it's probably something specific to your setup, so make sure you've gone through the Troubleshooting Guide first: https://github.com/wjbeckett/artemis/wiki/Troubleshooting
+If you're here because something basic is not working (like gamepad input, video, or similar), it's probably something specific to your setup, so make sure you've gone through the Upstream Artemis Troubleshooting Guide first: https://github.com/wjbeckett/artemis/wiki/Troubleshooting
 
 If you still have trouble with basic functionality after following the guide, join our Discord server where there are volunteers who can help (or direct you back here if it looks like an Artemis bug after all).
 
@@ -31,7 +31,7 @@ List the games you've tried that exhibit the issue. To see if the issue is game-
 **Gamepad-related issues (please complete if problem is gamepad-related)**
 - Do you have any gamepads connected to your host PC directly?
 - Does the problem still remain if you stream the desktop and use https://html5gamepad.com to test your gamepad?
-  - Instructions for streaming the desktop can be found here: https://github.com/wjbeckett/artemis/wiki/Setup-Guide
+  - Instructions for streaming the desktop are in the Upstream Artemis Setup Guide: https://github.com/wjbeckett/artemis/wiki/Setup-Guide
 
 **Client PC details (please complete the following information)**
  - OS: [e.g. Windows 10 1809]

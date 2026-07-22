@@ -20,8 +20,9 @@
 		</ul>
 	</description>
 
-	<url type="homepage">https://github.com/wjbeckett/artemis</url>
-	<url type="bugtracker">https://github.com/wjbeckett/artemis/issues</url>
+	<url type="homepage">https://github.com/samelamin/artemis</url>
+	<url type="bugtracker">https://github.com/samelamin/artemis/issues</url>
+	<!-- Upstream Artemis documentation (the fork has no equivalent wiki yet). -->
 	<url type="help">https://github.com/wjbeckett/artemis/wiki</url>
 
 	<screenshots>

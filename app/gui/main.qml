@@ -397,6 +397,7 @@ ApplicationWindow {
                 }
 
                 // TODO need to make sure browser is brought to foreground.
+                // Upstream Artemis documentation (the fork has no equivalent wiki yet).
                 onClicked: Qt.openUrlExternally("https://github.com/wjbeckett/artemis/wiki/Setup-Guide");
 
                 Keys.onDownPressed: {
@@ -451,7 +452,7 @@ ApplicationWindow {
         id: noHwDecoderDialog
         text: qsTr("No functioning hardware accelerated video decoder was detected by Artemis. " +
                    "Your streaming performance may be severely degraded in this configuration.")
-        helpText: qsTr("Click the Help button for more information on solving this problem.")
+        helpText: qsTr("Click the Help button to open the Upstream Artemis documentation for solving this problem.")
         helpUrl: "https://github.com/wjbeckett/artemis/wiki/Fixing-Hardware-Decoding-Problems"
     }
 
@@ -459,7 +460,7 @@ ApplicationWindow {
         id: xWaylandDialog
         text: qsTr("Hardware acceleration doesn't work on XWayland. Continuing on XWayland may result in poor streaming performance. " +
                    "Try running with QT_QPA_PLATFORM=wayland or switch to X11.")
-        helpText: qsTr("Click the Help button for more information.")
+        helpText: qsTr("Click the Help button to open the Upstream Artemis documentation.")
         helpUrl: "https://github.com/wjbeckett/artemis/wiki/Fixing-Hardware-Decoding-Problems"
     }
 
@@ -468,7 +469,7 @@ ApplicationWindow {
         standardButtons: Dialog.Ok | Dialog.Cancel
         text: qsTr("This version of Artemis isn't optimized for your PC. Please download the '%1' version of Artemis for the best streaming performance.").arg(SystemProperties.friendlyNativeArchName)
         onAccepted: {
-            Qt.openUrlExternally("https://github.com/wjbeckett/artemis/releases");
+            Qt.openUrlExternally("https://github.com/samelamin/artemis/releases");
         }
     }
 
@@ -477,7 +478,7 @@ ApplicationWindow {
         property string unmappedGamepads : ""
         text: qsTr("Artemis detected gamepads without a mapping:") + "\n" + unmappedGamepads
         helpTextSeparator: "\n\n"
-        helpText: qsTr("Click the Help button for information on how to map your gamepads.")
+        helpText: qsTr("Click the Help button to open the Upstream Artemis documentation for mapping gamepads.")
         helpUrl: "https://github.com/wjbeckett/artemis/wiki/Gamepad-Mapping"
     }
 
