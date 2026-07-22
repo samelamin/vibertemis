@@ -4,9 +4,17 @@ set -euo pipefail
 
 APP_PATH=${1:-}
 DMG_PATH=${2:-}
+SOURCE_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 MOUNT_DIR=
 LAUNCH_LOG=
 LAUNCH_PID=
+EXPECTED_BUNDLE_VERSION=
+
+if [[ ${ARTEMIS_EXPECTED_BUNDLE_VERSION+x} == x ]]; then
+  EXPECTED_BUNDLE_VERSION=$ARTEMIS_EXPECTED_BUNDLE_VERSION
+elif [[ -f "$SOURCE_ROOT/app/version.txt" ]]; then
+  EXPECTED_BUNDLE_VERSION=$(tr -d '\r\n' <"$SOURCE_ROOT/app/version.txt")
+fi
 
 fail()
 {
@@ -55,10 +63,25 @@ verify_app()
 {
   local app_path=$1
   local executable="$app_path/Contents/MacOS/Artemis"
+  local info_plist="$app_path/Contents/Info.plist"
+  local bundle_short_version
+  local bundle_version
   local dependency
   local launch_status
 
   [[ -x "$executable" ]] || fail "missing executable: $executable"
+
+  if [[ -n "$EXPECTED_BUNDLE_VERSION" ]]; then
+    [[ -f "$info_plist" ]] || fail "missing bundle metadata: $info_plist"
+    bundle_short_version=$(/usr/libexec/PlistBuddy -c 'Print:CFBundleShortVersionString' "$info_plist") || \
+      fail "unable to read CFBundleShortVersionString from $info_plist"
+    bundle_version=$(/usr/libexec/PlistBuddy -c 'Print:CFBundleVersion' "$info_plist") || \
+      fail "unable to read CFBundleVersion from $info_plist"
+    [[ "$bundle_short_version" == "$EXPECTED_BUNDLE_VERSION" ]] || \
+      fail "CFBundleShortVersionString is $bundle_short_version; expected $EXPECTED_BUNDLE_VERSION"
+    [[ "$bundle_version" == "$EXPECTED_BUNDLE_VERSION" ]] || \
+      fail "CFBundleVersion is $bundle_version; expected $EXPECTED_BUNDLE_VERSION"
+  fi
 
   echo "Architectures for $executable:"
   lipo -archs "$executable"
