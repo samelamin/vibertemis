@@ -1,9 +1,9 @@
 #include "autoupdatechecker.h"
+#include "releaseversionselector.h"
 
 #include <QNetworkReply>
 #include <QJsonDocument>
 #include <QJsonArray>
-#include <QJsonObject>
 
 AutoUpdateChecker::AutoUpdateChecker(QObject *parent) :
     QObject(parent)
@@ -45,7 +45,7 @@ void AutoUpdateChecker::start()
 
     // Point to Artemis GitHub releases (all releases including prereleases)
     // Using /releases instead of /releases/latest because we only have prereleases
-    QUrl url("https://api.github.com/repos/wjbeckett/artemis/releases");
+    QUrl url("https://api.github.com/repos/samelamin/artemis/releases");
     QNetworkRequest request(url);
 #if QT_VERSION >= QT_VERSION_CHECK(5, 15, 0)
     request.setAttribute(QNetworkRequest::Http2AllowedAttribute, true);
@@ -134,24 +134,14 @@ void AutoUpdateChecker::handleUpdateCheckRequestFinished(QNetworkReply* reply)
             return;
         }
 
-        // GitHub API returns an array of releases, we want the first one (most recent)
         QJsonArray releasesArray = jsonDoc.array();
-        if (releasesArray.isEmpty()) {
-            qWarning() << "GitHub API response doesn't contain any releases";
+        const ReleaseVersionSelection release = ReleaseVersionSelector::select(releasesArray);
+        if (!release.valid) {
+            qWarning() << "GitHub API response doesn't contain a valid versioned release";
             return;
         }
 
-        // Get the most recent release (first in the array)
-        QJsonObject releaseObj = releasesArray[0].toObject();
-
-        // Extract version from tag_name (remove 'v' prefix if present)
-        QString tagName = releaseObj["tag_name"].toString();
-        QString version = tagName.startsWith("v") ? tagName.mid(1) : tagName;
-        
-        if (version.isEmpty()) {
-            qWarning() << "GitHub release missing tag_name";
-            return;
-        }
+        QString version = release.version;
 
         qDebug() << "Latest version of Artemis from GitHub (including prereleases):" << version;
 
@@ -162,7 +152,7 @@ void AutoUpdateChecker::handleUpdateCheckRequestFinished(QNetworkReply* reply)
         if (res < 0) {
             // Current version < latest version
             qDebug() << "Update available";
-            emit onUpdateAvailable(version, releaseObj["html_url"].toString());
+            emit onUpdateAvailable(version, release.url);
             return;
         }
         else if (res > 0) {
