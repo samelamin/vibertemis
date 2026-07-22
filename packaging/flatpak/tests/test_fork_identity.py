@@ -313,7 +313,12 @@ class ForkIdentityTests(unittest.TestCase):
         self.assertIn("  publish-steam-deck-release:\n", workflow)
         job = workflow_job_block(workflow, "publish-steam-deck-release")
 
-        self.assertEqual(1, job.count("    needs:"))
+        self.assertEqual(
+            1,
+            job.splitlines().count(
+                "    needs: [setup-version, build-flatpak-dev]"
+            ),
+        )
         self.assertIn("    needs: [setup-version, build-flatpak-dev]", job)
         exact_gate = (
             "    if: >-\n"
@@ -321,8 +326,14 @@ class ForkIdentityTests(unittest.TestCase):
             "      github.ref == 'refs/heads/codex/steam-deck' &&\n"
             "      needs.setup-version.outputs.should_build == 'true'\n"
         )
-        self.assertEqual(1, job.count("    if:"))
+        self.assertEqual(1, job.splitlines().count("    if: >-"))
         self.assertIn(f"{exact_gate}    env:\n", job)
+        self.assertIn(
+            "    concurrency:\n"
+            "      group: steam-deck-rolling-publisher\n"
+            "      cancel-in-progress: false",
+            job,
+        )
         self.assertIn("uses: actions/download-artifact@v4", job)
         self.assertIn(
             "name: artemis-flatpak-${{ needs.setup-version.outputs.version }}",
@@ -345,6 +356,64 @@ class ForkIdentityTests(unittest.TestCase):
         self.assertIn("if gh release view steam-deck-latest", job)
         self.assertIn("gh release create steam-deck-latest", job)
         self.assertGreaterEqual(job.count("--prerelease"), 2)
+
+    def test_steam_deck_publisher_rejects_superseded_runs_before_download(self):
+        workflow = (
+            REPOSITORY_ROOT / ".github/workflows/dev-build.yml"
+        ).read_text(encoding="utf-8")
+        job = workflow_job_block(workflow, "publish-steam-deck-release")
+
+        self.assertIn("id: branch-head", job)
+        guard = job.index("id: branch-head")
+        artifact_download = job.index("uses: actions/download-artifact@v4")
+        self.assertLess(guard, artifact_download)
+        self.assertIn(
+            'branch_head="$(gh api "repos/$GH_REPO/git/ref/heads/codex/steam-deck" '
+            "--jq '.object.sha')\"",
+            job,
+        )
+        self.assertIn('if [ "$branch_head" != "$SOURCE_COMMIT" ]; then', job)
+        self.assertIn('echo "publish=false" >> "$GITHUB_OUTPUT"', job)
+        self.assertIn('echo "publish=true" >> "$GITHUB_OUTPUT"', job)
+        self.assertEqual(
+            6,
+            job.count("if: steps.branch-head.outputs.publish == 'true'"),
+            "every mutating or artifact-handling step must be gated by the branch-head check",
+        )
+
+    def test_steam_deck_publisher_deletes_only_confirmed_existing_assets(self):
+        workflow = (
+            REPOSITORY_ROOT / ".github/workflows/dev-build.yml"
+        ).read_text(encoding="utf-8")
+        job = workflow_job_block(workflow, "publish-steam-deck-release")
+
+        asset_query = (
+            "gh release view steam-deck-latest --json assets "
+            "--jq '.assets[].name'"
+        )
+        self.assertEqual(1, job.count(asset_query))
+        self.assertIn('for asset_name in \\\n', job)
+        self.assertIn('grep -Fqx "$asset_name" <<< "$existing_assets"', job)
+        self.assertIn(
+            'gh release delete-asset steam-deck-latest "$asset_name" --yes',
+            job,
+        )
+        delete_commands = [
+            line for line in job.splitlines() if "gh release delete-asset" in line
+        ]
+        self.assertTrue(delete_commands)
+        for delete_command in delete_commands:
+            self.assertNotIn("|| true", delete_command)
+        self.assertNotIn(
+            "delete-asset steam-deck-latest "
+            "artemis-steam-deck.flatpak.sha256 --yes 2>/dev/null || true",
+            job,
+        )
+        self.assertNotIn(
+            "delete-asset steam-deck-latest "
+            "artemis-steam-deck-bundle.tar.gz --yes 2>/dev/null || true",
+            job,
+        )
 
     def test_steam_deck_publisher_verifies_download_before_companion_assets(self):
         workflow = (

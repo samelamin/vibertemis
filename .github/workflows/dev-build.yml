@@ -1469,6 +1469,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    concurrency:
+      group: steam-deck-rolling-publisher
+      cancel-in-progress: false
     if: >-
       github.repository == 'samelamin/artemis' &&
       github.ref == 'refs/heads/codex/steam-deck' &&
@@ -1481,13 +1484,27 @@ jobs:
       RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
     steps:
+      - name: Confirm source commit is current branch head
+        id: branch-head
+        run: |
+          set -euo pipefail
+          branch_head="$(gh api "repos/$GH_REPO/git/ref/heads/codex/steam-deck" --jq '.object.sha')"
+          if [ "$branch_head" != "$SOURCE_COMMIT" ]; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping superseded build $SOURCE_COMMIT; branch head is $branch_head"
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Download exact Flatpak build artifact
+        if: steps.branch-head.outputs.publish == 'true'
         uses: actions/download-artifact@v4
         with:
           name: artemis-flatpak-${{ needs.setup-version.outputs.version }}
           path: steam-deck-artifact
 
       - name: Prepare stable Steam Deck assets
+        if: steps.branch-head.outputs.publish == 'true'
         run: |
           set -euo pipefail
           source_path="steam-deck-artifact/artemis-flatpak-$VERSION.flatpak"
@@ -1503,6 +1520,7 @@ jobs:
           )
 
       - name: Create or mark rolling prerelease as updating
+        if: steps.branch-head.outputs.publish == 'true'
         run: |
           set -euo pipefail
           cat > release-notes-pending.md <<EOF
@@ -1528,15 +1546,23 @@ jobs:
           fi
 
           # Never leave stale checksum companions visible beside new Flatpak bytes.
-          gh release delete-asset steam-deck-latest artemis-steam-deck.flatpak.sha256 --yes 2>/dev/null || true
-          gh release delete-asset steam-deck-latest artemis-steam-deck-bundle.tar.gz --yes 2>/dev/null || true
+          existing_assets="$(gh release view steam-deck-latest --json assets --jq '.assets[].name')"
+          for asset_name in \
+            artemis-steam-deck.flatpak.sha256 \
+            artemis-steam-deck-bundle.tar.gz; do
+            if grep -Fqx "$asset_name" <<< "$existing_assets"; then
+              gh release delete-asset steam-deck-latest "$asset_name" --yes
+            fi
+          done
 
       - name: Upload Flatpak alone
+        if: steps.branch-head.outputs.publish == 'true'
         run: |
           set -euo pipefail
           gh release upload steam-deck-latest release-assets/artemis-steam-deck.flatpak --clobber
 
       - name: Re-download and verify published Flatpak
+        if: steps.branch-head.outputs.publish == 'true'
         run: |
           set -euo pipefail
           rm -rf published-flatpak
@@ -1547,6 +1573,7 @@ jobs:
           test "$expected_sha" = "$published_sha"
 
       - name: Publish verified checksum companions
+        if: steps.branch-head.outputs.publish == 'true'
         run: |
           set -euo pipefail
           gh release upload steam-deck-latest \
