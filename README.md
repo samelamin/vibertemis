@@ -73,7 +73,7 @@ Artemis retains Moonlight's hardware-accelerated H.264, HEVC, and AV1 streaming 
 - fractional refresh rates and resolution scaling;
 - Apollo virtual-display control;
 - UUID-based application launching with legacy ID fallback;
-- Apollo/Sunshine permission viewing; and
+- Apollo permission viewing; and
 - Artemis branding and `art://` artwork compatibility.
 
 ### Keyboard and gamepad shortcuts
