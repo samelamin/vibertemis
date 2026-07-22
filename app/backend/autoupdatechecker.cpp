@@ -58,7 +58,17 @@ void AutoUpdateChecker::start()
 
 void AutoUpdateChecker::parseStringToVersionQuad(QString& string, QVector<int>& version)
 {
-    QStringList list = string.split('.');
+    int numericCoreEnd = string.size();
+    const int prereleaseSeparator = string.indexOf(QLatin1Char('-'));
+    const int buildMetadataSeparator = string.indexOf(QLatin1Char('+'));
+    if (prereleaseSeparator >= 0) {
+        numericCoreEnd = prereleaseSeparator;
+    }
+    if (buildMetadataSeparator >= 0 && buildMetadataSeparator < numericCoreEnd) {
+        numericCoreEnd = buildMetadataSeparator;
+    }
+
+    const QStringList list = string.left(numericCoreEnd).split(QLatin1Char('.'));
     for (const QString& component : list) {
         version.append(component.toInt());
     }

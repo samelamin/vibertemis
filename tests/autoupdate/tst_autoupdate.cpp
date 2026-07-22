@@ -1,10 +1,54 @@
 #include <QtTest>
 
+#include <cstring>
+
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QNetworkReply>
 
+#include "backend/autoupdatechecker.h"
 #include "backend/releaseversionselector.h"
+
+class StaticNetworkReply : public QNetworkReply
+{
+public:
+    StaticNetworkReply(const QByteArray &body, QObject *parent) :
+        QNetworkReply(parent),
+        m_Body(body),
+        m_Offset(0)
+    {
+        open(QIODevice::ReadOnly | QIODevice::Unbuffered);
+        setFinished(true);
+        setError(QNetworkReply::NoError, QString());
+    }
+
+    void abort() override
+    {
+    }
+
+    qint64 bytesAvailable() const override
+    {
+        return m_Body.size() - m_Offset + QIODevice::bytesAvailable();
+    }
+
+protected:
+    qint64 readData(char *data, qint64 maxSize) override
+    {
+        if (m_Offset >= m_Body.size()) {
+            return -1;
+        }
+
+        const qint64 bytesToRead = qMin(maxSize, m_Body.size() - m_Offset);
+        memcpy(data, m_Body.constData() + m_Offset, static_cast<size_t>(bytesToRead));
+        m_Offset += bytesToRead;
+        return bytesToRead;
+    }
+
+private:
+    QByteArray m_Body;
+    qint64 m_Offset;
+};
 
 class AutoUpdateTest : public QObject
 {
@@ -19,6 +63,8 @@ private slots:
     void developmentPrereleaseIsSelected();
     void optionalLeadingVIsNormalized_data();
     void optionalLeadingVIsNormalized();
+    void updateDecisionUsesSemverNumericCore_data();
+    void updateDecisionUsesSemverNumericCore();
 };
 
 static QJsonArray releases(const QByteArray &json)
@@ -117,6 +163,49 @@ void AutoUpdateTest::optionalLeadingVIsNormalized()
     const ReleaseVersionSelection selection = ReleaseVersionSelector::select(QJsonArray{release});
     QVERIFY(selection.valid);
     QCOMPARE(selection.version, expectedVersion);
+}
+
+void AutoUpdateTest::updateDecisionUsesSemverNumericCore_data()
+{
+    QTest::addColumn<QString>("releaseVersion");
+    QTest::addColumn<bool>("updateExpected");
+
+    QTest::newRow("newer stable") << QStringLiteral("0.6.8") << true;
+    QTest::newRow("older stable") << QStringLiteral("0.6.6") << false;
+    QTest::newRow("equal stable") << QStringLiteral("0.6.7") << false;
+    QTest::newRow("newer prerelease")
+        << QStringLiteral("0.6.8-dev.20260722.1") << true;
+    QTest::newRow("older prerelease")
+        << QStringLiteral("0.6.6-dev.20260722.1") << false;
+    QTest::newRow("equal-core prerelease")
+        << QStringLiteral("0.6.7-dev.20260722.1") << false;
+}
+
+void AutoUpdateTest::updateDecisionUsesSemverNumericCore()
+{
+    QFETCH(QString, releaseVersion);
+    QFETCH(bool, updateExpected);
+
+    AutoUpdateChecker checker;
+    QSignalSpy updateSpy(&checker, &AutoUpdateChecker::onUpdateAvailable);
+
+    QJsonObject release;
+    release.insert(QStringLiteral("tag_name"), releaseVersion);
+    release.insert(QStringLiteral("html_url"), QStringLiteral("https://example.invalid/release"));
+    const QByteArray responseBody = QJsonDocument(QJsonArray{release}).toJson();
+    StaticNetworkReply *reply = new StaticNetworkReply(responseBody, &checker);
+
+    QVERIFY(QMetaObject::invokeMethod(
+        &checker,
+        "handleUpdateCheckRequestFinished",
+        Qt::DirectConnection,
+        Q_ARG(QNetworkReply *, reply)));
+
+    QCOMPARE(updateSpy.count(), updateExpected ? 1 : 0);
+    if (updateExpected) {
+        QCOMPARE(updateSpy.at(0).at(0).toString(), releaseVersion);
+        QCOMPARE(updateSpy.at(0).at(1).toString(), QStringLiteral("https://example.invalid/release"));
+    }
 }
 
 QTEST_MAIN(AutoUpdateTest)
