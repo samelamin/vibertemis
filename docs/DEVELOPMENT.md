@@ -10,6 +10,147 @@ This document tracks our progress on implementing Artemis features in the Qt cli
 **Base**: Fork of Moonlight Qt  
 **Target Platforms**: Windows, macOS, Linux, Steam Deck
 
+## macOS development builds
+
+### Supported toolchain
+
+Use Qt 6.11.1 when building Artemis with the current macOS 26 SDKs. Qt 6.8.3
+fails in `qyieldcpu.h` because Apple Clang can report support for `__yield`
+without declaring `__yield()`. This is
+[QTBUG-145239](https://bugreports.qt.io/browse/QTBUG-145239), fixed upstream by
+[Qt commit `a76004f16fdc43e1b7af83bfdf3f1a613491b234`](https://github.com/qt/qtbase/commit/a76004f16fdc43e1b7af83bfdf3f1a613491b234),
+which prefers `__builtin_arm_yield`. Qt 6.11.1 contains the fix and supports
+macOS 26. Do not patch installed Qt headers or suppress the compiler error.
+
+This creates a deliberate, temporary toolchain skew: macOS CI uses Qt 6.11.1,
+while the other platform jobs remain on Qt 6.8.3. Application code must not use
+Qt 6.11-only APIs. The versions can converge after the common Qt line includes
+the upstream fix.
+
+The package script builds the machine's native architecture by default. CI
+therefore publishes an artifact such as `artemis-macos-arm64-VERSION`; it uses
+`universal` only when `lipo -archs` finds both `arm64` and `x86_64`. Set
+`ARTEMIS_MAC_ARCHS` explicitly only when the complete Qt and native dependency
+set provides every requested slice.
+
+### Reproducible local build
+
+Run these commands from the repository root. They install Qt in a temporary,
+isolated directory rather than changing a system Qt installation.
+
+```bash
+git submodule update --init --recursive
+
+brew install ffmpeg opus sdl2 sdl2_ttf create-dmg
+
+artemis_qt_root=$(mktemp -d /tmp/artemis-qt-6.11.1.XXXXXX)
+python3 -m venv "$artemis_qt_root/venv"
+"$artemis_qt_root/venv/bin/python" -m pip install --upgrade pip aqtinstall
+"$artemis_qt_root/venv/bin/python" -m aqt install-qt \
+  mac desktop 6.11.1 clang_64 -m qtmultimedia -O "$artemis_qt_root/Qt"
+export PATH="$artemis_qt_root/Qt/6.11.1/macos/bin:$PATH"
+
+qmake6 -v
+sw_vers
+xcrun --show-sdk-version
+clang --version
+uname -m
+xcode-select -p
+printf '#include <type_traits>\nint main() { return 0; }\n' | \
+  clang++ -x c++ -std=c++17 -fsyntax-only -
+```
+
+The final preflight must succeed before continuing. The locally tested macOS
+26.5.2 Apple Silicon machine selected `/Library/Developer/CommandLineTools`
+rather than a full Xcode app, and that local installation was damaged: its
+Command Line Tools libc++ overlay was missing `type_traits`. An isolated
+diagnostic build was completed only after temporarily pointing
+`CPLUS_INCLUDE_PATH` at the SDK's libc++ headers. That environment override is
+not a supported project build instruction and must not be added to CI or the
+repository scripts. Repair or reinstall Command Line Tools, or select a
+complete Xcode installation as CI does, before relying on local results. There
+is no Artemis source-level workaround for an incomplete Apple toolchain.
+
+Build and run the display-independent refresh-rate unit test, then build,
+deploy, package, and verify the application:
+
+```bash
+rm -rf build/tests-refreshrate
+mkdir -p build/tests-refreshrate
+(
+  cd build/tests-refreshrate
+  qmake6 ../../tests/refreshrate/refreshrate.pro
+  make -j"$(sysctl -n hw.logicalcpu)"
+  ./tst_refreshrate
+)
+
+package_version="$(tr -d '\r\n' < app/version.txt)-local.$(git rev-parse --short HEAD)"
+ARTEMIS_MAC_ARCHS="$(uname -m)" \
+  ./scripts/generate-dmg.sh Release "$package_version"
+./scripts/verify-macos-bundle.sh \
+  build/build-Release/app/Artemis.app \
+  "build/installer-Release/Artemis-$package_version.dmg"
+```
+
+`generate-dmg.sh` performs a clean release build, runs `macdeployqt`, and writes
+the DMG under `build/installer-Release/`. `create-dmg` normally adds the styled
+Finder layout. If its Finder automation is unavailable, the script falls back
+to `hdiutil`; that DMG remains functional but is unstyled.
+
+The verifier checks both the deployed bundle and the copy mounted from the
+DMG. For each copy it checks the executable, bundle versions, architecture,
+linked libraries, and forbidden direct Homebrew links. It then launches the
+real Cocoa application (`QT_QPA_PLATFORM=cocoa` and `SDL_VIDEODRIVER=cocoa`):
+surviving five seconds or exiting cleanly passes, while an immediate non-zero
+exit exposes loader and platform-plugin failures.
+
+Inspect and fingerprint the result independently:
+
+```bash
+app=build/build-Release/app/Artemis.app
+dmg="build/installer-Release/Artemis-$package_version.dmg"
+lipo -archs "$app/Contents/MacOS/Artemis"
+otool -L "$app/Contents/MacOS/Artemis"
+/usr/libexec/PlistBuddy -c 'Print:CFBundleShortVersionString' \
+  "$app/Contents/Info.plist"
+codesign -dv --verbose=4 "$app"
+hdiutil verify "$dmg"
+shasum -a 256 "$dmg"
+```
+
+### Versions, signing, and verification claims
+
+The project keeps related but distinct version values:
+
+- `app/version.txt` is the source version embedded by qmake into
+  `CFBundleShortVersionString` and `CFBundleVersion`.
+- The optional second argument to `generate-dmg.sh` is the package version. It
+  controls DMG/dSYM filenames and `build_info_macos.txt`, but does not rewrite
+  the source or plist version.
+- `verify-macos-bundle.sh` checks the plist against `app/version.txt` by
+  default. Set `ARTEMIS_EXPECTED_BUNDLE_VERSION` only when intentionally
+  verifying a bundle built with a different embedded version.
+
+Development packages are not Developer ID signed or notarized unless signing
+and notary credentials are supplied. `macdeployqt` may leave ad-hoc signatures
+on bundled code, but those are not a distributable Developer ID signature and
+do not avoid Gatekeeper warnings. For a trusted local build, use **Open** from
+the Finder context menu or approve it in **System Settings > Privacy &
+Security**; clearing quarantine with `xattr -cr Artemis.app` is another explicit
+local-only option.
+
+Report macOS validation at three independent levels:
+
+1. **Build/test verified:** the clean qmake build and unit tests pass.
+2. **Package/launch verified:** the deployed bundle passes the Cocoa smoke test,
+   the DMG mounts, and its copy passes the same checks.
+3. **Real-host stream verified:** a user completes a stream against Apollo,
+   Sunshine, or Vibepollo on actual hardware.
+
+CI establishes the first two levels. It must not be described as stream
+verification; the third level remains a manual host-and-network acceptance
+test.
+
 ## 📋 Development Phases
 
 ### ✅ Phase 0: Foundation (COMPLETED)
