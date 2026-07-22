@@ -262,8 +262,15 @@ class ForkIdentityTests(unittest.TestCase):
     def test_macos_public_packages_use_vibertemis_names(self):
         expected_packaging = {
             "scripts/generate-dmg.sh": (
+                'BUILT_APP_PATH="$BUILD_FOLDER/app/Artemis.app"',
                 'APP_PATH="$BUILD_FOLDER/app/Vibertemis.app"',
+                'mv "$BUILT_APP_PATH" "$APP_PATH"',
                 'DMG_NAME="Vibertemis-$VERSION.dmg"',
+                '--volname "Vibertemis"',
+                '--icon "Vibertemis.app"',
+                '--hide-extension "Vibertemis.app"',
+                '    -volname "Vibertemis" \\\n',
+                'xattr -cr Vibertemis.app',
             ),
             "scripts/verify-macos-bundle.sh":
                 'verify_app "$MOUNT_DIR/Vibertemis.app"',
@@ -283,6 +290,53 @@ class ForkIdentityTests(unittest.TestCase):
             for contract in contracts:
                 with self.subTest(path=relative_path, contract=contract):
                     self.assertIn(contract, text)
+
+        generate_dmg = (
+            REPOSITORY_ROOT / "scripts/generate-dmg.sh"
+        ).read_text(encoding="utf-8")
+        for obsolete_public_bundle_reference in (
+            'DMG_NAME="Artemis-$VERSION.dmg"',
+            '--volname "Artemis"',
+            '--icon "Artemis.app"',
+            '--hide-extension "Artemis.app"',
+            '    -volname "Artemis" \\\n',
+            'xattr -cr Artemis.app',
+        ):
+            with self.subTest(obsolete=obsolete_public_bundle_reference):
+                self.assertNotIn(
+                    obsolete_public_bundle_reference,
+                    generate_dmg,
+                    "Artemis.app is only the qmake build output; public bundle "
+                    "references must use Vibertemis.app",
+                )
+
+        self.assertEqual(
+            ['BUILT_APP_PATH="$BUILD_FOLDER/app/Artemis.app"'],
+            [
+                line.strip()
+                for line in generate_dmg.splitlines()
+                if "Artemis.app" in line
+            ],
+            "the qmake output path is the only permitted Artemis.app bundle "
+            "reference",
+        )
+
+        verify_bundle = (
+            REPOSITORY_ROOT / "scripts/verify-macos-bundle.sh"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn('verify_app "$MOUNT_DIR/Artemis.app"', verify_bundle)
+
+        workflow = (
+            REPOSITORY_ROOT / ".github/workflows/dev-build.yml"
+        ).read_text(encoding="utf-8")
+        for obsolete_public_package_reference in (
+            "build/build-Release/app/Artemis.app",
+            '"build/installer-Release/Artemis-$VERSION.dmg"',
+            "name: artemis-macos-",
+            "path: build/installer-Release/Artemis-",
+        ):
+            with self.subTest(obsolete=obsolete_public_package_reference):
+                self.assertNotIn(obsolete_public_package_reference, workflow)
 
     def test_readme_has_vibertemis_launch_sections(self):
         readme = (REPOSITORY_ROOT / "README.md").read_text(encoding="utf-8")
@@ -318,12 +372,26 @@ class ForkIdentityTests(unittest.TestCase):
                 '"app-id": "com.artemisdesktop.ArtemisDesktopDev"',
                 '"command": "artemis"',
             ),
-            "app/deploy/linux/com.artemis_desktop.Artemis.appdata.xml":
+            "packaging/flatpak/com.artemisdesktop.ArtemisDesktopDev.metainfo.xml": (
+                "<id>com.artemisdesktop.ArtemisDesktopDev</id>",
+                '<launchable type="desktop-id">com.artemisdesktop.ArtemisDesktopDev.desktop</launchable>',
+            ),
+            "packaging/flatpak/com.artemisdesktop.ArtemisDesktopDev.desktop": (
+                "Icon=com.artemisdesktop.ArtemisDesktopDev",
+                "StartupWMClass=com.artemisdesktop.ArtemisDesktopDev",
+            ),
+            "app/deploy/linux/com.artemis_desktop.Artemis.appdata.xml": (
                 "<id>com.artemis_desktop.Artemis</id>",
+                '<launchable type="desktop-id">com.artemis_desktop.Artemis.desktop</launchable>',
+            ),
+            "app/deploy/linux/com.artemis_desktop.Artemis.desktop":
+                "Icon=artemis",
             "app/Info.plist": (
                 "<string>com.artemis_desktop.Artemis</string>",
                 "<key>CFBundleExecutable</key>\n\t<string>Artemis</string>",
             ),
+            "app/app.pro":
+                "TARGET = Artemis",
             "app/main.cpp":
                 'QCoreApplication::setApplicationName("Artemis")',
             "app/backend/computermanager.cpp":
@@ -352,6 +420,21 @@ class ForkIdentityTests(unittest.TestCase):
             for contract in contracts:
                 with self.subTest(path=relative_path, contract=contract):
                     self.assertIn(contract, text)
+
+        native_desktop = (
+            REPOSITORY_ROOT
+            / "app/deploy/linux/com.artemis_desktop.Artemis.desktop"
+        ).read_text(encoding="utf-8")
+        native_wm_classes = [
+            line
+            for line in native_desktop.splitlines()
+            if line.startswith("StartupWMClass=")
+        ]
+        if native_wm_classes:
+            self.assertEqual(
+                ["StartupWMClass=com.artemis_desktop.Artemis"],
+                native_wm_classes,
+            )
 
     def test_readme_has_final_fork_attribution_and_distribution_routes(self):
         readme = (REPOSITORY_ROOT / "README.md").read_text(encoding="utf-8")
