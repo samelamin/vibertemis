@@ -53,6 +53,8 @@ jobs:
       
       - name: Check for meaningful changes
         id: check-changes
+        env:
+          HEAD_COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
         run: |
           # Always build on main/master branch (releases)
           if [[ "${{ github.ref_name }}" == "main" || "${{ github.ref_name }}" == "master" ]]; then
@@ -62,7 +64,7 @@ jobs:
           fi
           
           # Skip builds if commit message contains [skip ci] or [ci skip]
-          if echo "${{ github.event.head_commit.message }}" | grep -E "\[(skip ci|ci skip)\]" > /dev/null; then
+          if echo "$HEAD_COMMIT_MESSAGE" | grep -E "\[(skip ci|ci skip)\]" > /dev/null; then
             echo "should_build=false" >> $GITHUB_OUTPUT
             echo "Build skipped due to [skip ci] in commit message"
             exit 0
@@ -220,137 +222,6 @@ jobs:
           export PATH="$Qt6_DIR/bin:$PATH"
           qmake6 artemis.pro CONFIG+=release "QMAKE_CXXFLAGS+=-fPIC"
           make -j$(/usr/bin/env bash -lc 'command -v sysctl >/dev/null 2>&1 && sysctl -n hw.ncpu || nproc')
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0  # Need full history for proper versioning
-      
-      - name: Check for meaningful changes
-        id: check-changes
-        run: |
-          # Always build on main/master branch (releases)
-          if [[ "${{ github.ref_name }}" == "main" || "${{ github.ref_name }}" == "master" ]]; then
-            echo "should_build=true" >> $GITHUB_OUTPUT
-            echo "Always building on main/master branch for release"
-            exit 0
-          fi
-          
-          # Skip builds if commit message contains [skip ci] or [ci skip]
-          if echo "${{ github.event.head_commit.message }}" | grep -E "\[(skip ci|ci skip)\]" > /dev/null; then
-            echo "should_build=false" >> $GITHUB_OUTPUT
-            echo "Build skipped due to [skip ci] in commit message"
-            exit 0
-          fi
-          
-          # Check if this is a merge commit (has multiple parents)
-          PARENT_COUNT=$(git rev-list --parents -n 1 HEAD | wc -w)
-          PARENT_COUNT=$((PARENT_COUNT - 1))  # Subtract 1 because first item is the commit hash itself
-          
-          if [ "$PARENT_COUNT" -gt 1 ]; then
-            echo "Detected merge commit with $PARENT_COUNT parents"
-            
-            # For merge commits, check the actual changes being merged
-            # Compare against the first parent (the target branch before merge)
-            FIRST_PARENT=$(git rev-parse HEAD^1)
-            echo "Comparing changes against first parent: $FIRST_PARENT"
-            
-            # Get all changed files in this merge, excluding documentation/config files but allowing workflow changes
-            CHANGED_FILES=$(git diff --name-only $FIRST_PARENT HEAD | grep -v -E "(\.md$|test.*\.txt$|README.*\.txt$|CHANGELOG.*\.txt$)" | grep -v -E "(\.yml$|\.yaml$)" | wc -l)
-            WORKFLOW_FILES=$(git diff --name-only $FIRST_PARENT HEAD | grep -E "^\.github/workflows/.*\.(yml|yaml)$" | wc -l)
-            TOTAL_MEANINGFUL=$((CHANGED_FILES + WORKFLOW_FILES))
-            echo "Meaningful files changed in merge: $CHANGED_FILES"
-            echo "Workflow files changed: $WORKFLOW_FILES"
-            echo "Total meaningful changes: $TOTAL_MEANINGFUL"
-            
-            if [ "$TOTAL_MEANINGFUL" -eq 0 ]; then
-              echo "should_build=false" >> $GITHUB_OUTPUT
-              echo "Skipping build - merge contains no meaningful code changes"
-              exit 0
-            else
-              echo "should_build=true" >> $GITHUB_OUTPUT
-              echo "Build will proceed - merge contains $TOTAL_MEANINGFUL meaningful changes (code: $CHANGED_FILES, workflows: $WORKFLOW_FILES)"
-              exit 0
-            fi
-          else
-            echo "Regular commit (not a merge) - checking for meaningful changes"
-            
-            # For regular commits, check against previous commit
-            CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD | grep -v -E "(\.md$|test.*\.txt$|README.*\.txt$|CHANGELOG.*\.txt$)" | grep -v -E "(\.yml$|\.yaml$)" | wc -l)
-            WORKFLOW_FILES=$(git diff --name-only HEAD~1 HEAD | grep -E "^\.github/workflows/.*\.(yml|yaml)$" | wc -l)
-            TOTAL_MEANINGFUL=$((CHANGED_FILES + WORKFLOW_FILES))
-            echo "Meaningful files changed: $CHANGED_FILES"
-            echo "Workflow files changed: $WORKFLOW_FILES" 
-            echo "Total meaningful changes: $TOTAL_MEANINGFUL"
-            
-            if [ "$TOTAL_MEANINGFUL" -eq 0 ]; then
-              echo "should_build=false" >> $GITHUB_OUTPUT
-              echo "Skipping build - no meaningful code changes detected"
-              exit 0
-            fi
-          fi
-          
-          echo "should_build=true" >> $GITHUB_OUTPUT
-          echo "Build will proceed - meaningful changes detected (including code and/or workflow changes)"
-      
-      - name: Generate semantic version
-        id: version
-        run: |
-          # Base version from app/version.txt
-          BASE_VERSION=$(cat app/version.txt | tr -d '\n\r')
-          
-          # Get branch info
-          BRANCH_NAME="${{ github.ref_name }}"
-          BRANCH_SANITIZED=$(echo "$BRANCH_NAME" | sed 's/[^a-zA-Z0-9._-]/-/g')
-          
-          # Get commit info
-          COMMIT_SHORT="${{ github.sha }}"
-          COMMIT_SHORT="${COMMIT_SHORT:0:7}"
-          
-          # Get timestamp info
-          TIMESTAMP=$(date +"%Y%m%d")
-          BUILD_NUMBER=$(date +"%H%M")
-          
-          # Determine if this is a prerelease
-          IS_PRERELEASE="true"
-          PRERELEASE_SUFFIX=""
-          
-          if [[ "$BRANCH_NAME" == "main" || "$BRANCH_NAME" == "master" ]]; then
-            # Main branch = stable release
-            VERSION="$BASE_VERSION"
-            IS_PRERELEASE="false"
-          elif [[ "$BRANCH_NAME" == "develop" ]]; then
-            # Develop branch = development prerelease
-            VERSION="$BASE_VERSION-dev.$TIMESTAMP.$BUILD_NUMBER+$COMMIT_SHORT"
-            PRERELEASE_SUFFIX="dev"
-          elif [[ "$BRANCH_NAME" =~ ^(feature|feat)/ ]]; then
-            # Feature branch = feature prerelease
-            FEATURE_NAME=$(echo "$BRANCH_NAME" | sed 's|^.*/||' | sed 's/[^a-zA-Z0-9._-]/-/g')
-            VERSION="$BASE_VERSION-feature.$FEATURE_NAME.$TIMESTAMP.$BUILD_NUMBER+$COMMIT_SHORT"
-            PRERELEASE_SUFFIX="feature"
-          elif [[ "$BRANCH_NAME" =~ ^(hotfix|fix)/ ]]; then
-            # Hotfix branch = hotfix prerelease
-            VERSION="$BASE_VERSION-hotfix.$TIMESTAMP.$BUILD_NUMBER+$COMMIT_SHORT"
-            PRERELEASE_SUFFIX="hotfix"
-          else
-            # Other branches = alpha prerelease
-            VERSION="$BASE_VERSION-alpha.$BRANCH_SANITIZED.$TIMESTAMP.$BUILD_NUMBER+$COMMIT_SHORT"
-            PRERELEASE_SUFFIX="alpha"
-          fi
-          
-          # Create numeric version for Windows RC files (extract major.minor.patch + build number)
-          IFS='.' read -r MAJOR MINOR PATCH <<< "$BASE_VERSION"
-          NUMERIC_VERSION="$MAJOR.$MINOR.$PATCH.$BUILD_NUMBER"
-          
-          # Output all versions
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "numeric_version=$NUMERIC_VERSION" >> $GITHUB_OUTPUT
-          echo "is_prerelease=$IS_PRERELEASE" >> $GITHUB_OUTPUT
-          
-          echo "Generated versions:"
-          echo "  Semantic Version: $VERSION"
-          echo "  Numeric Version: $NUMERIC_VERSION"
-          echo "  Is Prerelease: $IS_PRERELEASE"
-          echo "  Branch: $BRANCH_NAME"
   build-windows-x64-portable:
     name: Windows x64 Portable Build
     needs: setup-version
@@ -1872,7 +1743,7 @@ jobs:
         fi
     
     - name: Create Development Release
-      uses: softprops/action-gh-release@v1
+      uses: softprops/action-gh-release@v2
       with:
         tag_name: ${{ needs.setup-version.outputs.version }}
         name: "${{ (github.ref_name == 'main' || github.ref_name == 'master') && '🚀 Production Release' || '🚧 Development Build' }} ${{ needs.setup-version.outputs.version }}"

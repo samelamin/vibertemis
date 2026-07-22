@@ -286,6 +286,43 @@ class ForkIdentityTests(unittest.TestCase):
                 job = workflow_job_block(workflow, job_name)
                 self.assertIn("    permissions:\n      contents: write", job)
 
+    def test_release_workflow_uses_supported_release_action(self):
+        workflow = (
+            REPOSITORY_ROOT / ".github/workflows/dev-build.yml"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("uses: softprops/action-gh-release@v2", workflow)
+        self.assertNotIn("uses: softprops/action-gh-release@v1", workflow)
+
+    def test_setup_version_passes_commit_message_through_environment(self):
+        workflow = (
+            REPOSITORY_ROOT / ".github/workflows/dev-build.yml"
+        ).read_text(encoding="utf-8")
+        setup_version = workflow_job_block(workflow, "setup-version")
+
+        head_commit_expression = "${{ github.event.head_commit.message }}"
+        self.assertEqual(1, workflow.count(head_commit_expression))
+        self.assertIn(
+            "        env:\n"
+            f"          HEAD_COMMIT_MESSAGE: {head_commit_expression}\n"
+            "        run: |",
+            setup_version,
+        )
+        self.assertIn(
+            'if echo "$HEAD_COMMIT_MESSAGE" | grep -E',
+            setup_version,
+        )
+
+    def test_compile_sanity_has_no_duplicate_version_setup(self):
+        workflow = (
+            REPOSITORY_ROOT / ".github/workflows/dev-build.yml"
+        ).read_text(encoding="utf-8")
+        compile_sanity = workflow_job_block(workflow, "compile-sanity")
+
+        self.assertEqual(1, compile_sanity.count("      - name: Checkout\n"))
+        self.assertNotIn("        id: check-changes\n", compile_sanity)
+        self.assertNotIn("        id: version\n", compile_sanity)
+
     def test_steam_deck_publisher_has_exact_gate_and_artifact_contract(self):
         workflow = (
             REPOSITORY_ROOT / ".github/workflows/dev-build.yml"
