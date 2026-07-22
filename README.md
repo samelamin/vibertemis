@@ -9,6 +9,8 @@ Vibertemis connects to GameStream-compatible [Apollo](https://github.com/Classic
 [![Steam Deck branch build](https://github.com/samelamin/vibertemis/actions/workflows/dev-build.yml/badge.svg?branch=codex%2Fsteam-deck)](https://github.com/samelamin/vibertemis/actions/workflows/dev-build.yml?query=branch%3Acodex%2Fsteam-deck)
 [![Downloads](https://img.shields.io/github/downloads/samelamin/vibertemis/total)](https://github.com/samelamin/vibertemis/releases)
 
+The workflow badge links to branch runs, but a green docs-only run can skip platform builds. Before treating CI as evidence, open the run for the exact commit and confirm the relevant job actually ran and passed—especially `Flatpak Development Build` for Steam Deck packages and `macOS Development Build` for Apple Silicon packages.
+
 ## Why Vibertemis?
 
 These are reports from upstream users, not claims that upstream Artemis fails for everyone. The fork status column is limited to work covered by source contracts, package checks, unit tests, or documented local verification.
@@ -16,10 +18,10 @@ These are reports from upstream users, not claims that upstream Artemis fails fo
 | Area | Reported upstream pain points | Verified fork status |
 | --- | --- | --- |
 | Steam Deck installation | [#27: Flatpak not working](https://github.com/wjbeckett/artemis/issues/27), [#53: which Steam Deck build?](https://github.com/wjbeckett/artemis/issues/53), [#58: Ubuntu install issues](https://github.com/wjbeckett/artemis/issues/58) | Pinned rolling Flatpak plus explicit install/update instructions, dependency checks, and an offscreen startup check. |
-| Build reliability | [#48: build issues](https://github.com/wjbeckett/artemis/issues/48) | Fork-owned workflows, pinned inputs, CI contracts, and versioned/rolling artifacts. |
+| Build reliability | [#48: stale `moonlight-qt.pro` entrypoints were reported](https://github.com/wjbeckett/artemis/issues/48) | All tracked active setup/build entrypoints now use `artemis.pro`; fork-owned workflows add pinned inputs, CI contracts, and artifacts. |
 | Handheld streaming | Steam Deck-focused maintenance | Gamescope/Vulkan integration, exact fractional refresh and Vibepollo `clientRefreshRateX100` metadata, duration-bounded audio queueing, and controller-first settings/dialog navigation. |
-| Apple Silicon and project maintenance | [#63: macOS](https://github.com/wjbeckett/artemis/issues/63) | Native arm64 build and DMG verification are wired into the fork, with the current local-package and CI limits disclosed below. |
-| Maintenance activity | [#49: maintenance question](https://github.com/wjbeckett/artemis/issues/49) | Active fork tracker, rolling beta channel, and a documented AI-assisted workflow with human release ownership. |
+| Apple Silicon | Fork improvement | Native arm64 build, DMG packaging, and separate bundle verification are wired into the fork, with the current local-package and CI limits disclosed below. |
+| Maintenance activity | [#49: maintenance question](https://github.com/wjbeckett/artemis/issues/49), [#63: macOS maintenance/activity question](https://github.com/wjbeckett/artemis/issues/63) | Active fork tracker, rolling beta channel, and a documented AI-assisted workflow with human release ownership. |
 
 ## AI-enhanced development
 
@@ -81,7 +83,7 @@ The rolling tag is a development prerelease. Review the application ID and Flatp
 
 Current macOS 26 builds use Qt 6.11.1, which contains the upstream fix for the Apple Clang `__yield` failure in Qt 6.8.3. Other CI platforms remain on Qt 6.8.3, and application code must not depend on Qt 6.11-only APIs.
 
-The package script builds the current machine architecture by default, verifies the application and mounted DMG, and derives the artifact architecture from `lipo`. CI package names use `vibertemis-macos-arm64-VERSION` for a native Apple Silicon build and say `universal` only when both `arm64` and `x86_64` slices are present. Development DMGs are unsigned and unnotarized unless credentials are supplied, so Gatekeeper may require **Open** from Finder's context menu or approval in **System Settings > Privacy & Security**.
+`generate-dmg.sh` builds and packages the current machine architecture by default, then inspects the executable slices with `lipo`. The separate `verify-macos-bundle.sh` checks bundle identity and versions, linked libraries, the copy mounted from the DMG, and Cocoa smoke launches. CI's `macOS Development Build` job invokes both scripts. CI package names use `vibertemis-macos-arm64-VERSION` for a native Apple Silicon build and say `universal` only when both `arm64` and `x86_64` slices are present. Development DMGs are unsigned and unnotarized unless credentials are supplied, so Gatekeeper may require **Open** from Finder's context menu or approval in **System Settings > Privacy & Security**.
 
 Exact dependencies, package commands, verification levels, and the current local toolchain caveat are in the [macOS development build guide](docs/DEVELOPMENT.md#macos-development-builds).
 
@@ -134,7 +136,7 @@ Follow the [Steam Deck setup and validation guide](docs/STEAM_DECK.md), then rep
 - HDR requires a real end-to-end HDR host, encoder, network, decoder, Gamescope/display, and content test.
 - Real streaming against Vibepollo, Apollo, and Sunshine still needs beta testers; unit and package checks do not establish live-host compatibility by themselves.
 - Current macOS development packages are unsigned and unnotarized.
-- The earlier Artemis-named macOS package path produced and verified a native arm64 app and DMG. Re-running the renamed Vibertemis package locally is currently blocked because this host's Command Line Tools installation cannot find the standard C++ `type_traits` header, and renamed-package CI was still pending when this README was written. The build badge at the top of this README is authoritative for current CI status and supersedes that point-in-time note.
+- The earlier Artemis-named macOS package path produced and verified a native arm64 app and DMG. Re-running the renamed Vibertemis package locally is currently blocked because this host's Command Line Tools installation cannot find the standard C++ `type_traits` header, and renamed-package CI was still pending when this README was written. For current evidence, inspect the exact commit's `macOS Development Build` job as described above; do not infer package verification from the overall badge color.
 
 ## Roadmap
 

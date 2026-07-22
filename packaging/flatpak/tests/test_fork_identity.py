@@ -44,13 +44,21 @@ README_UPSTREAM_LINE_ALLOWLIST = {
     "README.md": {
         README_FORK_ATTRIBUTION,
         "| Steam Deck installation | [#27: Flatpak not working](https://github.com/wjbeckett/artemis/issues/27), [#53: which Steam Deck build?](https://github.com/wjbeckett/artemis/issues/53), [#58: Ubuntu install issues](https://github.com/wjbeckett/artemis/issues/58) | Pinned rolling Flatpak plus explicit install/update instructions, dependency checks, and an offscreen startup check. |",
-        "| Build reliability | [#48: build issues](https://github.com/wjbeckett/artemis/issues/48) | Fork-owned workflows, pinned inputs, CI contracts, and versioned/rolling artifacts. |",
-        "| Apple Silicon and project maintenance | [#63: macOS](https://github.com/wjbeckett/artemis/issues/63) | Native arm64 build and DMG verification are wired into the fork, with the current local-package and CI limits disclosed below. |",
-        "| Maintenance activity | [#49: maintenance question](https://github.com/wjbeckett/artemis/issues/49) | Active fork tracker, rolling beta channel, and a documented AI-assisted workflow with human release ownership. |",
+        "| Build reliability | [#48: stale `moonlight-qt.pro` entrypoints were reported](https://github.com/wjbeckett/artemis/issues/48) | All tracked active setup/build entrypoints now use `artemis.pro`; fork-owned workflows add pinned inputs, CI contracts, and artifacts. |",
+        "| Maintenance activity | [#49: maintenance question](https://github.com/wjbeckett/artemis/issues/49), [#63: macOS maintenance/activity question](https://github.com/wjbeckett/artemis/issues/63) | Active fork tracker, rolling beta channel, and a documented AI-assisted workflow with human release ownership. |",
         "The first headline feature planned after the beta is per-host settings profiles, informed by upstream requests [#54](https://github.com/wjbeckett/artemis/issues/54) and [#67](https://github.com/wjbeckett/artemis/issues/67). It is not implemented yet.",
         "Other candidates—not commitments or implemented features—are clipboard file sync and drag-and-drop transfer ([#51](https://github.com/wjbeckett/artemis/issues/51), [#52](https://github.com/wjbeckett/artemis/issues/52)), Windows frame pacing ([#50](https://github.com/wjbeckett/artemis/issues/50)), and Steam Link builds ([#59](https://github.com/wjbeckett/artemis/issues/59)).",
     },
 }
+
+ACTIVE_PROJECT_ENTRYPOINT_SCRIPTS = (
+    "scripts/build-appimage.sh",
+    "scripts/build-arch.bat",
+    "scripts/build-artemis-arch.bat",
+    "scripts/build-steamlink-app.sh",
+    "scripts/generate-dmg.sh",
+    "scripts/setup-dev.sh",
+)
 
 RENDERABLE_HELP_LINE_ALLOWLIST = {
     ".github/ISSUE_TEMPLATE/bug_report.md": {
@@ -310,6 +318,36 @@ def workflow_step_run_script(workflow, job_name, step_name):
 
 
 class ForkIdentityTests(unittest.TestCase):
+    def test_active_build_entrypoints_use_artemis_project(self):
+        for relative_path in ACTIVE_PROJECT_ENTRYPOINT_SCRIPTS:
+            text = (REPOSITORY_ROOT / relative_path).read_text(
+                encoding="utf-8"
+            )
+            with self.subTest(path=relative_path):
+                self.assertIn("artemis.pro", text)
+                self.assertNotIn("moonlight-qt.pro", text)
+
+        stale_entrypoints = []
+        for relative_path in tracked_identity_files():
+            if Path(relative_path).suffix.casefold() not in {".bat", ".sh"}:
+                continue
+            path = REPOSITORY_ROOT / relative_path
+            if not path.is_file():
+                continue
+            try:
+                text = path.read_text(encoding="utf-8-sig")
+            except UnicodeDecodeError:
+                continue
+            if "moonlight-qt.pro" in text:
+                stale_entrypoints.append(relative_path)
+
+        self.assertEqual(
+            [],
+            stale_entrypoints,
+            "non-historical build scripts must use the fork's artemis.pro "
+            "entrypoint",
+        )
+
     def test_upstream_routes_are_exactly_allowlisted(self):
         unexpected = []
 
