@@ -1068,7 +1068,7 @@ class ForkIdentityTests(unittest.TestCase):
                 )
 
         qt_version_root = (
-            '$qtVersionRoot = Join-Path $env:GITHUB_WORKSPACE '
+            '$qtVersionRoot = Join-Path $env:RUNNER_WORKSPACE '
             '"Qt\$env:QT_VERSION"'
         )
         qt_arm64_path = (
