@@ -1463,6 +1463,114 @@ jobs:
           artemis-smoke.log
         retention-days: 30
 
+  publish-steam-deck-release:
+    name: Publish verified Steam Deck Flatpak
+    needs: [setup-version, build-flatpak-dev]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    if: >-
+      github.repository == 'samelamin/artemis' &&
+      github.ref == 'refs/heads/codex/steam-deck' &&
+      needs.setup-version.outputs.should_build == 'true'
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      VERSION: ${{ needs.setup-version.outputs.version }}
+      SOURCE_COMMIT: ${{ github.sha }}
+      RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+    steps:
+      - name: Download exact Flatpak build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: artemis-flatpak-${{ needs.setup-version.outputs.version }}
+          path: steam-deck-artifact
+
+      - name: Prepare stable Steam Deck assets
+        run: |
+          set -euo pipefail
+          source_path="steam-deck-artifact/artemis-flatpak-$VERSION.flatpak"
+          test -f "$source_path"
+          mkdir -p release-assets
+          install -m 0644 "$source_path" release-assets/artemis-steam-deck.flatpak
+          (
+            cd release-assets
+            sha256sum artemis-steam-deck.flatpak > artemis-steam-deck.flatpak.sha256
+            tar -czf artemis-steam-deck-bundle.tar.gz \
+              artemis-steam-deck.flatpak \
+              artemis-steam-deck.flatpak.sha256
+          )
+
+      - name: Create or mark rolling prerelease as updating
+        run: |
+          set -euo pipefail
+          cat > release-notes-pending.md <<EOF
+          # Artemis Steam Deck rolling build
+
+          A new verified Flatpak is being published from commit \`$SOURCE_COMMIT\`.
+          Checksum assets are withheld until the published Flatpak has been re-downloaded and verified.
+
+          This rolling prerelease is replaced by every later successful build from the Steam Deck branch.
+          EOF
+
+          if gh release view steam-deck-latest >/dev/null 2>&1; then
+            gh release edit steam-deck-latest \
+              --title "Artemis Steam Deck rolling build" \
+              --notes-file release-notes-pending.md \
+              --prerelease
+          else
+            gh release create steam-deck-latest \
+              --target "$SOURCE_COMMIT" \
+              --title "Artemis Steam Deck rolling build" \
+              --notes-file release-notes-pending.md \
+              --prerelease
+          fi
+
+          # Never leave stale checksum companions visible beside new Flatpak bytes.
+          gh release delete-asset steam-deck-latest artemis-steam-deck.flatpak.sha256 --yes 2>/dev/null || true
+          gh release delete-asset steam-deck-latest artemis-steam-deck-bundle.tar.gz --yes 2>/dev/null || true
+
+      - name: Upload Flatpak alone
+        run: |
+          set -euo pipefail
+          gh release upload steam-deck-latest release-assets/artemis-steam-deck.flatpak --clobber
+
+      - name: Re-download and verify published Flatpak
+        run: |
+          set -euo pipefail
+          rm -rf published-flatpak
+          mkdir published-flatpak
+          gh release download steam-deck-latest --pattern artemis-steam-deck.flatpak --dir published-flatpak
+          expected_sha="$(awk '{print $1}' release-assets/artemis-steam-deck.flatpak.sha256)"
+          published_sha="$(sha256sum published-flatpak/artemis-steam-deck.flatpak | awk '{print $1}')"
+          test "$expected_sha" = "$published_sha"
+
+      - name: Publish verified checksum companions
+        run: |
+          set -euo pipefail
+          gh release upload steam-deck-latest \
+            release-assets/artemis-steam-deck.flatpak.sha256 \
+            release-assets/artemis-steam-deck-bundle.tar.gz --clobber
+
+          expected_sha="$(awk '{print $1}' release-assets/artemis-steam-deck.flatpak.sha256)"
+          cat > release-notes.md <<EOF
+          # Artemis Steam Deck rolling build
+
+          - Version: \`$VERSION\`
+          - Commit: \`$SOURCE_COMMIT\`
+          - Workflow run: $RUN_URL
+          - SHA-256: \`$expected_sha\`
+
+          The Flatpak was verified after re-downloading it from this release. The checksum sidecar and atomic bundle were uploaded only after that comparison succeeded.
+
+          This rolling prerelease is replaced by every later successful build from the Steam Deck branch. The direct Flatpak and sidecar can briefly differ while a replacement is in progress; use the bundle for an atomic Flatpak-plus-checksum download.
+          EOF
+          gh release edit steam-deck-latest \
+            --title "Artemis Steam Deck rolling build ($VERSION)" \
+            --notes-file release-notes.md \
+            --prerelease
+
   build-raspberry-pi-dev:
     name: Raspberry Pi ARM64 Development Build
     needs: setup-version

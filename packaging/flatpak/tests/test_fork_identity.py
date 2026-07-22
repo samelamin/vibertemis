@@ -144,6 +144,23 @@ def validate_readme_distribution_phase(readme):
     return errors
 
 
+def workflow_job_block(workflow, job_name):
+    marker = f"  {job_name}:\n"
+    start = workflow.find(marker)
+    if start == -1:
+        return ""
+    next_job = workflow.find("\n  ", start + len(marker))
+    while next_job != -1:
+        candidate_end = workflow.find("\n", next_job + 1)
+        if candidate_end == -1:
+            candidate_end = len(workflow)
+        candidate = workflow[next_job + 1:candidate_end]
+        if candidate.endswith(":") and not candidate.startswith("    "):
+            return workflow[start:next_job]
+        next_job = workflow.find("\n  ", candidate_end)
+    return workflow[start:]
+
+
 class ForkIdentityTests(unittest.TestCase):
     def test_upstream_routes_are_exactly_allowlisted(self):
         unexpected = []
@@ -276,6 +293,92 @@ class ForkIdentityTests(unittest.TestCase):
 
         self.assertIn("Upstream Artemis Troubleshooting Guide", issue_template)
         self.assertIn("Upstream Artemis Setup Guide", issue_template)
+
+    def test_release_jobs_use_least_privilege_permissions(self):
+        workflow = (
+            REPOSITORY_ROOT / ".github/workflows/dev-build.yml"
+        ).read_text(encoding="utf-8")
+        workflow_defaults = workflow[:workflow.index("\njobs:")]
+        self.assertIn("permissions:\n  contents: read", workflow_defaults)
+
+        for job_name in ("create-dev-release", "publish-steam-deck-release"):
+            with self.subTest(job=job_name):
+                job = workflow_job_block(workflow, job_name)
+                self.assertIn("    permissions:\n      contents: write", job)
+
+    def test_steam_deck_publisher_has_exact_gate_and_artifact_contract(self):
+        workflow = (
+            REPOSITORY_ROOT / ".github/workflows/dev-build.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("  publish-steam-deck-release:\n", workflow)
+        job = workflow_job_block(workflow, "publish-steam-deck-release")
+
+        self.assertEqual(1, job.count("    needs:"))
+        self.assertIn("    needs: [setup-version, build-flatpak-dev]", job)
+        exact_gate = (
+            "    if: >-\n"
+            "      github.repository == 'samelamin/artemis' &&\n"
+            "      github.ref == 'refs/heads/codex/steam-deck' &&\n"
+            "      needs.setup-version.outputs.should_build == 'true'\n"
+        )
+        self.assertEqual(1, job.count("    if:"))
+        self.assertIn(f"{exact_gate}    env:\n", job)
+        self.assertIn("uses: actions/download-artifact@v4", job)
+        self.assertIn(
+            "name: artemis-flatpak-${{ needs.setup-version.outputs.version }}",
+            job,
+        )
+        self.assertIn("artemis-steam-deck.flatpak", job)
+        self.assertIn("artemis-steam-deck.flatpak.sha256", job)
+        self.assertIn("artemis-steam-deck-bundle.tar.gz", job)
+        self.assertIn("steam-deck-latest", job)
+        self.assertIn(
+            "sha256sum artemis-steam-deck.flatpak > artemis-steam-deck.flatpak.sha256",
+            job,
+        )
+        self.assertIn(
+            "tar -czf artemis-steam-deck-bundle.tar.gz \\\n"
+            "              artemis-steam-deck.flatpak \\\n"
+            "              artemis-steam-deck.flatpak.sha256",
+            job,
+        )
+        self.assertIn("if gh release view steam-deck-latest", job)
+        self.assertIn("gh release create steam-deck-latest", job)
+        self.assertGreaterEqual(job.count("--prerelease"), 2)
+
+    def test_steam_deck_publisher_verifies_download_before_companion_assets(self):
+        workflow = (
+            REPOSITORY_ROOT / ".github/workflows/dev-build.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("  publish-steam-deck-release:\n", workflow)
+        job = workflow_job_block(workflow, "publish-steam-deck-release")
+
+        flatpak_upload = job.index(
+            "gh release upload steam-deck-latest release-assets/artemis-steam-deck.flatpak --clobber"
+        )
+        published_download = job.index(
+            "gh release download steam-deck-latest --pattern artemis-steam-deck.flatpak"
+        )
+        digest_comparison = job.index(
+            'test "$expected_sha" = "$published_sha"'
+        )
+        companion_upload = job.index(
+            "gh release upload steam-deck-latest \\\n"
+            "            release-assets/artemis-steam-deck.flatpak.sha256 \\\n"
+            "            release-assets/artemis-steam-deck-bundle.tar.gz --clobber"
+        )
+
+        self.assertLess(flatpak_upload, published_download)
+        self.assertLess(published_download, digest_comparison)
+        self.assertLess(digest_comparison, companion_upload)
+        self.assertIn("rm -rf published-flatpak", job)
+        self.assertIn("mkdir published-flatpak", job)
+        self.assertIn("Version: \\`$VERSION\\`", job)
+        self.assertIn("Commit: \\`$SOURCE_COMMIT\\`", job)
+        self.assertIn("Workflow run: $RUN_URL", job)
+        self.assertIn("SHA-256: \\`$expected_sha\\`", job)
+        self.assertIn("replaced by every later successful build", job)
+        self.assertIn("verified after re-downloading", job)
 
 
 if __name__ == "__main__":
