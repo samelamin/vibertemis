@@ -76,23 +76,23 @@ void AutoUpdateTest::rollingReleaseDoesNotMaskVersionedRelease()
 {
     const ReleaseVersionSelection selection = ReleaseVersionSelector::select(releases(R"json(
         [
-          {"tag_name":"steam-deck-latest","html_url":"https://github.com/samelamin/artemis/releases/tag/steam-deck-latest"},
-          {"tag_name":"v6.1.1","html_url":"https://github.com/samelamin/artemis/releases/tag/v6.1.1"}
+          {"tag_name":"steam-deck-latest","html_url":"https://github.com/samelamin/vibertemis/releases/tag/steam-deck-latest"},
+          {"tag_name":"v6.1.1","html_url":"https://github.com/samelamin/vibertemis/releases/tag/v6.1.1"}
         ]
     )json"));
 
     QVERIFY(selection.valid);
     QCOMPARE(selection.version, QStringLiteral("6.1.1"));
     QCOMPARE(selection.url,
-             QStringLiteral("https://github.com/samelamin/artemis/releases/tag/v6.1.1"));
+             QStringLiteral("https://github.com/samelamin/vibertemis/releases/tag/v6.1.1"));
 }
 
 void AutoUpdateTest::normalFirstReleaseIsSelected()
 {
     const ReleaseVersionSelection selection = ReleaseVersionSelector::select(releases(R"json(
         [
-          {"tag_name":"6.2.0","html_url":"https://github.com/samelamin/artemis/releases/tag/6.2.0"},
-          {"tag_name":"v6.1.1","html_url":"https://github.com/samelamin/artemis/releases/tag/v6.1.1"}
+          {"tag_name":"6.2.0","html_url":"https://github.com/samelamin/vibertemis/releases/tag/6.2.0"},
+          {"tag_name":"v6.1.1","html_url":"https://github.com/samelamin/vibertemis/releases/tag/v6.1.1"}
         ]
     )json"));
 
@@ -135,7 +135,7 @@ void AutoUpdateTest::releaseWithoutUrlHasNoSelection()
 void AutoUpdateTest::developmentPrereleaseIsSelected()
 {
     const ReleaseVersionSelection selection = ReleaseVersionSelector::select(releases(R"json(
-        [{"tag_name":"v6.2.0-dev.3","html_url":"https://github.com/samelamin/artemis/releases/tag/v6.2.0-dev.3"}]
+        [{"tag_name":"v6.2.0-dev.3","html_url":"https://github.com/samelamin/vibertemis/releases/tag/v6.2.0-dev.3"}]
     )json"));
 
     QVERIFY(selection.valid);

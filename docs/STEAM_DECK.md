@@ -16,7 +16,7 @@ from the rolling prerelease:
 
 ```bash
 curl -fL \
-  https://github.com/samelamin/artemis/releases/download/steam-deck-latest/artemis-steam-deck.flatpak \
+  https://github.com/samelamin/vibertemis/releases/download/steam-deck-latest/artemis-steam-deck.flatpak \
   -o "$HOME/Downloads/artemis-steam-deck.flatpak"
 flatpak install --user --or-update "$HOME/Downloads/artemis-steam-deck.flatpak"
 flatpak info --user com.artemisdesktop.ArtemisDesktopDev
@@ -44,7 +44,7 @@ Flatpak-plus-checksum snapshot, download and verify the archive instead:
 
 ```bash
 curl -fL \
-  https://github.com/samelamin/artemis/releases/download/steam-deck-latest/artemis-steam-deck-bundle.tar.gz \
+  https://github.com/samelamin/vibertemis/releases/download/steam-deck-latest/artemis-steam-deck-bundle.tar.gz \
   -o "$HOME/Downloads/artemis-steam-deck-bundle.tar.gz"
 mkdir -p "$HOME/Downloads/artemis-steam-deck-bundle"
 tar -xzf "$HOME/Downloads/artemis-steam-deck-bundle.tar.gz" \
@@ -404,8 +404,8 @@ unsupported panel/display rate as failed; record it as blocked with its mode lis
 
 [flatpak-bundles]: https://docs.flatpak.org/en/latest/single-file-bundles.html
 [flatpak-install]: https://docs.flatpak.org/en/latest/flatpak-command-reference.html#flatpak-install
-[deck-flatpak-sha]: https://github.com/samelamin/artemis/releases/download/steam-deck-latest/artemis-steam-deck.flatpak.sha256
-[deck-flatpak-archive]: https://github.com/samelamin/artemis/releases/download/steam-deck-latest/artemis-steam-deck-bundle.tar.gz
+[deck-flatpak-sha]: https://github.com/samelamin/vibertemis/releases/download/steam-deck-latest/artemis-steam-deck.flatpak.sha256
+[deck-flatpak-archive]: https://github.com/samelamin/vibertemis/releases/download/steam-deck-latest/artemis-steam-deck-bundle.tar.gz
 [valve-non-steam]: https://help.steampowered.com/en/faqs/view/4B8B-9697-2338-40EC
 [deck-specs]: https://www.steamdeck.com/en/tech
 [deck-refresh]: https://help.steampowered.com/en/faqs/view/69E3-14AF-9764-4C28

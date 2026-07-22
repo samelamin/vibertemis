@@ -469,7 +469,7 @@ ApplicationWindow {
         standardButtons: Dialog.Ok | Dialog.Cancel
         text: qsTr("This version of Vibertemis isn't optimized for your PC. Please download the '%1' version of Vibertemis for the best streaming performance.").arg(SystemProperties.friendlyNativeArchName)
         onAccepted: {
-            Qt.openUrlExternally("https://github.com/samelamin/artemis/releases");
+            Qt.openUrlExternally("https://github.com/samelamin/vibertemis/releases");
         }
     }
 

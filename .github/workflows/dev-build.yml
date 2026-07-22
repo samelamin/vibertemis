@@ -1345,7 +1345,7 @@ jobs:
       group: steam-deck-rolling-publisher
       cancel-in-progress: false
     if: >-
-      github.repository == 'samelamin/artemis' &&
+      github.repository == 'samelamin/vibertemis' &&
       github.ref == 'refs/heads/codex/steam-deck' &&
       needs.setup-version.outputs.should_build == 'true'
     env:

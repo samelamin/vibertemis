@@ -17,7 +17,7 @@
           Manufacturer="Vibertemis Project"
           UpgradeCode="b9e5d2a7-3c8f-4a91-9e4b-1f7c6a8d5e2b"
           HelpUrl="https://github.com/wjbeckett/artemis/wiki/Setup-Guide"
-          UpdateUrl="https://github.com/samelamin/artemis/releases"
+          UpdateUrl="https://github.com/samelamin/vibertemis/releases"
           DisableModify="yes"
           IconSourceFile="..\..\app\artemis.ico">
 

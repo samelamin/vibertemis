@@ -10,8 +10,8 @@
     <p>It supports hardware-accelerated H.264, HEVC, and AV1 video, surround sound, gamepads, multitouch, and remote desktop input.</p>
   </description>
   <launchable type="desktop-id">com.artemisdesktop.ArtemisDesktopDev.desktop</launchable>
-  <url type="homepage">https://github.com/samelamin/artemis</url>
-  <url type="bugtracker">https://github.com/samelamin/artemis/issues</url>
+  <url type="homepage">https://github.com/samelamin/vibertemis</url>
+  <url type="bugtracker">https://github.com/samelamin/vibertemis/issues</url>
   <!-- Upstream Artemis documentation (the fork has no equivalent wiki yet). -->
   <url type="help">https://github.com/wjbeckett/artemis/wiki</url>
   <developer id="com.artemisdesktop">

@@ -6,7 +6,7 @@ This document tracks our progress on implementing Artemis features in the Qt cli
 
 **Goal**: Port Artemis Android features to Moonlight Qt for enhanced Steam Deck and desktop streaming experience.
 
-**Repository**: https://github.com/samelamin/artemis
+**Repository**: https://github.com/samelamin/vibertemis
 **Base**: Fork of Moonlight Qt  
 **Target Platforms**: Windows, macOS, Linux, Steam Deck
 

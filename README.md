@@ -4,8 +4,8 @@ Sam Elamin ported and maintains this Steam Deck-focused fork of [upstream Artemi
 
 Artemis is an enhanced, cross-platform Moonlight client for NVIDIA GameStream-compatible [Apollo](https://github.com/ClassicOldSong/Apollo) and [Sunshine](https://github.com/LizardByte/Sunshine) hosts. This fork concentrates on a reproducible Steam Deck Flatpak, handheld reliability, precise fractional refresh metadata, and working Apple Silicon development packages.
 
-[![Steam Deck branch build](https://github.com/samelamin/artemis/actions/workflows/dev-build.yml/badge.svg?branch=codex%2Fsteam-deck)](https://github.com/samelamin/artemis/actions/workflows/dev-build.yml?query=branch%3Acodex%2Fsteam-deck)
-[![Downloads](https://img.shields.io/github/downloads/samelamin/artemis/total)](https://github.com/samelamin/artemis/releases)
+[![Steam Deck branch build](https://github.com/samelamin/vibertemis/actions/workflows/dev-build.yml/badge.svg?branch=codex%2Fsteam-deck)](https://github.com/samelamin/vibertemis/actions/workflows/dev-build.yml?query=branch%3Acodex%2Fsteam-deck)
+[![Downloads](https://img.shields.io/github/downloads/samelamin/vibertemis/total)](https://github.com/samelamin/vibertemis/releases)
 
 ## Steam Deck port
 
@@ -25,7 +25,7 @@ The refresh wire format is protocol unit-tested, including 23.976, 29.97, 59.94,
 The rolling prerelease exposes a stable download URL. In Steam Deck Desktop Mode, open Konsole and run:
 
 ```bash
-curl -fL https://github.com/samelamin/artemis/releases/download/steam-deck-latest/artemis-steam-deck.flatpak \
+curl -fL https://github.com/samelamin/vibertemis/releases/download/steam-deck-latest/artemis-steam-deck.flatpak \
   -o "$HOME/Downloads/artemis-steam-deck.flatpak"
 flatpak install --user --or-update "$HOME/Downloads/artemis-steam-deck.flatpak"
 flatpak info --user com.artemisdesktop.ArtemisDesktopDev
@@ -36,14 +36,14 @@ This is a single-file bundle, not a Flatpak repository: install each newer downl
 
 The publisher replaces these rolling assets after every later successful branch build:
 
-- [direct Flatpak](https://github.com/samelamin/artemis/releases/download/steam-deck-latest/artemis-steam-deck.flatpak)
-- [SHA-256 sidecar](https://github.com/samelamin/artemis/releases/download/steam-deck-latest/artemis-steam-deck.flatpak.sha256)
-- [atomic Flatpak-plus-checksum archive](https://github.com/samelamin/artemis/releases/download/steam-deck-latest/artemis-steam-deck-bundle.tar.gz)
+- [direct Flatpak](https://github.com/samelamin/vibertemis/releases/download/steam-deck-latest/artemis-steam-deck.flatpak)
+- [SHA-256 sidecar](https://github.com/samelamin/vibertemis/releases/download/steam-deck-latest/artemis-steam-deck.flatpak.sha256)
+- [atomic Flatpak-plus-checksum archive](https://github.com/samelamin/vibertemis/releases/download/steam-deck-latest/artemis-steam-deck-bundle.tar.gz)
 
 CI uploads the Flatpak first, re-downloads it, and compares its digest before publishing the checksum companions. Two separately downloaded rolling files can still straddle a replacement. If direct-file verification reports a mismatch while publication is in progress, retry both downloads; for one atomic snapshot, use the archive:
 
 ```bash
-curl -fL https://github.com/samelamin/artemis/releases/download/steam-deck-latest/artemis-steam-deck-bundle.tar.gz \
+curl -fL https://github.com/samelamin/vibertemis/releases/download/steam-deck-latest/artemis-steam-deck-bundle.tar.gz \
   -o "$HOME/Downloads/artemis-steam-deck-bundle.tar.gz"
 mkdir -p "$HOME/Downloads/artemis-steam-deck-bundle"
 tar -xzf "$HOME/Downloads/artemis-steam-deck-bundle.tar.gz" \
@@ -92,12 +92,12 @@ The quick menu is `Ctrl + Alt + Shift + \` on a keyboard or `Select + L1 + R1 + 
 
 ## Downloads and source builds
 
-Fork-owned development downloads are on [GitHub Releases](https://github.com/samelamin/artemis/releases). The branch workflow also retains versioned Actions artifacts for build traceability.
+Fork-owned development downloads are on [GitHub Releases](https://github.com/samelamin/vibertemis/releases). The branch workflow also retains versioned Actions artifacts for build traceability.
 
 Clone with submodules:
 
 ```bash
-git clone https://github.com/samelamin/artemis.git
+git clone https://github.com/samelamin/vibertemis.git
 cd artemis
 git submodule update --init --recursive
 ```
@@ -113,7 +113,7 @@ Platform-specific setup, including the reproducible macOS DMG flow, is documente
 
 ## Contributing and support
 
-Report fork issues in the [samelamin/artemis issue tracker](https://github.com/samelamin/artemis/issues). Include the commit or bundle name, client platform, host software/version, requested stream settings, logs, and whether the issue reproduces outside a live stream.
+Report fork issues in the [samelamin/vibertemis issue tracker](https://github.com/samelamin/vibertemis/issues). Include the commit or bundle name, client platform, host software/version, requested stream settings, logs, and whether the issue reproduces outside a live stream.
 
 Contributions should use a focused branch, include regression coverage where practical, and update documentation when behavior or packaging changes.
 

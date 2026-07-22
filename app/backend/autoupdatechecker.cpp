@@ -45,7 +45,7 @@ void AutoUpdateChecker::start()
 
     // Point to Artemis GitHub releases (all releases including prereleases)
     // Using /releases instead of /releases/latest because we only have prereleases
-    QUrl url("https://api.github.com/repos/samelamin/artemis/releases");
+    QUrl url("https://api.github.com/repos/samelamin/vibertemis/releases");
     QNetworkRequest request(url);
 #if QT_VERSION >= QT_VERSION_CHECK(5, 15, 0)
     request.setAttribute(QNetworkRequest::Http2AllowedAttribute, true);
