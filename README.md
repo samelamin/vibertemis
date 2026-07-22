@@ -1,6 +1,6 @@
 # Vibertemis
 
-An AI-enhanced game-streaming client built for Steam Deck and Vibepollo-compatible streaming.
+An AI-enhanced Artemis/Moonlight client built for Steam Deck and Vibepollo-compatible streaming.
 
 Sam Elamin maintains Vibertemis, a Steam Deck-focused fork of [upstream Artemis](https://github.com/wjbeckett/artemis), originally created by William Beckett.
 

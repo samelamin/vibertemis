@@ -33,6 +33,11 @@ README_FORK_ATTRIBUTION = (
     "created by William Beckett."
 )
 
+README_APPROVED_TAGLINE = (
+    "An AI-enhanced Artemis/Moonlight client built for Steam Deck and "
+    "Vibepollo-compatible streaming."
+)
+
 README_REQUIRED_HEADINGS = (
     "Why Vibertemis?",
     "AI-enhanced development",
@@ -751,6 +756,25 @@ class ForkIdentityTests(unittest.TestCase):
             '  ARTEMIS_MAC_ARCHS="$(uname -m)" \\\n'
             "  ./scripts/generate-dmg.sh Release 0.6.7",
             development,
+        )
+
+    def test_readme_uses_approved_vibertemis_tagline(self):
+        readme = (REPOSITORY_ROOT / "README.md").read_text(encoding="utf-8")
+        self.assertEqual(README_APPROVED_TAGLINE, readme.splitlines()[2])
+
+    def test_build_guide_names_current_windows_bundle_entrypoint(self):
+        build_system = (REPOSITORY_ROOT / "docs/BUILD_SYSTEM.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(
+            "`scripts/generate-artemis-bundle.bat` — current Windows universal "
+            "bundle fallback used by CI;",
+            build_system,
+        )
+        self.assertIn(
+            "`scripts/generate-bundle.bat` — legacy Moonlight-input tooling, "
+            "not the current Vibertemis path;",
+            build_system,
         )
 
     def test_current_public_docs_use_vibertemis_identity_and_real_artifacts(self):

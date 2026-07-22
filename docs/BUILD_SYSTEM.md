@@ -51,7 +51,8 @@ executable compatibility contract requires them:
 
 - `artemis.pro` — qmake project entry point;
 - `scripts/build-artemis-arch.bat` — Windows architecture build script;
-- `scripts/generate-bundle.bat` — Windows WiX bundle generation;
+- `scripts/generate-artemis-bundle.bat` — current Windows universal bundle fallback used by CI;
+- `scripts/generate-bundle.bat` — legacy Moonlight-input tooling, not the current Vibertemis path;
 - `scripts/generate-dmg.sh` — macOS app/DMG generation; and
 - `packaging/flatpak/com.artemisdesktop.ArtemisDesktopDev.json` — development
   Flatpak manifest.
