@@ -18,6 +18,14 @@ TEMPORARY_README_ALLOWLIST = {
     "Want to help test new features? Check out our [development releases](https://github.com/wjbeckett/artemis/releases?q=prerelease%3Atrue)!",
 }
 
+FORK_README_DISTRIBUTION_ROUTES = {
+    "build badge": "https://github.com/samelamin/artemis/workflows/Build%20Artemis%20Qt/badge.svg",
+    "build actions": "https://github.com/samelamin/artemis/actions",
+    "download badge": "https://img.shields.io/github/downloads/samelamin/artemis/total",
+    "clone command": "git clone https://github.com/samelamin/artemis.git",
+    "release downloads": "https://github.com/samelamin/artemis/releases",
+}
+
 UPSTREAM_ATTRIBUTION_ALLOWLIST = {
     (
         "README.md",
@@ -71,6 +79,51 @@ def tracked_identity_files():
             yield relative_path
 
 
+def validate_readme_distribution_phase(readme):
+    readme_lines = {line.strip() for line in readme.splitlines()}
+    legacy_lines = TEMPORARY_README_ALLOWLIST & readme_lines
+    fork_routes = {
+        route_name
+        for route_name, route in FORK_README_DISTRIBUTION_ROUTES.items()
+        if route in readme
+    }
+    errors = []
+
+    if fork_routes:
+        missing_fork_routes = set(FORK_README_DISTRIBUTION_ROUTES) - fork_routes
+        if missing_fork_routes:
+            errors.append(
+                "partial README migration; missing fork routes: "
+                + ", ".join(sorted(missing_fork_routes))
+            )
+        if legacy_lines:
+            errors.append(
+                "legacy README routes remain after fork migration: "
+                + " | ".join(sorted(legacy_lines))
+            )
+    else:
+        missing_legacy_lines = TEMPORARY_README_ALLOWLIST - legacy_lines
+        if missing_legacy_lines:
+            errors.append(
+                "pre-migration README must retain the complete deferred route set: "
+                + " | ".join(sorted(missing_legacy_lines))
+            )
+
+    return errors
+
+
+def is_explicit_readme_upstream_attribution(line):
+    upstream_urls = set(
+        re.findall(
+            r"https://github\.com/wjbeckett/artemis(?:/[^\s)\"'<>]*)?",
+            line,
+        )
+    )
+    return upstream_urls == {"https://github.com/wjbeckett/artemis"} and bool(
+        re.search(r"\b(?:upstream|fork(?:ed)?)\b", line, flags=re.IGNORECASE)
+    )
+
+
 class ForkIdentityTests(unittest.TestCase):
     def test_upstream_routes_are_narrowly_allowlisted_and_labelled(self):
         unexpected = []
@@ -94,6 +147,11 @@ class ForkIdentityTests(unittest.TestCase):
                 stripped_line = line.strip()
                 occurrence = (relative_path, stripped_line)
                 if occurrence in UPSTREAM_ATTRIBUTION_ALLOWLIST:
+                    continue
+                if (
+                    relative_path == "README.md"
+                    and is_explicit_readme_upstream_attribution(stripped_line)
+                ):
                     continue
                 if (
                     relative_path == "README.md"
@@ -157,31 +215,30 @@ class ForkIdentityTests(unittest.TestCase):
 
     def test_readme_distribution_routes_are_fork_owned_or_exactly_deferred(self):
         readme = (REPOSITORY_ROOT / "README.md").read_text(encoding="utf-8")
-        route_pairs = {
-            "build badge": (
-                "https://github.com/samelamin/artemis/workflows/Build%20Artemis%20Qt/badge.svg",
-                "https://github.com/wjbeckett/artemis/workflows/Build%20Artemis%20Qt/badge.svg",
-            ),
-            "download badge": (
-                "https://img.shields.io/github/downloads/samelamin/artemis/total",
-                "https://img.shields.io/github/downloads/wjbeckett/artemis/total",
-            ),
-            "clone command": (
-                "git clone https://github.com/samelamin/artemis.git",
-                "git clone https://github.com/wjbeckett/artemis.git",
-            ),
-            "release download": (
-                "https://github.com/samelamin/artemis/releases",
-                "https://github.com/wjbeckett/artemis/releases",
-            ),
-        }
+        self.assertEqual([], validate_readme_distribution_phase(readme))
 
-        for route_name, (fork_route, deferred_route) in route_pairs.items():
-            with self.subTest(route=route_name):
-                self.assertTrue(
-                    fork_route in readme or deferred_route in readme,
-                    f"README must contain the fork {route_name}",
-                )
+    def test_readme_phase_rejects_partial_migration_and_legacy_reintroduction(self):
+        current_readme = (REPOSITORY_ROOT / "README.md").read_text(encoding="utf-8")
+        first_legacy_line = sorted(TEMPORARY_README_ALLOWLIST)[0]
+
+        partial_legacy = current_readme.replace(first_legacy_line, "", 1)
+        self.assertTrue(validate_readme_distribution_phase(partial_legacy))
+
+        partial_migration = current_readme.replace(
+            first_legacy_line,
+            "https://github.com/samelamin/artemis/releases",
+            1,
+        )
+        self.assertTrue(validate_readme_distribution_phase(partial_migration))
+
+        final_readme = current_readme
+        for legacy_line in TEMPORARY_README_ALLOWLIST:
+            final_readme = final_readme.replace(legacy_line, "")
+        final_readme += "\n" + "\n".join(FORK_README_DISTRIBUTION_ROUTES.values())
+        self.assertEqual([], validate_readme_distribution_phase(final_readme))
+
+        reintroduced = final_readme + "\n" + first_legacy_line
+        self.assertTrue(validate_readme_distribution_phase(reintroduced))
 
 
 if __name__ == "__main__":
