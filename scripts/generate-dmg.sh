@@ -25,7 +25,8 @@ SOURCE_ROOT=$PWD
 BUILD_ROOT="$SOURCE_ROOT/build"
 BUILD_FOLDER="$BUILD_ROOT/build-$BUILD_CONFIG"
 INSTALLER_FOLDER="$BUILD_ROOT/installer-$BUILD_CONFIG"
-APP_PATH="$BUILD_FOLDER/app/Artemis.app"
+BUILT_APP_PATH="$BUILD_FOLDER/app/Artemis.app"
+APP_PATH="$BUILD_FOLDER/app/Vibertemis.app"
 APP_EXECUTABLE="$APP_PATH/Contents/MacOS/Artemis"
 
 # Use override version if provided, otherwise read from version.txt.
@@ -60,10 +61,13 @@ pushd "$BUILD_FOLDER" >/dev/null
 make -j"$(sysctl -n hw.logicalcpu)" "$(echo "$BUILD_CONFIG" | tr '[:upper:]' '[:lower:]')" || fail "Make failed!"
 popd >/dev/null
 
+echo "Publishing Vibertemis app bundle"
+mv "$BUILT_APP_PATH" "$APP_PATH"
+
 echo "Saving dSYM file"
 pushd "$BUILD_FOLDER" >/dev/null
-dsymutil "$APP_EXECUTABLE" -o "Artemis-$VERSION.dsym" || fail "dSYM creation failed!"
-cp -R "Artemis-$VERSION.dsym" "$INSTALLER_FOLDER/" || fail "dSYM copy failed!"
+dsymutil "$APP_EXECUTABLE" -o "Vibertemis-$VERSION.dsym" || fail "dSYM creation failed!"
+cp -R "Vibertemis-$VERSION.dsym" "$INSTALLER_FOLDER/" || fail "dSYM copy failed!"
 popd >/dev/null
 
 echo "Creating app bundle"
@@ -91,20 +95,20 @@ if [[ -n "$SIGNING_IDENTITY" ]]; then
 fi
 
 echo "Creating DMG"
-DMG_NAME="Artemis-$VERSION.dmg"
+DMG_NAME="Vibertemis-$VERSION.dmg"
 DMG_PATH="$INSTALLER_FOLDER/$DMG_NAME"
 
 create_styled_dmg()
 {
   local create_dmg_args=(
-    --volname "Artemis"
+    --volname "Vibertemis"
     --volicon "$SOURCE_ROOT/app/artemis.icns"
     --background "$SOURCE_ROOT/scripts/dmg-background.png"
     --window-pos 200 120
     --window-size 660 400
     --icon-size 100
-    --icon "Artemis.app" 180 170
-    --hide-extension "Artemis.app"
+    --icon "Vibertemis.app" 180 170
+    --hide-extension "Vibertemis.app"
     --app-drop-link 480 170
     --no-internet-enable
   )
@@ -119,7 +123,7 @@ create_styled_dmg()
 create_fallback_dmg()
 {
   hdiutil create \
-    -volname "Artemis" \
+    -volname "Vibertemis" \
     -srcfolder "$APP_PATH" \
     -ov \
     -format UDZO \
@@ -163,7 +167,7 @@ else
 fi
 
 cat >"$INSTALLER_FOLDER/build_info_macos.txt" <<EOF
-Artemis Desktop macOS $ARCHITECTURE_LABEL Development Build
+Vibertemis macOS $ARCHITECTURE_LABEL Development Build
 Version: $VERSION
 Architecture: $ARCHITECTURE_LABEL
 Build Configuration: $BUILD_CONFIG
@@ -171,7 +175,7 @@ Built: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
 
 Installation Notes:
 - $ARCHITECTURE_NOTE
-- If macOS says the app is "damaged", run: xattr -cr Artemis.app
+- If macOS says the app is "damaged", run: xattr -cr Vibertemis.app
 - Or go to System Settings > Privacy & Security and allow the app
 - This is a development build and may trigger Gatekeeper warnings
 EOF

@@ -715,13 +715,13 @@ jobs:
         echo "::warning::This macOS development build is unsigned and may trigger Gatekeeper warnings."
         ARTEMIS_MAC_ARCHS="$(uname -m)" ./scripts/generate-dmg.sh Release "$VERSION"
         ./scripts/verify-macos-bundle.sh \
-          build/build-Release/app/Artemis.app \
-          "build/installer-Release/Artemis-$VERSION.dmg"
+          build/build-Release/app/Vibertemis.app \
+          "build/installer-Release/Vibertemis-$VERSION.dmg"
 
     - name: Inspect packaged architecture
       id: macos_arch
       run: |
-        ACTUAL_ARCHS=$(lipo -archs build/build-Release/app/Artemis.app/Contents/MacOS/Artemis)
+        ACTUAL_ARCHS=$(lipo -archs build/build-Release/app/Vibertemis.app/Contents/MacOS/Artemis)
         if [[ " $ACTUAL_ARCHS " == *" arm64 "* && " $ACTUAL_ARCHS " == *" x86_64 "* ]]; then
           SUFFIX=universal
         elif [[ "$ACTUAL_ARCHS" == "arm64" ]]; then
@@ -738,8 +738,8 @@ jobs:
     - name: Upload macOS DMG
       uses: actions/upload-artifact@v4
       with:
-        name: artemis-macos-${{ steps.macos_arch.outputs.suffix }}-${{ needs.setup-version.outputs.version }}
-        path: build/installer-Release/Artemis-${{ needs.setup-version.outputs.version }}.dmg
+        name: vibertemis-macos-${{ steps.macos_arch.outputs.suffix }}-${{ needs.setup-version.outputs.version }}
+        path: build/installer-Release/Vibertemis-${{ needs.setup-version.outputs.version }}.dmg
         retention-days: 30
 
   build-linux-dev:

@@ -14,7 +14,7 @@ This document tracks our progress on implementing Artemis features in the Qt cli
 
 ### Supported toolchain
 
-Use Qt 6.11.1 when building Artemis with the current macOS 26 SDKs. Qt 6.8.3
+Use Qt 6.11.1 when building Vibertemis with the current macOS 26 SDKs. Qt 6.8.3
 fails in `qyieldcpu.h` because Apple Clang can report support for `__yield`
 without declaring `__yield()`. This is
 [QTBUG-145239](https://bugreports.qt.io/browse/QTBUG-145239), fixed upstream by
@@ -28,7 +28,7 @@ Qt 6.11-only APIs. The versions can converge after the common Qt line includes
 the upstream fix.
 
 The package script builds the machine's native architecture by default. CI
-therefore publishes an artifact such as `artemis-macos-arm64-VERSION`; it uses
+therefore publishes an artifact such as `vibertemis-macos-arm64-VERSION`; it uses
 `universal` only when `lipo -archs` finds both `arm64` and `x86_64`. Set
 `ARTEMIS_MAC_ARCHS` explicitly only when the complete Qt and native dependency
 set provides every requested slice.
@@ -69,7 +69,7 @@ diagnostic build was completed only after temporarily pointing
 not a supported project build instruction and must not be added to CI or the
 repository scripts. Repair or reinstall Command Line Tools, or select a
 complete Xcode installation as CI does, before relying on local results. There
-is no Artemis source-level workaround for an incomplete Apple toolchain.
+is no Vibertemis source-level workaround for an incomplete Apple toolchain.
 
 Build and run the display-independent refresh-rate unit test, then build,
 deploy, package, and verify the application:
@@ -88,8 +88,8 @@ package_version="$(tr -d '\r\n' < app/version.txt)-local.$(git rev-parse --short
 ARTEMIS_MAC_ARCHS="$(uname -m)" \
   ./scripts/generate-dmg.sh Release "$package_version"
 ./scripts/verify-macos-bundle.sh \
-  build/build-Release/app/Artemis.app \
-  "build/installer-Release/Artemis-$package_version.dmg"
+  build/build-Release/app/Vibertemis.app \
+  "build/installer-Release/Vibertemis-$package_version.dmg"
 ```
 
 `generate-dmg.sh` performs a clean release build, runs `macdeployqt`, and writes
@@ -97,8 +97,17 @@ the DMG under `build/installer-Release/`. `create-dmg` normally adds the styled
 Finder layout. If its Finder automation is unavailable, the script falls back
 to `hdiutil`; that DMG remains functional but is unstyled.
 
+For compatibility, qmake still uses `TARGET = Artemis` and first creates
+`build/build-Release/app/Artemis.app` with the executable
+`Contents/MacOS/Artemis`. The package script immediately renames the enclosing
+bundle to the public `Vibertemis.app` name before deployment. The internal
+executable and application/settings identity remain `Artemis` for
+compatibility. The bundle ID, signing behavior, and `ARTEMIS_MAC_ARCHS`
+variable also remain unchanged compatibility contracts.
+
 The verifier checks both the deployed bundle and the copy mounted from the
-DMG. For each copy it checks the executable, bundle versions, architecture,
+DMG. For each copy it checks the `Vibertemis` display name, compatibility
+bundle ID and `Artemis` executable identity, bundle versions, architecture,
 linked libraries, and forbidden direct Homebrew links. It then launches the
 real Cocoa application (`QT_QPA_PLATFORM=cocoa` and `SDL_VIDEODRIVER=cocoa`):
 surviving five seconds or exiting cleanly passes, while an immediate non-zero
@@ -107,8 +116,8 @@ exit exposes loader and platform-plugin failures.
 Inspect and fingerprint the result independently:
 
 ```bash
-app=build/build-Release/app/Artemis.app
-dmg="build/installer-Release/Artemis-$package_version.dmg"
+app=build/build-Release/app/Vibertemis.app
+dmg="build/installer-Release/Vibertemis-$package_version.dmg"
 lipo -archs "$app/Contents/MacOS/Artemis"
 otool -L "$app/Contents/MacOS/Artemis"
 /usr/libexec/PlistBuddy -c 'Print:CFBundleShortVersionString' \
@@ -125,7 +134,8 @@ The project keeps related but distinct version values:
 - `app/version.txt` is the source version embedded by qmake into
   `CFBundleShortVersionString` and `CFBundleVersion`.
 - The optional second argument to `generate-dmg.sh` is the package version. It
-  controls DMG/dSYM filenames and `build_info_macos.txt`, but does not rewrite
+  controls the `Vibertemis-VERSION.dmg` and `Vibertemis-VERSION.dsym` filenames
+  and `build_info_macos.txt`, but does not rewrite
   the source or plist version.
 - `verify-macos-bundle.sh` checks the plist against `app/version.txt` by
   default. Set `ARTEMIS_EXPECTED_BUNDLE_VERSION` only when intentionally
@@ -136,7 +146,7 @@ and notary credentials are supplied. `macdeployqt` may leave ad-hoc signatures
 on bundled code, but those are not a distributable Developer ID signature and
 do not avoid Gatekeeper warnings. For a trusted local build, use **Open** from
 the Finder context menu or approve it in **System Settings > Privacy &
-Security**; clearing quarantine with `xattr -cr Artemis.app` is another explicit
+Security**; clearing quarantine with `xattr -cr Vibertemis.app` is another explicit
 local-only option.
 
 Report macOS validation at three independent levels:

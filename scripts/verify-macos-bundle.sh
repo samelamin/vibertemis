@@ -66,13 +66,29 @@ verify_app()
   local info_plist="$app_path/Contents/Info.plist"
   local bundle_short_version
   local bundle_version
+  local bundle_display_name
+  local bundle_identifier
+  local bundle_executable
   local dependency
   local launch_status
 
   [[ -x "$executable" ]] || fail "missing executable: $executable"
+  [[ -f "$info_plist" ]] || fail "missing bundle metadata: $info_plist"
+
+  bundle_display_name=$(/usr/libexec/PlistBuddy -c 'Print:CFBundleDisplayName' "$info_plist") || \
+    fail "unable to read CFBundleDisplayName from $info_plist"
+  bundle_identifier=$(/usr/libexec/PlistBuddy -c 'Print:CFBundleIdentifier' "$info_plist") || \
+    fail "unable to read CFBundleIdentifier from $info_plist"
+  bundle_executable=$(/usr/libexec/PlistBuddy -c 'Print:CFBundleExecutable' "$info_plist") || \
+    fail "unable to read CFBundleExecutable from $info_plist"
+  [[ "$bundle_display_name" == "Vibertemis" ]] || \
+    fail "CFBundleDisplayName is $bundle_display_name; expected Vibertemis"
+  [[ "$bundle_identifier" == "com.artemis_desktop.Artemis" ]] || \
+    fail "CFBundleIdentifier is $bundle_identifier; expected com.artemis_desktop.Artemis"
+  [[ "$bundle_executable" == "Artemis" ]] || \
+    fail "CFBundleExecutable is $bundle_executable; expected Artemis"
 
   if [[ -n "$EXPECTED_BUNDLE_VERSION" ]]; then
-    [[ -f "$info_plist" ]] || fail "missing bundle metadata: $info_plist"
     bundle_short_version=$(/usr/libexec/PlistBuddy -c 'Print:CFBundleShortVersionString' "$info_plist") || \
       fail "unable to read CFBundleShortVersionString from $info_plist"
     bundle_version=$(/usr/libexec/PlistBuddy -c 'Print:CFBundleVersion' "$info_plist") || \
@@ -141,7 +157,7 @@ if [[ -n "$DMG_PATH" ]]; then
   [[ -f "$DMG_PATH" ]] || fail "missing DMG: $DMG_PATH"
   MOUNT_DIR=$(mktemp -d "${TMPDIR:-/tmp}/artemis-dmg.XXXXXX")
   hdiutil attach "$DMG_PATH" -nobrowse -readonly -mountpoint "$MOUNT_DIR" >/dev/null
-  verify_app "$MOUNT_DIR/Artemis.app"
+  verify_app "$MOUNT_DIR/Vibertemis.app"
   hdiutil detach "$MOUNT_DIR" >/dev/null 2>&1
   rmdir "$MOUNT_DIR" 2>/dev/null || true
   MOUNT_DIR=
