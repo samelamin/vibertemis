@@ -5,7 +5,20 @@
 
 struct ReleaseVersionSelection
 {
-    bool valid = false;
+    ReleaseVersionSelection() :
+        valid(false)
+    {
+    }
+
+    ReleaseVersionSelection(bool isValid, const QString &selectedVersion,
+                            const QString &selectedUrl) :
+        valid(isValid),
+        version(selectedVersion),
+        url(selectedUrl)
+    {
+    }
+
+    bool valid;
     QString version;
     QString url;
 };
