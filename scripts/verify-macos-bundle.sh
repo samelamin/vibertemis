@@ -5,6 +5,8 @@ set -euo pipefail
 APP_PATH=${1:-}
 DMG_PATH=${2:-}
 MOUNT_DIR=
+LAUNCH_LOG=
+LAUNCH_PID=
 
 fail()
 {
@@ -12,10 +14,35 @@ fail()
   exit 1
 }
 
+stop_process()
+{
+  local pid=$1
+  local attempts=0
+
+  kill -TERM "$pid" 2>/dev/null || true
+  while kill -0 "$pid" 2>/dev/null && [[ "$attempts" -lt 10 ]]; do
+    sleep 0.2
+    attempts=$((attempts + 1))
+  done
+
+  if kill -0 "$pid" 2>/dev/null; then
+    kill -KILL "$pid" 2>/dev/null || true
+  fi
+  wait "$pid" 2>/dev/null || true
+}
+
 cleanup()
 {
-  if [[ -n "$MOUNT_DIR" ]] && mount | grep -Fq " on $MOUNT_DIR "; then
-    hdiutil detach "$MOUNT_DIR" >/dev/null || true
+  if [[ -n "$LAUNCH_PID" ]]; then
+    stop_process "$LAUNCH_PID"
+    LAUNCH_PID=
+  fi
+  if [[ -n "$LAUNCH_LOG" ]]; then
+    rm -f "$LAUNCH_LOG"
+    LAUNCH_LOG=
+  fi
+  if [[ -n "$MOUNT_DIR" ]]; then
+    hdiutil detach "$MOUNT_DIR" >/dev/null 2>&1 || true
   fi
   if [[ -n "$MOUNT_DIR" ]] && [[ -d "$MOUNT_DIR" ]]; then
     rmdir "$MOUNT_DIR" 2>/dev/null || true
@@ -29,8 +56,6 @@ verify_app()
   local app_path=$1
   local executable="$app_path/Contents/MacOS/Artemis"
   local dependency
-  local launch_log
-  local launch_pid
   local launch_status
 
   [[ -x "$executable" ]] || fail "missing executable: $executable"
@@ -56,30 +81,34 @@ verify_app()
     esac
   done < <(otool -L "$executable" | tail -n +2 | sed -E 's/^[[:space:]]*([^[:space:]]+).*/\1/')
 
-  launch_log=$(mktemp "${TMPDIR:-/tmp}/artemis-launch.XXXXXX")
-  QT_QPA_PLATFORM=offscreen SDL_VIDEODRIVER=dummy "$executable" >"$launch_log" 2>&1 &
-  launch_pid=$!
+  LAUNCH_LOG=$(mktemp "${TMPDIR:-/tmp}/artemis-launch.XXXXXX")
+  QT_QPA_PLATFORM=cocoa SDL_VIDEODRIVER=dummy "$executable" >"$LAUNCH_LOG" 2>&1 &
+  LAUNCH_PID=$!
 
   sleep 5
-  if kill -0 "$launch_pid" 2>/dev/null; then
-    kill "$launch_pid" 2>/dev/null || true
-    wait "$launch_pid" 2>/dev/null || true
-    rm -f "$launch_log"
+  if kill -0 "$LAUNCH_PID" 2>/dev/null; then
+    stop_process "$LAUNCH_PID"
+    LAUNCH_PID=
+    rm -f "$LAUNCH_LOG"
+    LAUNCH_LOG=
     return 0
   fi
 
   set +e
-  wait "$launch_pid"
+  wait "$LAUNCH_PID"
   launch_status=$?
   set -e
+  LAUNCH_PID=
 
   if [[ "$launch_status" -ne 0 ]]; then
-    cat "$launch_log" >&2
-    rm -f "$launch_log"
+    cat "$LAUNCH_LOG" >&2
+    rm -f "$LAUNCH_LOG"
+    LAUNCH_LOG=
     fail "deployed executable exited immediately with status $launch_status"
   fi
 
-  rm -f "$launch_log"
+  rm -f "$LAUNCH_LOG"
+  LAUNCH_LOG=
 }
 
 [[ -n "$APP_PATH" ]] || fail "usage: $0 APP_PATH [DMG_PATH]"
@@ -90,8 +119,8 @@ if [[ -n "$DMG_PATH" ]]; then
   MOUNT_DIR=$(mktemp -d "${TMPDIR:-/tmp}/artemis-dmg.XXXXXX")
   hdiutil attach "$DMG_PATH" -nobrowse -readonly -mountpoint "$MOUNT_DIR" >/dev/null
   verify_app "$MOUNT_DIR/Artemis.app"
-  hdiutil detach "$MOUNT_DIR" >/dev/null
-  rmdir "$MOUNT_DIR"
+  hdiutil detach "$MOUNT_DIR" >/dev/null 2>&1
+  rmdir "$MOUNT_DIR" 2>/dev/null || true
   MOUNT_DIR=
 fi
 
