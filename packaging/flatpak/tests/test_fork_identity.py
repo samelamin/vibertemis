@@ -1,11 +1,13 @@
 from pathlib import Path
 import os
+import plistlib
 import re
 import subprocess
 import tempfile
 import textwrap
 import unittest
 from urllib.parse import unquote
+from xml.etree import ElementTree
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
@@ -123,13 +125,44 @@ def unexpected_upstream_occurrences(relative_path, text):
 
 def obsolete_fork_occurrences(relative_path, text):
     occurrences = []
+    obsolete_repository_pattern = re.compile(
+        rf"{re.escape(OBSOLETE_FORK_REPOSITORY)}(?:\.git)?"
+        r"(?![a-z0-9_.-])",
+        re.IGNORECASE,
+    )
     for line_number, line in enumerate(text.splitlines(), start=1):
         normalized_line = repeatedly_url_decode(line).casefold()
-        if OBSOLETE_FORK_REPOSITORY.casefold() in normalized_line:
+        if obsolete_repository_pattern.search(normalized_line):
             occurrences.append(
                 f"{relative_path}:{line_number}: {line.strip()}"
             )
     return occurrences
+
+
+def desktop_entry_fields(text):
+    fields = {}
+    active_section = None
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith(("#", ";")):
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            active_section = line[1:-1]
+            continue
+        if active_section != "Desktop Entry" or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        fields.setdefault(key, []).append(value)
+    return fields
+
+
+def active_cpp_lines(text):
+    without_block_comments = re.sub(r"/\*.*?\*/", "", text, flags=re.DOTALL)
+    return [
+        line.split("//", 1)[0].strip()
+        for line in without_block_comments.splitlines()
+        if line.split("//", 1)[0].strip()
+    ]
 
 
 def validate_final_readme_distribution(readme):
@@ -235,29 +268,67 @@ class ForkIdentityTests(unittest.TestCase):
                     self.assertIn(route, text)
 
     def test_public_product_identity_is_vibertemis(self):
-        expected_identity = {
-            "app/deploy/linux/com.artemis_desktop.Artemis.desktop":
-                "Name=Vibertemis",
-            "app/deploy/linux/com.artemis_desktop.Artemis.appdata.xml":
-                "<name>Vibertemis</name>",
-            "packaging/flatpak/com.artemisdesktop.ArtemisDesktopDev.desktop":
-                "Name=Vibertemis",
-            "packaging/flatpak/com.artemisdesktop.ArtemisDesktopDev.metainfo.xml":
-                "<name>Vibertemis</name>",
-            "app/main.cpp":
-                'QCoreApplication::setApplicationDisplayName("Vibertemis")',
-            "app/Info.plist": (
-                "<key>CFBundleDisplayName</key>\n"
-                "\t<string>Vibertemis</string>"
-            ),
-        }
-
-        for relative_path, identity in expected_identity.items():
+        desktop_files = (
+            "app/deploy/linux/com.artemis_desktop.Artemis.desktop",
+            "packaging/flatpak/com.artemisdesktop.ArtemisDesktopDev.desktop",
+        )
+        for relative_path in desktop_files:
             text = (REPOSITORY_ROOT / relative_path).read_text(
                 encoding="utf-8-sig"
             )
             with self.subTest(path=relative_path):
-                self.assertIn(identity, text)
+                self.assertEqual(
+                    ["Vibertemis"],
+                    desktop_entry_fields(text).get("Name"),
+                    f"{relative_path} must have exactly one active "
+                    "Name=Vibertemis field and no active Name=Artemis field",
+                )
+
+        appstream_files = (
+            "app/deploy/linux/com.artemis_desktop.Artemis.appdata.xml",
+            "packaging/flatpak/com.artemisdesktop.ArtemisDesktopDev.metainfo.xml",
+        )
+        for relative_path in appstream_files:
+            root = ElementTree.parse(REPOSITORY_ROOT / relative_path).getroot()
+            current_names = [
+                element.text
+                for element in root.findall("./name")
+            ]
+            with self.subTest(path=relative_path):
+                self.assertEqual(
+                    ["Vibertemis"],
+                    current_names,
+                    f"{relative_path} must have one current top-level "
+                    "Vibertemis name and no current Artemis name",
+                )
+
+        main_cpp = (REPOSITORY_ROOT / "app/main.cpp").read_text(
+            encoding="utf-8"
+        )
+        display_name_pattern = re.compile(
+            r'QCoreApplication::setApplicationDisplayName\(\s*"([^"]*)"\s*\);'
+        )
+        active_display_names = []
+        for line in active_cpp_lines(main_cpp):
+            match = display_name_pattern.fullmatch(line)
+            if match:
+                active_display_names.append(match.group(1))
+        with self.subTest(path="app/main.cpp"):
+            self.assertEqual(
+                ["Vibertemis"],
+                active_display_names,
+                "app/main.cpp must have exactly one active Vibertemis "
+                "display-name call and no conflicting active display-name call",
+            )
+
+        with (REPOSITORY_ROOT / "app/Info.plist").open("rb") as plist_file:
+            info_plist = plistlib.load(plist_file)
+        with self.subTest(path="app/Info.plist"):
+            self.assertEqual(
+                "Vibertemis",
+                info_plist.get("CFBundleDisplayName"),
+                "CFBundleDisplayName must be Vibertemis, not Artemis",
+            )
 
     def test_macos_public_packages_use_vibertemis_names(self):
         expected_packaging = {
@@ -471,6 +542,32 @@ class ForkIdentityTests(unittest.TestCase):
             with self.subTest(mutation=mutation_name):
                 self.assertTrue(
                     unexpected_upstream_occurrences("CONTRIBUTING.md", route)
+                )
+
+    def test_obsolete_fork_audit_matches_only_the_exact_repository(self):
+        obsolete_routes = (
+            "https://github.com/samelamin/artemis/issues",
+            "git clone https://github.com/samelamin/artemis.git",
+            "https://github.com/samelamin%252Fartemis/releases",
+        )
+        for route in obsolete_routes:
+            with self.subTest(obsolete=route):
+                self.assertTrue(
+                    obsolete_fork_occurrences("README.md", route),
+                    f"obsolete route was not detected: {route}",
+                )
+
+        allowed_similar_routes = (
+            "https://github.com/samelamin/artemis-tools",
+            "https://github.com/samelamin/artemis.tools",
+            "https://github.com/samelamin/artemis_next",
+        )
+        for route in allowed_similar_routes:
+            with self.subTest(allowed=route):
+                self.assertEqual(
+                    [],
+                    obsolete_fork_occurrences("README.md", route),
+                    f"distinct repository was rejected: {route}",
                 )
 
     def test_renderable_upstream_help_is_visibly_labelled(self):
