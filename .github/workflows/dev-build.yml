@@ -403,12 +403,13 @@ jobs:
       run: |
         # Find and set up Qt ARM64 environment
         echo "Setting up Qt ARM64 environment..."
-        $qtArm64Path = "D:\a\artemis\Qt\6.8.3\msvc2022_arm64"
+        $qtVersionRoot = Join-Path $env:GITHUB_WORKSPACE "Qt\$env:QT_VERSION"
+        $qtArm64Path = Join-Path $qtVersionRoot "msvc2022_arm64"
         
         if (-not (Test-Path $qtArm64Path)) {
           echo "ERROR: Qt ARM64 not found at expected path: $qtArm64Path"
           echo "Available Qt installations:"
-          Get-ChildItem "D:\a\artemis\Qt\6.8.3" -ErrorAction SilentlyContinue | Select-Object Name
+          Get-ChildItem $qtVersionRoot -ErrorAction SilentlyContinue | Select-Object Name
           exit 1
         }
         
@@ -564,7 +565,8 @@ jobs:
         SEMANTIC_VERSION: ${{ needs.setup-version.outputs.version }}
       run: |
         # Set up Qt ARM64 environment
-        $qtArm64Path = "D:\a\artemis\Qt\6.8.3\msvc2022_arm64"
+        $qtVersionRoot = Join-Path $env:GITHUB_WORKSPACE "Qt\$env:QT_VERSION"
+        $qtArm64Path = Join-Path $qtVersionRoot "msvc2022_arm64"
         $env:Qt6_DIR = $qtArm64Path
         $env:PATH = "$qtArm64Path\bin;$env:PATH"
         

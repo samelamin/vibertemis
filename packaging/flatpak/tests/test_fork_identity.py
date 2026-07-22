@@ -1053,6 +1053,64 @@ class ForkIdentityTests(unittest.TestCase):
         self.assertIn("uses: softprops/action-gh-release@v2", workflow)
         self.assertNotIn("uses: softprops/action-gh-release@v1", workflow)
 
+    def test_windows_arm64_qt_paths_follow_runner_workspace(self):
+        workflow = (
+            REPOSITORY_ROOT / ".github/workflows/dev-build.yml"
+        ).read_text(encoding="utf-8")
+
+        for repository_name in ("artemis", "vibertemis"):
+            with self.subTest(hardcoded_repository=repository_name):
+                self.assertNotIn(
+                    rf"D:\a\{repository_name}".casefold(),
+                    workflow.casefold(),
+                    "GitHub runner workspace paths must not depend on the "
+                    "repository name",
+                )
+
+        qt_version_root = (
+            '$qtVersionRoot = Join-Path $env:GITHUB_WORKSPACE '
+            '"Qt\$env:QT_VERSION"'
+        )
+        qt_arm64_path = (
+            '$qtArm64Path = Join-Path $qtVersionRoot "msvc2022_arm64"'
+        )
+        arm64_steps = (
+            (
+                "build-windows-arm64-portable",
+                "Build ARM64 portable package only",
+            ),
+            ("build-windows-universal-installer", "Build ARM64 MSI"),
+        )
+
+        for job_name, step_name in arm64_steps:
+            job = workflow_job_block(workflow, job_name)
+            step_start = job.index(f"    - name: {step_name}\n")
+            step_end = job.find("\n    - name: ", step_start + 1)
+            if step_end == -1:
+                step_end = len(job)
+            step = job[step_start:step_end]
+            with self.subTest(job=job_name, step=step_name):
+                self.assertEqual(1, step.count(qt_version_root))
+                self.assertEqual(1, step.count(qt_arm64_path))
+
+        portable_job = workflow_job_block(
+            workflow, "build-windows-arm64-portable"
+        )
+        portable_step_start = portable_job.index(
+            "    - name: Build ARM64 portable package only\n"
+        )
+        portable_step_end = portable_job.find(
+            "\n    - name: ", portable_step_start + 1
+        )
+        portable_step = portable_job[
+            portable_step_start:
+            portable_step_end if portable_step_end != -1 else len(portable_job)
+        ]
+        self.assertIn(
+            "Get-ChildItem $qtVersionRoot -ErrorAction SilentlyContinue",
+            portable_step,
+        )
+
     def test_setup_version_passes_commit_message_through_environment(self):
         workflow = (
             REPOSITORY_ROOT / ".github/workflows/dev-build.yml"
