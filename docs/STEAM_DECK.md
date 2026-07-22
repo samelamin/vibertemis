@@ -79,6 +79,41 @@ Use a host frame limiter only after the client, stream, virtual display, and gam
 targets agree; Apollo's [stutter guidance][apollo-stutter] explains why a mismatch
 can look like network jitter.
 
+## Vibepollo/Apollo refresh metadata acceptance
+
+> **Current status:** The `maxFPS` and `clientRefreshRateX100` protocol mapping is
+> unit-tested. A stream to a real Vibepollo host has not yet been verified, so do
+> not describe this as a verified Vibepollo stream path until the checklist below
+> is completed and its evidence is recorded.
+
+Capture synchronized client and host logs for each test case. For the fractional
+case, set a custom rate of `59.94` Hz. The unit-tested wire mapping is
+`maxFPS=59940` and `clientRefreshRateX100=5994`; the whole-FPS boundary clamping
+that keeps those fields consistent is also unit-tested.
+
+- [ ] Confirm the Artemis client log contains `Stream refresh metadata` with the
+  expected `maxFPS` and `clientRefreshRateX100` values.
+- [ ] Confirm the Vibepollo/Apollo host log reports the same two fields from the
+  incoming stream request.
+- [ ] Confirm Vibepollo does not emit its `clientRefreshRateX100`/`maxFPS`
+  mismatch warning.
+- [ ] Start the stream and sustain a moving scene for 10 minutes; confirm the
+  effective rate observed by the host and client remains at the requested 59.94
+  Hz/FPS, allowing only normal measurement tolerance rather than rounding the
+  target to 59 or 60.
+- [ ] Repeat with an integer rate such as 60 FPS; confirm both sides report
+  `maxFPS=60` and `clientRefreshRateX100=6000`, and the stream starts and remains
+  usable.
+- [ ] Arrange an invalid persisted custom rate with an integer fallback such as
+  60 FPS; confirm both sides receive the matching fallback values `maxFPS=60`
+  and `clientRefreshRateX100=6000`, with no mismatch warning, and the stream
+  starts normally.
+
+Record the Artemis commit, Vibepollo/Apollo version, requested and effective
+rates, relevant log excerpts, and stream duration. This client change does not
+add Vibepollo runtime bitrate/ABR control, host virtual-display recovery, WGC,
+HDR peak control, WebRTC, or server UI features to Artemis.
+
 ## Codec selection and safe fallback
 
 Start with **Video codec: Automatic (Recommended)** and **Video decoder: Auto**.
