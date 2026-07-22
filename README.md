@@ -1,10 +1,10 @@
 # Vibertemis
 
-An AI-enhanced Artemis/Moonlight client built for Steam Deck and Vibepollo-compatible streaming.
+An AI-enhanced game-streaming client built for Steam Deck and Vibepollo-compatible streaming.
 
 Sam Elamin maintains Vibertemis, a Steam Deck-focused fork of [upstream Artemis](https://github.com/wjbeckett/artemis), originally created by William Beckett.
 
-Vibertemis connects to GameStream-compatible [Apollo](https://github.com/ClassicOldSong/Apollo) and [Sunshine](https://github.com/LizardByte/Sunshine) hosts and implements the precise refresh-request fields that Vibepollo checks. The public name is new, but established Artemis IDs, settings keys, executable names, URL handling, and rolling-download filenames stay in place so existing users keep their settings, pairings, shortcuts, and scripts.
+Vibertemis connects to GameStream-compatible [Apollo](https://github.com/ClassicOldSong/Apollo) and [Sunshine](https://github.com/LizardByte/Sunshine) hosts and implements the precise refresh-request fields that Vibepollo checks. The public name is new, but established Artemis IDs, settings keys, executable names, URL handling, and rolling-download filenames stay in place. Those compatibility identities preserve settings, pairings, and integrations that address the app by ID; they do not rename an installed app bundle, Dock alias, or path-based script automatically.
 
 [![Steam Deck branch build](https://github.com/samelamin/vibertemis/actions/workflows/dev-build.yml/badge.svg?branch=codex%2Fsteam-deck)](https://github.com/samelamin/vibertemis/actions/workflows/dev-build.yml?query=branch%3Acodex%2Fsteam-deck)
 [![Downloads](https://img.shields.io/github/downloads/samelamin/vibertemis/total)](https://github.com/samelamin/vibertemis/releases)
@@ -85,7 +85,17 @@ Current macOS 26 builds use Qt 6.11.1, which contains the upstream fix for the A
 
 `generate-dmg.sh` builds and packages the current machine architecture by default, then inspects the executable slices with `lipo`. The separate `verify-macos-bundle.sh` checks bundle identity and versions, linked libraries, the copy mounted from the DMG, and Cocoa smoke launches. CI's `macOS Development Build` job invokes both scripts. CI package names use `vibertemis-macos-arm64-VERSION` for a native Apple Silicon build and say `universal` only when both `arm64` and `x86_64` slices are present. Development DMGs are unsigned and unnotarized unless credentials are supplied, so Gatekeeper may require **Open** from Finder's context menu or approval in **System Settings > Privacy & Security**.
 
-Exact dependencies, package commands, verification levels, and the current local toolchain caveat are in the [macOS development build guide](docs/DEVELOPMENT.md#macos-development-builds).
+An existing `/Applications/Artemis.app` and its Dock alias do not automatically become Vibertemis when the enclosing bundle is renamed. Migrate safely:
+
+1. Quit the old app. Copy `Vibertemis.app` from the mounted DMG into `/Applications`.
+2. Launch Vibertemis and confirm your settings and pairings are present. They should remain because the bundle ID and QSettings identity are unchanged; do not delete your user configuration.
+3. Remove `/Applications/Artemis.app` only after confirming the new app launches and its settings and pairings are present. Remove and re-add any stale Dock shortcut so it points to `Vibertemis.app`.
+
+For a recoverable rollback, retain the old app somewhere outside `/Applications` until verification is complete. Do not run both apps simultaneously because they share settings and pairing state.
+
+On the local Apple Silicon host, a native arm64 `Vibertemis.app` and `Vibertemis-0.6.7.dmg` were built successfully. `verify-macos-bundle.sh` passed the deployed app and the copy mounted from the DMG, including linkage, plist, `lipo`, and two Cocoa smoke launches. This is package/launch evidence only: the package is unsigned and unnotarized, no real-host stream was run, and renamed GitHub CI remains pending until this commit is pushed.
+
+Exact dependencies, package commands, verification levels, and the command-only local SDK-header workaround are in the [macOS development build guide](docs/DEVELOPMENT.md#macos-development-builds).
 
 ## Features
 
@@ -135,8 +145,8 @@ Follow the [Steam Deck setup and validation guide](docs/STEAM_DECK.md), then rep
 - CI codec probes confirm packaged decoder capabilities; they do not prove physical Steam Deck hardware AV1 decoding.
 - HDR requires a real end-to-end HDR host, encoder, network, decoder, Gamescope/display, and content test.
 - Real streaming against Vibepollo, Apollo, and Sunshine still needs beta testers; unit and package checks do not establish live-host compatibility by themselves.
-- Current macOS development packages are unsigned and unnotarized.
-- The earlier Artemis-named macOS package path produced and verified a native arm64 app and DMG. Re-running the renamed Vibertemis package locally is currently blocked because this host's Command Line Tools installation cannot find the standard C++ `type_traits` header, and renamed-package CI was still pending when this README was written. For current evidence, inspect the exact commit's `macOS Development Build` job as described above; do not infer package verification from the overall badge color.
+- The locally verified native arm64 `Vibertemis.app` and `Vibertemis-0.6.7.dmg` are unsigned and unnotarized. The verifier passed the app and mounted DMG, including linkage, plist, `lipo`, and two Cocoa smoke launches, but no real-host stream was run.
+- Renamed GitHub CI remains pending until this commit is pushed. Afterward, inspect the exact commit's `macOS Development Build` job; do not infer package verification from the overall badge color.
 
 ## Roadmap
 

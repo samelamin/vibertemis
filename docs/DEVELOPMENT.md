@@ -1,10 +1,11 @@
-# Artemis Qt Development Plan
+# Vibertemis development guide
 
-This document tracks our progress on implementing Artemis features in the Qt client.
+This document covers Vibertemis development and retains Artemis names only for
+explicit source, executable, settings, and upstream compatibility references.
 
 ## 🎯 Project Overview
 
-**Goal**: Port Artemis Android features to Moonlight Qt for enhanced Steam Deck and desktop streaming experience.
+**Goal**: Maintain Vibertemis as a Steam Deck-focused fork of upstream Artemis Qt.
 
 **Repository**: https://github.com/samelamin/vibertemis
 **Base**: Fork of Moonlight Qt  
@@ -60,16 +61,15 @@ printf '#include <type_traits>\nint main() { return 0; }\n' | \
   clang++ -x c++ -std=c++17 -fsyntax-only -
 ```
 
-The final preflight must succeed before continuing. The locally tested macOS
-26.5.2 Apple Silicon machine selected `/Library/Developer/CommandLineTools`
-rather than a full Xcode app, and that local installation was damaged: its
-Command Line Tools libc++ overlay was missing `type_traits`. An isolated
-diagnostic build was completed only after temporarily pointing
-`CPLUS_INCLUDE_PATH` at the SDK's libc++ headers. That environment override is
-not a supported project build instruction and must not be added to CI or the
-repository scripts. Repair or reinstall Command Line Tools, or select a
-complete Xcode installation as CI does, before relying on local results. There
-is no Vibertemis source-level workaround for an incomplete Apple toolchain.
+The normal preflight should succeed on a complete Xcode or Command Line Tools
+installation. On the locally tested macOS 26.5.2 Apple Silicon machine,
+`/Library/Developer/CommandLineTools` did not expose `type_traits` through its
+usual libc++ overlay. The successful local package build used a command-only
+include path to the complete macOS SDK headers, shown below. This was local
+toolchain accommodation, not a Vibertemis compiler fix: do not export it
+globally, add it to project files or scripts, or add it to CI. Repair or
+reinstall Command Line Tools, or select a complete Xcode installation, for a
+durable development setup.
 
 Build and run the display-independent refresh-rate unit test, then build,
 deploy, package, and verify the application:
@@ -84,13 +84,20 @@ mkdir -p build/tests-refreshrate
   ./tst_refreshrate
 )
 
-package_version="$(tr -d '\r\n' < app/version.txt)-local.$(git rev-parse --short HEAD)"
-ARTEMIS_MAC_ARCHS="$(uname -m)" \
-  ./scripts/generate-dmg.sh Release "$package_version"
+CPLUS_INCLUDE_PATH="$(xcrun --sdk macosx --show-sdk-path)/usr/include/c++/v1" \
+  ARTEMIS_MAC_ARCHS="$(uname -m)" \
+  ./scripts/generate-dmg.sh Release 0.6.7
 ./scripts/verify-macos-bundle.sh \
   build/build-Release/app/Vibertemis.app \
-  "build/installer-Release/Vibertemis-$package_version.dmg"
+  build/installer-Release/Vibertemis-0.6.7.dmg
 ```
+
+The local result was a native arm64 `Vibertemis.app` and
+`Vibertemis-0.6.7.dmg`. `verify-macos-bundle.sh` passed the deployed app and the
+copy mounted from the DMG: linkage, plist values, the `lipo` architecture, and
+two Cocoa smoke launches all passed. The result remains unsigned and
+unnotarized, no real-host stream was run, and renamed GitHub CI remains pending
+until this commit is pushed.
 
 `generate-dmg.sh` performs a clean release build, runs `macdeployqt`, and writes
 the DMG under `build/installer-Release/`. `create-dmg` normally adds the styled
@@ -105,6 +112,25 @@ executable and application/settings identity remain `Artemis` for
 compatibility. The bundle ID, signing behavior, and `ARTEMIS_MAC_ARCHS`
 variable also remain unchanged compatibility contracts.
 
+### Migrating an existing macOS installation
+
+Renaming the enclosing bundle does not rename an existing
+`/Applications/Artemis.app` or update a Dock alias. The unchanged bundle ID and
+QSettings identity preserve settings and pairings, but filesystem paths and
+shortcuts still need a one-time migration:
+
+1. Quit the old app, then copy `Vibertemis.app` from the mounted DMG into
+   `/Applications`.
+2. Launch Vibertemis and confirm its settings and pairings are present. Do not
+   delete your user configuration.
+3. Remove `/Applications/Artemis.app` only after confirming the new app launches
+   and its settings and pairings are present. Remove and re-add any stale Dock
+   shortcut so it targets `Vibertemis.app`.
+
+For rollback, keep the old app somewhere outside `/Applications` until the new
+copy is confirmed. Do not run both apps simultaneously because they share the
+same configuration and pairing state.
+
 The verifier checks both the deployed bundle and the copy mounted from the
 DMG. For each copy it checks the `Vibertemis` display name, compatibility
 bundle ID and `Artemis` executable identity, bundle versions, architecture,
@@ -117,7 +143,7 @@ Inspect and fingerprint the result independently:
 
 ```bash
 app=build/build-Release/app/Vibertemis.app
-dmg="build/installer-Release/Vibertemis-$package_version.dmg"
+dmg="build/installer-Release/Vibertemis-0.6.7.dmg"
 lipo -archs "$app/Contents/MacOS/Artemis"
 otool -L "$app/Contents/MacOS/Artemis"
 /usr/libexec/PlistBuddy -c 'Print:CFBundleShortVersionString' \
@@ -161,7 +187,13 @@ CI establishes the first two levels. It must not be described as stream
 verification; the third level remains a manual host-and-network acceptance
 test.
 
-## 📋 Development Phases
+## Historical development log
+
+The remaining phase notes record the original Artemis-feature porting work and
+are retained as project history. They are not current product naming,
+installation instructions, release status, or a current roadmap.
+
+### 📋 Development Phases
 
 ### ✅ Phase 0: Foundation (COMPLETED)
 - [x] Fork Moonlight Qt repository
@@ -422,5 +454,5 @@ scripts/
 - **Artemis Android**: https://github.com/ClassicOldSong/moonlight-android
 - **Apollo Server**: https://github.com/ClassicOldSong/Apollo
 - **Moonlight Qt**: https://github.com/moonlight-stream/moonlight-qt
-- **Development Guide**: [docs/DEV_GUIDE.md](docs/DEV_GUIDE.md)
+- **Current development guide**: [macOS development builds](#macos-development-builds)
 - **GameStream Protocol**: https://github.com/moonlight-stream/moonlight-docs/wiki/GameStream-Protocol

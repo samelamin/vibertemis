@@ -823,7 +823,6 @@
 	</categories>
 
 	<developer_name>Vibertemis</developer_name>
-	<update_contact>will@artemis-desktop.org</update_contact>
 
 	<launchable type="desktop-id">com.artemis_desktop.Artemis.desktop</launchable>
 

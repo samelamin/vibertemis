@@ -27,7 +27,7 @@ Review the application ID and requested permissions before accepting the
 install. If Flatpak asks for a runtime source, enable Flathub in Discover or add
 the Flathub remote first. A single-file bundle is not connected to an update
 repository, so install each newer artifact with the same `--or-update` command;
-`flatpak update` alone cannot discover a newer Artemis bundle. Download the
+`flatpak update` alone cannot discover a newer Vibertemis bundle. Download the
 rolling file again and repeat the same `flatpak install --user --or-update`
 command. Flatpak documents these constraints in its
 [single-file bundle guide][flatpak-bundles] and the
@@ -54,16 +54,17 @@ sha256sum -c artemis-steam-deck.flatpak.sha256
 flatpak install --user --or-update artemis-steam-deck.flatpak
 ```
 
-The development ID is intentionally distinct from other Artemis or Moonlight
-installations. Do not uninstall another app to install this bundle.
+The development ID is an established compatibility identifier and is
+intentionally distinct from other installations. Do not uninstall another app
+to install this bundle.
 
-## Add Artemis to Steam
+## Add Vibertemis to Steam
 
 1. In Desktop Mode, launch Steam and choose **Games > Add a Non-Steam Game to
    My Library** ([Valve's instructions][valve-non-steam]).
-2. Select **Artemis** and add it. Restart Steam once if the newly installed
+2. Select **Vibertemis** and add it. Restart Steam once if the newly installed
    desktop entry is not listed yet.
-3. Return to Gaming Mode and launch Artemis from **Library > Non-Steam**.
+3. Return to Gaming Mode and launch Vibertemis from **Library > Non-Steam**.
 4. Open the entry's controller settings and start with a standard gamepad
    template. Confirm D-pad, sticks, `A`/`B`, and the Steam on-screen keyboard
    before pairing or changing settings.
@@ -82,7 +83,7 @@ Valve specifies a 1280x800 panel capped at 60 Hz for Steam Deck LCD and a
 [support note][deck-refresh]). Use these as starting points, not evidence that a
 particular stream path has passed:
 
-| Use case | SteamOS display mode | Artemis stream request | Host target |
+| Use case | SteamOS display mode | Vibertemis stream request | Host target |
 | --- | --- | --- | --- |
 | LCD handheld | 1280x800 at 60 Hz | 1280x800 at 60 FPS | 1280x800 at 60 Hz/FPS |
 | OLED handheld, SDR | 1280x800 at 90 Hz | 1280x800 at 90 FPS | 1280x800 at 90 Hz/FPS |
@@ -91,7 +92,7 @@ particular stream path has passed:
 | 59.94 Hz content/display | 59.94 Hz where SteamOS exposes it | Custom rate `59.94` | Exact 59.94 Hz/FPS, not rounded 59 or 60 |
 
 For a docked display, select its resolution and refresh rate in SteamOS before
-starting Artemis, then request the same values in Artemis and on the host. If the
+starting Vibertemis, then request the same values in Vibertemis and on the host. If the
 link is unstable, Valve recommends trying a lower mode and checking the dock,
 cable, input, and display capabilities ([docking guide][deck-docking]). Do not
 assume that a nominally capable cable supports every HDR/high-refresh mode.
@@ -127,7 +128,7 @@ level and restart or reconfigure Vibepollo again. Verbose logs are noisy and may
 contain sensitive host, client, application, or network details, so review and
 redact them before sharing.
 
-- [ ] Confirm the Artemis client log contains `Stream refresh metadata` with the
+- [ ] Confirm the Vibertemis client log contains `Stream refresh metadata` with the
   expected `maxFPS` and `clientRefreshRateX100` values.
 - [ ] Confirm the Vibepollo/Apollo host log reports the same two fields from the
   incoming stream request.
@@ -147,7 +148,7 @@ redact them before sharing.
 
 The settings UI rejects invalid custom rates, so reproduce the final case by
 temporarily editing the stopped Flatpak's persisted configuration. First stop
-the development application and locate its `Artemis.conf`; the organization
+the development application and locate its `Artemis.conf` compatibility filename; the organization
 subdirectory can vary, so use `find` rather than assuming its exact path:
 
 ```bash
@@ -168,7 +169,7 @@ kwrite "$ARTEMIS_CONF"
 ```
 
 In the existing `[General]` section, change or add these keys, save the file,
-then relaunch Artemis and perform the invalid-fallback checklist item:
+then relaunch Vibertemis and perform the invalid-fallback checklist item:
 
 ```ini
 [General]
@@ -181,7 +182,7 @@ fps=60
 flatpak run com.artemisdesktop.ArtemisDesktopDev
 ```
 
-After capturing the result, stop Artemis before restoring the exact backup. The
+After capturing the result, stop Vibertemis before restoring the exact backup. The
 backup is intentionally retained rather than deleted.
 
 ```bash
@@ -189,10 +190,10 @@ flatpak kill com.artemisdesktop.ArtemisDesktopDev 2>/dev/null || true
 cp -- "$ARTEMIS_CONF.before-vibepollo-test" "$ARTEMIS_CONF"
 ```
 
-Record the Artemis commit, Vibepollo/Apollo version, requested and effective
+Record the Vibertemis commit, Vibepollo/Apollo version, requested and effective
 rates, relevant log excerpts, and stream duration. This client change does not
 add Vibepollo runtime bitrate/ABR control, host virtual-display recovery, WGC,
-HDR peak control, WebRTC, or server UI features to Artemis.
+HDR peak control, WebRTC, or server UI features to Vibertemis.
 
 ## Codec selection and safe fallback
 
@@ -206,12 +207,12 @@ The application and host should negotiate a mutually supported path.
 | AV1 (Experimental) | Test only with Apollo/Sunshine and a host encoder that advertises AV1 | Return to Auto, then HEVC or H.264 |
 
 Moonlight documents that AV1 requires Sunshine and a supported host GPU
-([Moonlight PC features][moonlight-qt]). The Artemis package probe only confirms
+([Moonlight PC features][moonlight-qt]). The Vibertemis package probe only confirms
 that its FFmpeg decoders publish VAAPI and Vulkan configurations. It does **not**
 create a device, decode a frame, prove hardware acceleration on Steam Deck, or
 prove that the host can encode the codec. Confirm the selected codec in the
 statistics overlay and confirm lines such as `Using Vulkan video decoding` or a
-selected VAAPI path in the Artemis log before recording a hardware result.
+selected VAAPI path in the Vibertemis log before recording a hardware result.
 
 If a stream fails to start, shows corruption, or falls back to slow software
 decoding, retest in this order: SDR, Auto codec/decoder, H.264, 1280x720 at 30
@@ -222,7 +223,7 @@ FPS, and a lower bitrate. Change one item at a time.
 Only mark OLED HDR as passed when the complete path is HDR-capable:
 
 - Steam Deck OLED, or an HDR-capable external display;
-- Gaming Mode/Gamescope with HDR enabled for the Artemis shortcut;
+- Gaming Mode/Gamescope with HDR enabled for the Vibertemis shortcut;
 - an HDR-capable host display or EDID/virtual display;
 - host HEVC Main10 or AV1 Main10 encoding support;
 - a usable 10-bit client decode and Vulkan presentation path; and
@@ -231,9 +232,9 @@ Only mark OLED HDR as passed when the complete path is HDR-capable:
 Moonlight's [HDR requirements][moonlight-setup] describe the host display/EDID,
 Main10, and resolution-matching requirements. Moonlight's Linux/Steam Deck HDR
 support is implemented through the Vulkan renderer ([release notes][moonlight-releases]).
-Those upstream capabilities do not prove this Artemis bundle works on a Deck.
+Those upstream capabilities do not prove this Vibertemis bundle works on a Deck.
 
-Artemis transports and presents the HDR stream; it does not calibrate the host,
+Vibertemis transports and presents the HDR stream; it does not calibrate the host,
 game, Deck panel, TV, dock, or cable. Use SteamOS/display and in-game calibration
 controls with a known HDR test scene. Record clipping, raised blacks, banding,
 washed-out color, or unexpected SDR tone mapping as failures rather than
@@ -247,7 +248,7 @@ not a passed requirement; use Desktop Mode SDR as the supported comparison.
 - **V-Sync on, Frame pacing off:** keeps tear-free presentation but removes the
   extra pacing delay; compare when queue delay or periodic stutter is high.
 - **V-Sync off:** lowest presentation latency, but visible tearing may occur;
-  compositor behavior such as Gamescope can affect the result. Artemis disables
+  compositor behavior such as Gamescope can affect the result. Vibertemis disables
   the frame-pacing control when V-Sync is off.
 
 Test one setting at a time in a repeatable moving scene. At 60, 90, and 59.94
@@ -263,7 +264,7 @@ Ethernet for a docked Deck when practical, otherwise use a strong 5 GHz Wi-Fi 5
 or 5/6 GHz Wi-Fi 6/6E connection ([setup guide][moonlight-setup]). Avoid 2.4 GHz
 Wi-Fi and powerline links for acceptance testing.
 
-Start with Artemis's default bitrate for the selected resolution and FPS. Raise
+Start with Vibertemis's default bitrate for the selected resolution and FPS. Raise
 it only after the overlay remains stable; lower it first when network drops,
 jitter, or latency rises. There is no single correct bitrate for every AP,
 distance, display mode, or scene. For Internet streaming, Moonlight recommends a
@@ -298,26 +299,26 @@ Gaming Mode and once in Desktop Mode SDR, and capture:
 
 - Deck model, SteamOS version, mode (Gaming/Desktop), handheld/docked, and
   external display/dock/cable details;
-- Artemis bundle filename and `flatpak info com.artemisdesktop.ArtemisDesktopDev`;
+- Vibertemis bundle filename and `flatpak info com.artemisdesktop.ArtemisDesktopDev`;
 - host software/version, GPU/driver, physical or Apollo virtual display mode;
 - requested resolution, exact refresh/FPS, bitrate, codec/decoder, renderer,
   V-Sync/frame pacing, and HDR state;
 - a statistics-overlay screenshot during motion; and
-- the Artemis log from the same reproduction.
+- the Vibertemis log from the same reproduction.
 
-On Linux, Artemis writes diagnostic output to standard error. Capture it from a
+On Linux, Vibertemis writes diagnostic output to standard error. Capture it from a
 Desktop Mode terminal without adding sandbox permissions:
 
 ```bash
-mkdir -p "$HOME/artemis-logs"
+mkdir -p "$HOME/vibertemis-logs"
 set -o pipefail
 flatpak run com.artemisdesktop.ArtemisDesktopDev 2>&1 \
-  | tee "$HOME/artemis-logs/artemis-$(date +%Y%m%d-%H%M%S).log"
+  | tee "$HOME/vibertemis-logs/vibertemis-$(date +%Y%m%d-%H%M%S).log"
 ```
 
-Reproduce the issue, then quit Artemis. `pipefail` preserves a non-zero Artemis
+Reproduce the issue, then quit Vibertemis. `pipefail` preserves a non-zero Vibertemis
 exit status instead of hiding it behind a successful `tee`. Attach the newest
-file from `~/artemis-logs/`. Review logs before sharing because they can contain
+file from `~/vibertemis-logs/`. Review logs before sharing because they can contain
 hostnames, IP addresses, application names, and other local details.
 
 ## What CI verifies—and what it cannot
@@ -326,7 +327,8 @@ When the Flatpak CI job is green, it verifies these software contracts:
 
 - the tracked manifest parses, required sources are pinned, and the application
   ID/desktop/AppStream metadata agree;
-- the bundle contains the Artemis executable and required shared libraries;
+- the bundle contains the internal `Artemis` compatibility executable and
+  required shared libraries;
 - FFmpeg's H.264, HEVC, and AV1 decoders expose the required VAAPI/Vulkan
   configuration entries;
 - the application survives a bounded headless startup check; and

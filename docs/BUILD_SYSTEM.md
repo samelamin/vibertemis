@@ -1,171 +1,109 @@
-# Artemis Build System Guide
+# Vibertemis build system guide
 
-## Overview
+## Current status
 
-The Artemis build system produces comprehensive, production-ready installers for all major platforms, including universal binaries that support multiple architectures without installation complexity.
+The source of truth for automated builds is
+[`dev-build.yml`](../.github/workflows/dev-build.yml). It builds development
+artifacts when the workflow's change gate selects a build. Availability and
+support must be judged from the job for the exact commit; this guide does not
+claim every theoretical target is production-ready.
 
-## Build Artifacts
+## Current CI artifacts
 
-### Windows
-- **Universal Installer** (`artemis-windows-universal-installer-{version}.exe`)
-  - Single installer supporting both x64 and ARM64
-  - Automatic architecture detection
-  - Includes Visual C++ 2022 Redistributables for both architectures
-  - Uses WiX Toolset v5 bundle technology
+Public artifacts use Vibertemis names unless an established identifier is kept
+explicitly for compatibility:
 
-- **Individual Installers**
-  - `artemis-windows-installer-{version}.msi` (x64)
-  - `artemis-windows-arm64-installer-{version}.msi` (ARM64)
-  
-- **Portable Packages**  
-  - `artemis-windows-portable-{version}.zip` (x64)
-  - `artemis-windows-arm64-portable-{version}.zip` (ARM64)
+| Job | Current public artifact | Status |
+| --- | --- | --- |
+| Windows x64 portable | `vibertemis-windows-x64-portable-{version}.zip` | Enabled when the build gate is true |
+| Windows ARM64 portable | `vibertemis-windows-arm64-portable-{version}.zip` | Enabled when the build gate is true |
+| Windows universal bundle | `vibertemis-windows-universal-installer-{version}.exe` | Enabled; wraps the internal x64 and ARM64 MSI packages |
+| macOS | `Vibertemis-{version}.dmg`, uploaded as `vibertemis-macos-{architecture}-{version}` | Enabled; native host architecture by default |
+| Linux archive | `vibertemis-linux-{version}.tar.gz` | Enabled |
+| Raspberry Pi ARM64 | `vibertemis-raspberry-pi-arm64-{version}.zip` | Enabled |
+| Flatpak | `artemis-flatpak-{version}.flatpak` | Enabled compatibility artifact |
+| Rolling Steam Deck | `artemis-steam-deck.flatpak`, checksum, and atomic archive | Enabled compatibility release assets |
+| AppImage | No current artifact | AppImage job is intentionally disabled with `if: false` |
 
-### macOS
-- **Universal DMG** (`artemis-macos-universal-{version}.dmg`)
-  - Native support for Intel (x86_64) and Apple Silicon (arm64)
-  - Single installer for all Mac systems
-  - Code signed and notarized (when credentials available)
-  - Professional DMG packaging with create-dmg
+The Flatpak application ID `com.artemisdesktop.ArtemisDesktopDev`, the
+`artemis-flatpak-*` handoff artifact, and the `artemis-steam-deck.*` rolling
+assets remain established compatibility contracts. Their names do not describe
+the product shown in the UI, which is Vibertemis.
 
-### Linux
-- **x86_64 Packages**
-  - `artemis-linux-{version}.tar.gz` (Basic binary)
-  - `artemis-appimage-{version}-x86_64.AppImage` (Portable)
-  - `artemis-flatpak-{version}.flatpak` (Sandboxed)
+## Architecture and packaging boundaries
 
-- **ARM64 Packages**  
-  - `artemis-raspberry-pi-arm64-{version}.tar.gz` (Raspberry Pi 4/5)
-  - Cross-compiled for optimal Raspberry Pi performance
+- Windows CI builds native x64 and cross-compiled ARM64 portable archives. The
+  universal `.exe` bundle selects its internal architecture-specific MSI.
+- macOS packaging builds the current machine architecture unless
+  `ARTEMIS_MAC_ARCHS` requests a dependency-complete set of slices. The artifact
+  is called `universal` only when `lipo` finds both `arm64` and `x86_64`.
+- Linux CI produces an x86_64 archive, the Steam Deck-focused Flatpak, and a
+  Raspberry Pi ARM64 archive. These are separate targets, not one universal
+  Linux package.
+- The AppImage implementation remains in the workflow for future repair, but
+  its job does not run and must not be presented as a current download.
+- Steam Link scripts are experimental source tooling, not a current CI product.
 
-- **Specialized Builds**
-  - `artemis-steamdeck-{version}.tar.gz` (Steam Deck optimized)
+## Build entry points
 
-## Architecture Support
+The build entry points retain technical Artemis names where the source and
+executable compatibility contract requires them:
 
-| Platform | x86_64 | ARM64 | Universal |
-|----------|--------|--------|-----------|
-| Windows  | ✅ | ✅ | ✅ (Bundle) |
-| macOS    | ✅ | ✅ | ✅ (Fat Binary) |
-| Linux    | ✅ | ✅ (RPi) | ❌ |
+- `artemis.pro` — qmake project entry point;
+- `scripts/build-artemis-arch.bat` — Windows architecture build script;
+- `scripts/generate-bundle.bat` — Windows WiX bundle generation;
+- `scripts/generate-dmg.sh` — macOS app/DMG generation; and
+- `packaging/flatpak/com.artemisdesktop.ArtemisDesktopDev.json` — development
+  Flatpak manifest.
 
-## Build Scripts
+`scripts/build-appimage.sh` and the disabled workflow job are not evidence that
+an AppImage is currently produced.
 
-### Windows
-- `scripts/build-artemis-arch.bat` - Architecture-specific builds
-- `scripts/generate-bundle.bat` - Universal installer generation
-- Supports cross-compilation for ARM64 from x64 host
+## Local examples
 
-### macOS  
-- `scripts/generate-dmg.sh` - Universal DMG generation
-- Automatically builds fat binaries with both architectures
-- Handles code signing and notarization
+### Windows portable build
 
-### Linux
-- `scripts/build-appimage.sh` - AppImage generation
-- Cross-compilation setup for ARM64/Raspberry Pi
-- Steam Deck specific optimizations
+Use a Visual Studio 2022 developer environment and a matching Qt architecture:
 
-## Local Development
-
-### Building Universal Windows Installer
 ```batch
-# Build x64 version
 scripts\build-artemis-arch.bat release
-
-# Build ARM64 version (requires ARM64 Qt)
-scripts\build-artemis-arch.bat release
-
-# Generate universal bundle
-scripts\generate-bundle.bat release
 ```
 
-### Building Universal macOS DMG
+The script builds the compatibility-named internal `Artemis.exe`; CI renames
+the outer portable archive to the public `vibertemis-windows-*-portable-*`
+form.
+
+### macOS DMG
+
+Use Qt 6.11.1 with the current macOS SDK and follow the complete toolchain and
+verification instructions in [DEVELOPMENT.md](DEVELOPMENT.md#macos-development-builds):
+
 ```bash
-# Single command builds universal binary and packages DMG
 ./scripts/generate-dmg.sh Release
 ```
 
-### Building Raspberry Pi ARM64
-```bash
-# Requires cross-compilation environment
-sudo apt-get install gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+The script produces `Vibertemis.app` and `Vibertemis-{version}.dmg`. It builds
+the native architecture by default, not an unconditional universal binary.
+Development output is unsigned and unnotarized unless credentials are supplied.
 
-# Configure and build
-qmake6 artemis.pro CONFIG+=release QMAKE_CC=aarch64-linux-gnu-gcc
-make -j$(nproc)
+### Basic Unix build
+
+```bash
+qmake6 artemis.pro CONFIG+=release
+make -j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || nproc)"
 ```
 
-## CI/CD Pipeline
+### Flatpak
 
-The GitHub Actions workflow (`dev-build.yml`) automatically:
+Use the tracked manifest and tests under `packaging/flatpak/`. The public UI name
+is Vibertemis while the application ID and command remain compatibility names.
+Steam Deck installation and validation are documented in
+[STEAM_DECK.md](STEAM_DECK.md).
 
-1. **Detects platforms** and builds appropriate artifacts
-2. **Generates universal installers** where supported  
-3. **Cross-compiles** for additional architectures
-4. **Packages professionally** with proper metadata
-5. **Creates releases** with comprehensive artifact sets
+## Verification
 
-### Build Matrix
-- **Windows**: x64, ARM64, Universal Bundle
-- **macOS**: Universal (x86_64 + arm64)  
-- **Linux**: x86_64, ARM64 (Raspberry Pi), AppImage, Flatpak
-- **Steam**: Steam Deck optimized
-
-## Comparison with Moonlight-Qt
-
-### What We Now Match
-✅ Universal Windows installer (WiX bundle)  
-✅ Universal macOS DMG (fat binary)  
-✅ Professional packaging and signing  
-✅ ARM64 support across platforms  
-
-### What We've Enhanced
-🚀 **Raspberry Pi ARM64** - Dedicated cross-compiled builds  
-🚀 **Steam Deck optimization** - Specialized gaming build  
-🚀 **Comprehensive CI/CD** - Automated universal builds  
-🚀 **Better documentation** - Clear architecture support matrix
-
-## Requirements
-
-### Development Environment
-- **Windows**: Visual Studio 2022, Qt 6.8+, WiX Toolset v5
-- **macOS**: Xcode, Qt 6.8+, create-dmg
-- **Linux**: GCC, Qt 6.8+, Cross-compilation tools for ARM64
-
-### Runtime Dependencies
-All builds include or automatically install required runtime components:
-- Visual C++ Redistributables (Windows)
-- Qt libraries (bundled)
-- Multimedia codecs (system-dependent)
-
-## Performance Notes
-
-- **Universal binaries** have no runtime performance penalty
-- **ARM64 builds** provide optimal performance on native hardware  
-- **Cross-compiled builds** are fully optimized for target architecture
-- **Hardware acceleration** supported where available
-
-## Troubleshooting
-
-### Windows ARM64 Issues
-- Ensure Visual Studio ARM64 build tools installed
-- Verify Qt ARM64 binaries in PATH
-- Check cross-compilation toolchain setup
-
-### macOS Universal Binary Issues
-- Verify Xcode command line tools installed  
-- Check Qt installation includes both architectures
-- Ensure proper code signing certificates (for distribution)
-
-### Linux Cross-Compilation Issues
-- Install complete cross-compilation toolchain
-- Verify ARM64 system libraries available
-- Check PKG_CONFIG_PATH for target architecture
-
-## Future Enhancements
-
-- **Linux Universal AppImage** - Single AppImage for multiple architectures
-- **Windows ARM64 Native Builds** - Build directly on ARM64 hardware
-- **Automated Testing** - Architecture-specific test suites
-- **Performance Profiling** - Architecture-optimized builds
+Do not infer a platform pass from the workflow badge alone. Open the run for the
+exact commit and confirm the relevant job ran. macOS uses
+`verify-macos-bundle.sh`; Flatpak CI validates metadata, bundled dependencies,
+codec capabilities, and a bounded startup. Neither software-only job proves a
+real host stream or physical Steam Deck hardware behavior.

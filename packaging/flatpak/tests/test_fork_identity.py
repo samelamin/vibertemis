@@ -49,6 +49,9 @@ README_UPSTREAM_LINE_ALLOWLIST = {
         "The first headline feature planned after the beta is per-host settings profiles, informed by upstream requests [#54](https://github.com/wjbeckett/artemis/issues/54) and [#67](https://github.com/wjbeckett/artemis/issues/67). It is not implemented yet.",
         "Other candidates—not commitments or implemented features—are clipboard file sync and drag-and-drop transfer ([#51](https://github.com/wjbeckett/artemis/issues/51), [#52](https://github.com/wjbeckett/artemis/issues/52)), Windows frame pacing ([#50](https://github.com/wjbeckett/artemis/issues/50)), and Steam Link builds ([#59](https://github.com/wjbeckett/artemis/issues/59)).",
     },
+    "CONTRIBUTING.md": {
+        "[upstream Artemis](https://github.com/wjbeckett/artemis); keep upstream credit",
+    },
 }
 
 ACTIVE_PROJECT_ENTRYPOINT_SCRIPTS = (
@@ -696,6 +699,125 @@ class ForkIdentityTests(unittest.TestCase):
                     readme,
                     rf"(?m)^##+ {re.escape(heading)}$",
                 )
+
+    def test_macos_migration_guidance_is_recoverable_and_preserves_settings(self):
+        for relative_path in ("README.md", "docs/DEVELOPMENT.md"):
+            text = (REPOSITORY_ROOT / relative_path).read_text(encoding="utf-8")
+            normalized = " ".join(text.casefold().split())
+            required_guidance = (
+                "quit the old app",
+                "copy `vibertemis.app`",
+                "`/applications/artemis.app`",
+                "only after confirming",
+                "settings and pairings",
+                "remove and re-add",
+                "dock",
+                "do not delete your user configuration",
+                "do not run both apps simultaneously",
+            )
+            for guidance in required_guidance:
+                with self.subTest(path=relative_path, guidance=guidance):
+                    self.assertIn(guidance, normalized)
+
+        readme = (REPOSITORY_ROOT / "README.md").read_text(encoding="utf-8")
+        self.assertNotIn(
+            "existing users keep their settings, pairings, shortcuts, and scripts",
+            readme,
+        )
+
+    def test_macos_local_verification_evidence_is_current(self):
+        readme = (REPOSITORY_ROOT / "README.md").read_text(encoding="utf-8")
+        development = (REPOSITORY_ROOT / "docs/DEVELOPMENT.md").read_text(
+            encoding="utf-8"
+        )
+        for text, relative_path in (
+            (readme, "README.md"),
+            (development, "docs/DEVELOPMENT.md"),
+        ):
+            for evidence in (
+                "Vibertemis.app",
+                "Vibertemis-0.6.7.dmg",
+                "native arm64",
+                "two Cocoa smoke launches",
+            ):
+                with self.subTest(path=relative_path, evidence=evidence):
+                    self.assertIn(evidence, text)
+
+        stale_blocker = "currently blocked because this host's Command Line Tools installation cannot find the standard C++ `type_traits` header"
+        self.assertNotIn(stale_blocker, readme)
+        self.assertNotIn(stale_blocker, development)
+        self.assertIn(
+            'CPLUS_INCLUDE_PATH="$(xcrun --sdk macosx --show-sdk-path)/usr/include/c++/v1" \\\n'
+            '  ARTEMIS_MAC_ARCHS="$(uname -m)" \\\n'
+            "  ./scripts/generate-dmg.sh Release 0.6.7",
+            development,
+        )
+
+    def test_current_public_docs_use_vibertemis_identity_and_real_artifacts(self):
+        steam_deck = (REPOSITORY_ROOT / "docs/STEAM_DECK.md").read_text(
+            encoding="utf-8"
+        )
+        for obsolete_ui_instruction in (
+            "## Add Artemis to Steam",
+            "Select **Artemis**",
+            "launch Artemis from",
+            "starting Artemis",
+            "relaunch Artemis",
+            "quit Artemis",
+            "Artemis stream request",
+            "Artemis client log",
+            "Artemis bundle filename",
+            "Artemis log",
+        ):
+            with self.subTest(obsolete=obsolete_ui_instruction):
+                self.assertNotIn(obsolete_ui_instruction, steam_deck)
+        self.assertIn("## Add Vibertemis to Steam", steam_deck)
+        self.assertIn("Select **Vibertemis**", steam_deck)
+        self.assertIn("`Artemis.conf` compatibility filename", steam_deck)
+
+        build_system = (REPOSITORY_ROOT / "docs/BUILD_SYSTEM.md").read_text(
+            encoding="utf-8"
+        )
+        for current_artifact in (
+            "vibertemis-windows-x64-portable-{version}.zip",
+            "vibertemis-windows-arm64-portable-{version}.zip",
+            "vibertemis-windows-universal-installer-{version}.exe",
+            "Vibertemis-{version}.dmg",
+            "vibertemis-linux-{version}.tar.gz",
+            "vibertemis-raspberry-pi-arm64-{version}.zip",
+        ):
+            with self.subTest(artifact=current_artifact):
+                self.assertIn(current_artifact, build_system)
+        self.assertIn("AppImage job is intentionally disabled", build_system)
+        self.assertNotIn("comprehensive, production-ready installers", build_system)
+        self.assertNotIn("artemis-appimage-{version}-x86_64.AppImage", build_system)
+
+        windows = (REPOSITORY_ROOT / "docs/WINDOWS_ARM64.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertTrue(windows.startswith("# Vibertemis Windows ARM64 Support"))
+        self.assertIn("vibertemis-windows-arm64-portable-{version}.zip", windows)
+        self.assertIn("internal `Artemis.exe`", windows)
+        self.assertNotIn("artemis-windows-arm64-installer-{version}.msi", windows)
+
+        contributing = (REPOSITORY_ROOT / "CONTRIBUTING.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertTrue(contributing.startswith("# Contributing to Vibertemis"))
+        self.assertIn("https://github.com/samelamin/vibertemis", contributing)
+        self.assertNotIn("Thank you for contributing to Artemis Qt", contributing)
+
+    def test_native_appstream_has_no_stale_upstream_update_contact(self):
+        appstream_path = (
+            REPOSITORY_ROOT
+            / "app/deploy/linux/com.artemis_desktop.Artemis.appdata.xml"
+        )
+        root = ElementTree.parse(appstream_path).getroot()
+        self.assertEqual([], root.findall("./update_contact"))
+        self.assertNotIn(
+            "will@artemis-desktop.org",
+            appstream_path.read_text(encoding="utf-8"),
+        )
 
     def test_obsolete_fork_routes_are_absent_from_maintained_files(self):
         obsolete = []
