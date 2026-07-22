@@ -568,8 +568,8 @@ int main(int argc, char *argv[])
     // Set our app name for SDL to use with PulseAudio and PipeWire. This matches what we
     // provide as our app name to libsoundio too. On SDL 2.0.18+, SDL_APP_NAME is also used
     // for screensaver inhibitor reporting.
-    SDL_SetHint(SDL_HINT_AUDIO_DEVICE_APP_NAME, "Moonlight");
-    SDL_SetHint(SDL_HINT_APP_NAME, "Moonlight");
+    SDL_SetHint(SDL_HINT_AUDIO_DEVICE_APP_NAME, "Vibertemis");
+    SDL_SetHint(SDL_HINT_APP_NAME, "Vibertemis");
 
     // We handle capturing the mouse ourselves when it leaves the window, so we don't need
     // SDL doing it for us behind our backs.
@@ -590,7 +590,7 @@ int main(int argc, char *argv[])
 #endif
 
     QGuiApplication app(argc, argv);
-    QCoreApplication::setApplicationDisplayName("Vibertemis");
+    QGuiApplication::setApplicationDisplayName("Vibertemis");
 
 #ifdef Q_OS_WIN32
     // If we don't have stdout or stderr handles (which will normally be the case

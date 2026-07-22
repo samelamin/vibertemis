@@ -306,19 +306,32 @@ class ForkIdentityTests(unittest.TestCase):
             encoding="utf-8"
         )
         display_name_pattern = re.compile(
-            r'QCoreApplication::setApplicationDisplayName\(\s*"([^"]*)"\s*\);'
+            r'(?P<target>Q(?:Core|Gui)Application::|app\.)'
+            r'setApplicationDisplayName\(\s*"(?P<name>[^"]*)"\s*\);'
         )
-        active_display_names = []
+        active_display_name_calls = []
         for line in active_cpp_lines(main_cpp):
             match = display_name_pattern.fullmatch(line)
             if match:
-                active_display_names.append(match.group(1))
+                active_display_name_calls.append(
+                    (match.group("target"), match.group("name"))
+                )
         with self.subTest(path="app/main.cpp"):
             self.assertEqual(
-                ["Vibertemis"],
-                active_display_names,
-                "app/main.cpp must have exactly one active Vibertemis "
-                "display-name call and no conflicting active display-name call",
+                1,
+                len(active_display_name_calls),
+                "app/main.cpp must have exactly one active display-name call",
+            )
+            target, display_name = active_display_name_calls[0]
+            self.assertIn(
+                target,
+                ("QGuiApplication::", "app."),
+                "the display-name call must use QGuiApplication or its app instance",
+            )
+            self.assertEqual(
+                "Vibertemis",
+                display_name,
+                "the active application display name must be Vibertemis",
             )
 
         with (REPOSITORY_ROOT / "app/Info.plist").open("rb") as plist_file:
