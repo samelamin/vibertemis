@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 import os
 import plistlib
 import re
@@ -74,6 +75,76 @@ NON_RENDERED_METADATA_HELP_EXCEPTIONS = {
     },
 }
 
+QML_LITERAL_QSTR_PATTERN = re.compile(
+    r'qsTr\(\s*(?P<body>"(?:\\.|[^"\\])*"'
+    r'(?:\s*\+\s*"(?:\\.|[^"\\])*")*)\s*\)',
+    re.DOTALL,
+)
+QML_STRING_LITERAL_PATTERN = re.compile(r'"(?:\\.|[^"\\])*"')
+
+BLOCKING_VIBERTEMIS_SOURCE = (
+    "This PC's Internet connection is blocking Vibertemis. Streaming over "
+    "the Internet may not work while connected to this network."
+)
+
+# These existing translations describe the blocked connection without naming
+# the client. They should remain translated rather than being replaced with an
+# English product name solely to satisfy the branding assertion.
+NAMELESS_VIBERTEMIS_TRANSLATIONS = {
+    (
+        "qml_de.ts",
+        "SettingsView",
+        "Mutes Vibertemis's audio when you Alt+Tab out of the stream or "
+        "click on a different window.",
+    ),
+    ("qml_de.ts", "main", "Update available for Vibertemis: Version %1"),
+    (
+        "qml_fr.ts",
+        "SettingsView",
+        "Mutes Vibertemis's audio when you Alt+Tab out of the stream or "
+        "click on a different window.",
+    ),
+    (
+        "qml_ru.ts",
+        "SettingsView",
+        "NOTE: Certain keyboard shortcuts like Ctrl+Alt+Del on Windows "
+        "cannot be intercepted by any application, including Vibertemis.",
+    ),
+    ("qml_zh_CN.ts", "PcView", BLOCKING_VIBERTEMIS_SOURCE),
+    (
+        "qml_zh_CN.ts",
+        "PcView",
+        "Your PC's current network connection seems to be blocking "
+        "Vibertemis. Streaming over the Internet may not work while "
+        "connected to this network.",
+    ),
+    ("qml_zh_CN.ts", "StreamSegue", BLOCKING_VIBERTEMIS_SOURCE),
+    ("qml_zh_TW.ts", "StreamSegue", BLOCKING_VIBERTEMIS_SOURCE),
+}
+
+# These four populated entries were already unfinished before their source key
+# changed. Retaining that state avoids silently upgrading translation quality.
+PREEXISTING_UNFINISHED_VIBERTEMIS_TRANSLATIONS = {
+    (catalog, "StreamSegue", BLOCKING_VIBERTEMIS_SOURCE)
+    for catalog in ("qml_hi.ts", "qml_lt.ts", "qml_pt_BR.ts", "qml_th.ts")
+}
+
+UPSTREAM_MOONLIGHT_QML_SOURCES = {
+    (
+        "PcView",
+        "The network test could not be performed because none of the "
+        "upstream Moonlight connection testing servers were reachable from "
+        "this PC. Check your Internet connection or try again later.",
+    ),
+    (
+        "PcView",
+        "If you are trying to stream over the Internet, install the Moonlight "
+        "Internet Hosting Tool on your gaming PC and run the included "
+        "Internet Streaming Tester to check your gaming PC's Internet "
+        "connection.",
+    ),
+}
+
 
 def tracked_identity_files():
     result = subprocess.run(
@@ -91,6 +162,22 @@ def tracked_identity_files():
         if relative_path == "packaging/flatpak/tests/test_fork_identity.py":
             continue
         yield relative_path
+
+
+def literal_qstr_sources_by_context():
+    sources_by_context = {}
+    for qml_path in sorted((REPOSITORY_ROOT / "app/gui").rglob("*.qml")):
+        context_sources = sources_by_context.setdefault(qml_path.stem, set())
+        qml_text = qml_path.read_text(encoding="utf-8")
+        for match in QML_LITERAL_QSTR_PATTERN.finditer(qml_text):
+            source = "".join(
+                json.loads(literal.group(0))
+                for literal in QML_STRING_LITERAL_PATTERN.finditer(
+                    match.group("body")
+                )
+            )
+            context_sources.add(source)
+    return sources_by_context
 
 
 def repeatedly_url_decode(value):
@@ -342,6 +429,141 @@ class ForkIdentityTests(unittest.TestCase):
                 info_plist.get("CFBundleDisplayName"),
                 "CFBundleDisplayName must be Vibertemis, not Artemis",
             )
+
+    def test_vibertemis_qml_sources_remain_translated(self):
+        qml_sources_by_context = literal_qstr_sources_by_context()
+        expected_sources = {
+            (context_name, source)
+            for context_name, sources in qml_sources_by_context.items()
+            for source in sources
+            if "Vibertemis" in source
+        }
+        self.assertTrue(expected_sources, "no Vibertemis qsTr() sources found")
+        self.assertEqual(
+            UPSTREAM_MOONLIGHT_QML_SOURCES,
+            {
+                (context_name, source)
+                for context_name, sources in qml_sources_by_context.items()
+                for source in sources
+                if "Moonlight" in source
+            },
+            "Moonlight may remain only for the upstream hosting tool and "
+            "connection-testing service",
+        )
+
+        catalog_paths = sorted(
+            (REPOSITORY_ROOT / "app/languages").glob("qml_*.ts")
+        )
+        self.assertEqual(30, len(catalog_paths), "all QML catalogs must be checked")
+
+        inactive_types = {"obsolete", "vanished"}
+        for catalog_path in catalog_paths:
+            catalog_root = ElementTree.parse(catalog_path).getroot()
+            messages = {}
+            for context in catalog_root.findall("context"):
+                context_name = context.findtext("name")
+                for message in context.findall("message"):
+                    source = message.findtext("source")
+                    messages.setdefault((context_name, source), []).append(message)
+
+            for context_name, source in sorted(expected_sources):
+                active_messages = []
+                for message in messages.get((context_name, source), []):
+                    translation = message.find("translation")
+                    translation_type = (
+                        translation.get("type") if translation is not None else None
+                    )
+                    if (
+                        message.get("type") not in inactive_types
+                        and translation_type not in inactive_types
+                    ):
+                        active_messages.append(message)
+
+                previous_source = source.replace("Vibertemis", "Moonlight")
+                previous_active_messages = []
+                for message in messages.get((context_name, previous_source), []):
+                    translation = message.find("translation")
+                    translation_type = (
+                        translation.get("type") if translation is not None else None
+                    )
+                    if (
+                        message.get("type") not in inactive_types
+                        and translation_type not in inactive_types
+                    ):
+                        previous_active_messages.append(message)
+
+                with self.subTest(
+                    catalog=catalog_path.name,
+                    context=context_name,
+                    source=source,
+                ):
+                    self.assertEqual(
+                        1,
+                        len(active_messages),
+                        "each active Vibertemis qsTr() key must have one "
+                        "non-obsolete catalog entry",
+                    )
+                    self.assertFalse(
+                        previous_active_messages,
+                        "the superseded Moonlight product key must not remain "
+                        "active",
+                    )
+                    translation = active_messages[0].find("translation")
+                    self.assertIsNotNone(translation)
+                    translated_text = "".join(translation.itertext()).strip()
+                    if not translated_text:
+                        continue
+
+                    message_key = (catalog_path.name, context_name, source)
+                    if translation.get("type") == "unfinished":
+                        self.assertIn(
+                            message_key,
+                            PREEXISTING_UNFINISHED_VIBERTEMIS_TRANSLATIONS,
+                            "an existing translated sentence must not become "
+                            "unfinished",
+                        )
+                    if message_key not in NAMELESS_VIBERTEMIS_TRANSLATIONS:
+                        self.assertIn(
+                            "Vibertemis",
+                            translated_text,
+                            "a translated current-product name must migrate "
+                            "to Vibertemis",
+                        )
+                    self.assertNotIn(
+                        "Artemis",
+                        translated_text,
+                        "Artemis must not remain as the current product name",
+                    )
+                    self.assertLessEqual(
+                        translated_text.count("Moonlight"),
+                        source.count("Moonlight"),
+                        "Moonlight may remain only where the source names an "
+                        "upstream service or tool",
+                    )
+
+            for context_name, source in sorted(UPSTREAM_MOONLIGHT_QML_SOURCES):
+                active_messages = []
+                for message in messages.get((context_name, source), []):
+                    translation = message.find("translation")
+                    translation_type = (
+                        translation.get("type") if translation is not None else None
+                    )
+                    if (
+                        message.get("type") not in inactive_types
+                        and translation_type not in inactive_types
+                    ):
+                        active_messages.append(message)
+                with self.subTest(
+                    catalog=catalog_path.name,
+                    context=context_name,
+                    source=source,
+                ):
+                    self.assertEqual(
+                        1,
+                        len(active_messages),
+                        "each upstream Moonlight service/tool key must remain "
+                        "active exactly once",
+                    )
 
     def test_macos_public_packages_use_vibertemis_names(self):
         expected_packaging = {

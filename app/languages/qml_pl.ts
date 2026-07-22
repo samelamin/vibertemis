@@ -227,8 +227,8 @@
     </message>
     <message>
         <location filename="../gui/PcView.qml" line="66"/>
-        <source>This PC&apos;s Internet connection is blocking Moonlight. Streaming over the Internet may not work while connected to this network.</source>
-        <translation>Połączenie internetowe tego komputera blokuje Moonlight. Strumieniowanie przez Internet może nie działać poprawnie przy użyciu tej sieci.</translation>
+        <source>This PC&apos;s Internet connection is blocking Vibertemis. Streaming over the Internet may not work while connected to this network.</source>
+        <translation>Połączenie internetowe tego komputera blokuje Vibertemis. Strumieniowanie przez Internet może nie działać poprawnie przy użyciu tej sieci.</translation>
     </message>
     <message>
         <location filename="../gui/PcView.qml" line="69"/>
@@ -272,8 +272,8 @@
     </message>
     <message>
         <location filename="../gui/PcView.qml" line="228"/>
-        <source>The version of GeForce Experience on %1 is not supported by this build of Moonlight. You must update Moonlight to stream from %1.</source>
-        <translation>Wersja GeForce Experience na %1 nie jest obsługiwana przez tę wersję Moonlight. Musisz zaktualizować Moonlight, aby móc strumieniować gry z %1.</translation>
+        <source>The version of GeForce Experience on %1 is not supported by this build of Vibertemis. You must update Vibertemis to stream from %1.</source>
+        <translation>Wersja GeForce Experience na %1 nie jest obsługiwana przez tę wersję Vibertemis. Musisz zaktualizować Vibertemis, aby móc strumieniować gry z %1.</translation>
     </message>
     <message>
         <location filename="../gui/PcView.qml" line="331"/>
@@ -282,8 +282,8 @@
     </message>
     <message>
         <location filename="../gui/PcView.qml" line="342"/>
-        <source>This network does not appear to be blocking Moonlight. If you still have trouble connecting, check your PC&apos;s firewall settings.</source>
-        <translation>Twoja sieć prawdopodobnie nie blokuje Moonlight. Jeśli nadal masz problemy z połączeniem, sprawdź ustawienia zapory sieciowej swojego komputera.</translation>
+        <source>This network does not appear to be blocking Vibertemis. If you still have trouble connecting, check your PC&apos;s firewall settings.</source>
+        <translation>Twoja sieć prawdopodobnie nie blokuje Vibertemis. Jeśli nadal masz problemy z połączeniem, sprawdź ustawienia zapory sieciowej swojego komputera.</translation>
     </message>
     <message>
         <location filename="../gui/PcView.qml" line="342"/>
@@ -292,8 +292,8 @@
     </message>
     <message>
         <location filename="../gui/PcView.qml" line="346"/>
-        <source>Your PC&apos;s current network connection seems to be blocking Moonlight. Streaming over the Internet may not work while connected to this network.</source>
-        <translation>Wygląda na to, że twoje obecne połączenie blokuje Moonlight. Strumieniowanie przez Internet może nie działać z użyciem obecnego połączenia.</translation>
+        <source>Your PC&apos;s current network connection seems to be blocking Vibertemis. Streaming over the Internet may not work while connected to this network.</source>
+        <translation>Wygląda na to, że twoje obecne połączenie blokuje Vibertemis. Strumieniowanie przez Internet może nie działać z użyciem obecnego połączenia.</translation>
     </message>
     <message>
         <location filename="../gui/PcView.qml" line="346"/>
@@ -302,7 +302,7 @@
     </message>
     <message>
         <location filename="../gui/PcView.qml" line="338"/>
-        <source>The network test could not be performed because none of Moonlight&apos;s connection testing servers were reachable from this PC. Check your Internet connection or try again later.</source>
+        <source>The network test could not be performed because none of the upstream Moonlight connection testing servers were reachable from this PC. Check your Internet connection or try again later.</source>
         <translation>Test połączenia nie mógł zostać przeprowadzony, ponieważ serwery testowe Moonlight nie są dostępne z tego komputera. Sprawdź swoje połączenie z Internetem lub spróbuj ponownie później.</translation>
     </message>
     <message>
@@ -342,8 +342,8 @@
     </message>
     <message>
         <location filename="../gui/PcView.qml" line="331"/>
-        <source>Moonlight is testing your network connection to determine if any required ports are blocked.</source>
-        <translation>Moonlight testuje połączenie sieciowe w celu ustalenia, czy wymagane porty są zablokowane.</translation>
+        <source>Vibertemis is testing your network connection to determine if any required ports are blocked.</source>
+        <translation>Vibertemis testuje połączenie sieciowe w celu ustalenia, czy wymagane porty są zablokowane.</translation>
     </message>
     <message>
         <location filename="../gui/PcView.qml" line="358"/>
@@ -844,13 +844,13 @@
     </message>
     <message>
         <location filename="../gui/SettingsView.qml" line="929"/>
-        <source>Mute audio stream when Moonlight is not the active window</source>
-        <translation>Wycisz dźwięk jeśli okno Moonlight nie jest aktywne</translation>
+        <source>Mute audio stream when Vibertemis is not the active window</source>
+        <translation>Wycisz dźwięk jeśli okno Vibertemis nie jest aktywne</translation>
     </message>
     <message>
         <location filename="../gui/SettingsView.qml" line="940"/>
-        <source>Mutes Moonlight&apos;s audio when you Alt+Tab out of the stream or click on a different window.</source>
-        <translation>Wycisza dźwięk z Moonlight po wyjściu z użyciem np. Alt+Tab ze strumieniowania lub kliknięcie w innym oknie.</translation>
+        <source>Mutes Vibertemis&apos;s audio when you Alt+Tab out of the stream or click on a different window.</source>
+        <translation>Wycisza dźwięk z Vibertemis po wyjściu z użyciem np. Alt+Tab ze strumieniowania lub kliknięcie w innym oknie.</translation>
     </message>
     <message>
         <location filename="../gui/SettingsView.qml" line="989"/>
@@ -869,8 +869,8 @@
     </message>
     <message>
         <location filename="../gui/SettingsView.qml" line="1160"/>
-        <source>You must restart Moonlight for this change to take effect</source>
-        <translation>Musisz uruchomić ponownie Moonlight, aby te zmiany weszły w życie</translation>
+        <source>You must restart Vibertemis for this change to take effect</source>
+        <translation>Musisz uruchomić ponownie Vibertemis, aby te zmiany weszły w życie</translation>
     </message>
     <message>
         <location filename="../gui/SettingsView.qml" line="1177"/>
@@ -938,8 +938,8 @@
     </message>
     <message>
         <location filename="../gui/SettingsView.qml" line="1329"/>
-        <source>NOTE: Certain keyboard shortcuts like Ctrl+Alt+Del on Windows cannot be intercepted by any application, including Moonlight.</source>
-        <translation>UWAGA: Niektóre skróty klawiszowe, takie jak Ctrl+Alt+Del w systemie Windows, nie mogą być przechwytywane przez żadną aplikację, w tym Moonlight.</translation>
+        <source>NOTE: Certain keyboard shortcuts like Ctrl+Alt+Del on Windows cannot be intercepted by any application, including Vibertemis.</source>
+        <translation>UWAGA: Niektóre skróty klawiszowe, takie jak Ctrl+Alt+Del w systemie Windows, nie mogą być przechwytywane przez żadną aplikację, w tym Vibertemis.</translation>
     </message>
     <message>
         <location filename="../gui/SettingsView.qml" line="1392"/>
@@ -993,13 +993,13 @@
     </message>
     <message>
         <location filename="../gui/SettingsView.qml" line="1490"/>
-        <source>Process gamepad input when Moonlight is in the background</source>
-        <translation>Przetwarzaj dane wejściowe z kontrolera, nawet gdy Moonlight jest uruchomiony w tle</translation>
+        <source>Process gamepad input when Vibertemis is in the background</source>
+        <translation>Przetwarzaj dane wejściowe z kontrolera, nawet gdy Vibertemis jest uruchomiony w tle</translation>
     </message>
     <message>
         <location filename="../gui/SettingsView.qml" line="1501"/>
-        <source>Allows Moonlight to capture gamepad inputs even if it&apos;s not the current window in focus</source>
-        <translation>Umożliwia Moonlight przechwytywanie danych wejściowych z kontrolera, nawet jeśli nie jest on aktualnie wybranym oknem</translation>
+        <source>Allows Vibertemis to capture gamepad inputs even if it&apos;s not the current window in focus</source>
+        <translation>Umożliwia Vibertemis przechwytywanie danych wejściowych z kontrolera, nawet jeśli nie jest on aktualnie wybranym oknem</translation>
     </message>
     <message>
         <location filename="../gui/SettingsView.qml" line="949"/>
@@ -1195,6 +1195,14 @@
         <source>Automatically detect blocked connections (Recommended)</source>
         <translation>Automatycznie wykrywaj zablokowane połączenia (zalecane)</translation>
     </message>
+    <message>
+        <source>Vibertemis Streaming Enhancements</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Vibertemis Features</source>
+        <translation type="unfinished"></translation>
+    </message>
 </context>
 <context>
     <name>StreamSegue</name>
@@ -1221,8 +1229,8 @@
     </message>
     <message>
         <location filename="../gui/StreamSegue.qml" line="76"/>
-        <source>This PC&apos;s Internet connection is blocking Moonlight. Streaming over the Internet may not work while connected to this network.</source>
-        <translation>Połączenie internetowe tego komputera blokuje aplikację Moonlight. Strumieniowanie przez Internet może nie działać w trakcie połączenia z tą siecią.</translation>
+        <source>This PC&apos;s Internet connection is blocking Vibertemis. Streaming over the Internet may not work while connected to this network.</source>
+        <translation>Połączenie internetowe tego komputera blokuje aplikację Vibertemis. Strumieniowanie przez Internet może nie działać w trakcie połączenia z tą siecią.</translation>
     </message>
     <message>
         <location filename="../gui/StreamSegue.qml" line="167"/>
@@ -1269,8 +1277,8 @@
     </message>
     <message>
         <location filename="../gui/main.qml" line="364"/>
-        <source>Update available for Moonlight: Version %1</source>
-        <translation>Dostępna jest aktualizacja dla programu Moonlight: Wersja %1</translation>
+        <source>Update available for Vibertemis: Version %1</source>
+        <translation>Dostępna jest aktualizacja dla programu Vibertemis: Wersja %1</translation>
     </message>
     <message>
         <location filename="../gui/main.qml" line="411"/>
@@ -1284,13 +1292,13 @@
     </message>
     <message>
         <location filename="../gui/main.qml" line="466"/>
-        <source>This version of Moonlight isn&apos;t optimized for your PC. Please download the &apos;%1&apos; version of Moonlight for the best streaming performance.</source>
-        <translation>Ta wersja Moonlight nie jest zoptymalizowana dla Twojego komputera. Pobierz wersję &apos;%1&apos;, aby uzyskać najlepszą wydajność strumieniowania.</translation>
+        <source>This version of Vibertemis isn&apos;t optimized for your PC. Please download the &apos;%1&apos; version of Vibertemis for the best streaming performance.</source>
+        <translation>Ta wersja Vibertemis nie jest zoptymalizowana dla Twojego komputera. Pobierz wersję &apos;%1&apos;, aby uzyskać najlepszą wydajność strumieniowania.</translation>
     </message>
     <message>
         <location filename="../gui/main.qml" line="475"/>
-        <source>Moonlight detected gamepads without a mapping:</source>
-        <translation>Moonlight wykrył kontrolery bez mapowania:</translation>
+        <source>Vibertemis detected gamepads without a mapping:</source>
+        <translation>Vibertemis wykrył kontrolery bez mapowania:</translation>
     </message>
     <message>
         <location filename="../gui/main.qml" line="388"/>
@@ -1299,8 +1307,8 @@
     </message>
     <message>
         <location filename="../gui/main.qml" line="449"/>
-        <source>No functioning hardware accelerated video decoder was detected by Moonlight. Your streaming performance may be severely degraded in this configuration.</source>
-        <translation>Moonlight nie wykrył żadnego działającego dekodera wideo z dostępną akceleracją sprzętową. W tej konfiguracji wydajność przesyłania strumieniowego może ulec znacznemu pogorszeniu.</translation>
+        <source>No functioning hardware accelerated video decoder was detected by Vibertemis. Your streaming performance may be severely degraded in this configuration.</source>
+        <translation>Vibertemis nie wykrył żadnego działającego dekodera wideo z dostępną akceleracją sprzętową. W tej konfiguracji wydajność przesyłania strumieniowego może ulec znacznemu pogorszeniu.</translation>
     </message>
     <message>
         <location filename="../gui/main.qml" line="451"/>

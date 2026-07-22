@@ -227,8 +227,8 @@
     </message>
     <message>
         <location filename="../gui/PcView.qml" line="66"/>
-        <source>This PC&apos;s Internet connection is blocking Moonlight. Streaming over the Internet may not work while connected to this network.</source>
-        <translation>Ennek a számítógépnek az internetkapcsolata blokkolja a Moonlightot. Előfordulhat, hogy az interneten keresztüli streaming nem működik, amíg ehhez a hálózathoz csatlakozik.</translation>
+        <source>This PC&apos;s Internet connection is blocking Vibertemis. Streaming over the Internet may not work while connected to this network.</source>
+        <translation>Ennek a számítógépnek az internetkapcsolata blokkolja a Vibertemisot. Előfordulhat, hogy az interneten keresztüli streaming nem működik, amíg ehhez a hálózathoz csatlakozik.</translation>
     </message>
     <message>
         <location filename="../gui/PcView.qml" line="69"/>
@@ -272,8 +272,8 @@
     </message>
     <message>
         <location filename="../gui/PcView.qml" line="228"/>
-        <source>The version of GeForce Experience on %1 is not supported by this build of Moonlight. You must update Moonlight to stream from %1.</source>
-        <translation>A GeForce Experience %1-en lévő verzióját a Moonlight ezen buildje nem támogatja. Frissítened kell a Moonlightot, hogy a %1-ről streamelni tudj.</translation>
+        <source>The version of GeForce Experience on %1 is not supported by this build of Vibertemis. You must update Vibertemis to stream from %1.</source>
+        <translation>A GeForce Experience %1-en lévő verzióját a Vibertemis ezen buildje nem támogatja. Frissítened kell a Vibertemisot, hogy a %1-ről streamelni tudj.</translation>
     </message>
     <message>
         <location filename="../gui/PcView.qml" line="331"/>
@@ -282,8 +282,8 @@
     </message>
     <message>
         <location filename="../gui/PcView.qml" line="342"/>
-        <source>This network does not appear to be blocking Moonlight. If you still have trouble connecting, check your PC&apos;s firewall settings.</source>
-        <translation>Úgy tűnik, hogy ez a hálózat nem blokkolja a Moonlightot Ha továbbra is gondot okoz a csatlakozás, ellenőrizze a számítógép tűzfalának beállításait.</translation>
+        <source>This network does not appear to be blocking Vibertemis. If you still have trouble connecting, check your PC&apos;s firewall settings.</source>
+        <translation>Úgy tűnik, hogy ez a hálózat nem blokkolja a Vibertemisot Ha továbbra is gondot okoz a csatlakozás, ellenőrizze a számítógép tűzfalának beállításait.</translation>
     </message>
     <message>
         <location filename="../gui/PcView.qml" line="342"/>
@@ -292,8 +292,8 @@
     </message>
     <message>
         <location filename="../gui/PcView.qml" line="346"/>
-        <source>Your PC&apos;s current network connection seems to be blocking Moonlight. Streaming over the Internet may not work while connected to this network.</source>
-        <translation>Úgy tűnik, hogy a számítógép jelenlegi hálózati kapcsolata blokkolja a Moonlightot. Előfordulhat, hogy az interneten keresztüli streaming nem működik, amíg ehhez a hálózathoz csatlakozik.</translation>
+        <source>Your PC&apos;s current network connection seems to be blocking Vibertemis. Streaming over the Internet may not work while connected to this network.</source>
+        <translation>Úgy tűnik, hogy a számítógép jelenlegi hálózati kapcsolata blokkolja a Vibertemisot. Előfordulhat, hogy az interneten keresztüli streaming nem működik, amíg ehhez a hálózathoz csatlakozik.</translation>
     </message>
     <message>
         <location filename="../gui/PcView.qml" line="346"/>
@@ -302,7 +302,7 @@
     </message>
     <message>
         <location filename="../gui/PcView.qml" line="338"/>
-        <source>The network test could not be performed because none of Moonlight&apos;s connection testing servers were reachable from this PC. Check your Internet connection or try again later.</source>
+        <source>The network test could not be performed because none of the upstream Moonlight connection testing servers were reachable from this PC. Check your Internet connection or try again later.</source>
         <translation>A hálózati tesztet nem lehetett elvégezni, mert a Moonlight egyik kapcsolat tesztelő szervere sem volt elérhető erről a számítógépről. Ellenőrizze az internetkapcsolatot, vagy próbálja meg később újra.</translation>
     </message>
     <message>
@@ -342,8 +342,8 @@
     </message>
     <message>
         <location filename="../gui/PcView.qml" line="331"/>
-        <source>Moonlight is testing your network connection to determine if any required ports are blocked.</source>
-        <translation>A Moonlight teszteli a hálózati kapcsolatot, hogy megállapítsa, nincs-e blokkolva valamelyik szükséges port.</translation>
+        <source>Vibertemis is testing your network connection to determine if any required ports are blocked.</source>
+        <translation>A Vibertemis teszteli a hálózati kapcsolatot, hogy megállapítsa, nincs-e blokkolva valamelyik szükséges port.</translation>
     </message>
     <message>
         <location filename="../gui/PcView.qml" line="358"/>
@@ -844,13 +844,13 @@
     </message>
     <message>
         <location filename="../gui/SettingsView.qml" line="929"/>
-        <source>Mute audio stream when Moonlight is not the active window</source>
-        <translation>Hangfolyam elnémítása, ha nem a Moonlight az aktív ablak</translation>
+        <source>Mute audio stream when Vibertemis is not the active window</source>
+        <translation>Hangfolyam elnémítása, ha nem a Vibertemis az aktív ablak</translation>
     </message>
     <message>
         <location filename="../gui/SettingsView.qml" line="940"/>
-        <source>Mutes Moonlight&apos;s audio when you Alt+Tab out of the stream or click on a different window.</source>
-        <translation>Elnémítja a Moonlight hangját, amikor az Alt+Tab billentyűkombinációval kilépsz a streamből, vagy egy másik ablakra kattintasz.</translation>
+        <source>Mutes Vibertemis&apos;s audio when you Alt+Tab out of the stream or click on a different window.</source>
+        <translation>Elnémítja a Vibertemis hangját, amikor az Alt+Tab billentyűkombinációval kilépsz a streamből, vagy egy másik ablakra kattintasz.</translation>
     </message>
     <message>
         <location filename="../gui/SettingsView.qml" line="989"/>
@@ -869,8 +869,8 @@
     </message>
     <message>
         <location filename="../gui/SettingsView.qml" line="1160"/>
-        <source>You must restart Moonlight for this change to take effect</source>
-        <translation>A módosítás érvénybe lépéséhez újra kell indítania a Moonlightot</translation>
+        <source>You must restart Vibertemis for this change to take effect</source>
+        <translation>A módosítás érvénybe lépéséhez újra kell indítania a Vibertemisot</translation>
     </message>
     <message>
         <location filename="../gui/SettingsView.qml" line="1177"/>
@@ -938,8 +938,8 @@
     </message>
     <message>
         <location filename="../gui/SettingsView.qml" line="1329"/>
-        <source>NOTE: Certain keyboard shortcuts like Ctrl+Alt+Del on Windows cannot be intercepted by any application, including Moonlight.</source>
-        <translation>MEGJEGYZÉS: Bizonyos billentyűparancsokat, például a Ctrl+Alt+Del billentyűkombinációkat Windowson semmilyen alkalmazás nem tudja elfogni, beleértve a Moonlightot is.</translation>
+        <source>NOTE: Certain keyboard shortcuts like Ctrl+Alt+Del on Windows cannot be intercepted by any application, including Vibertemis.</source>
+        <translation>MEGJEGYZÉS: Bizonyos billentyűparancsokat, például a Ctrl+Alt+Del billentyűkombinációkat Windowson semmilyen alkalmazás nem tudja elfogni, beleértve a Vibertemisot is.</translation>
     </message>
     <message>
         <location filename="../gui/SettingsView.qml" line="1392"/>
@@ -993,13 +993,13 @@
     </message>
     <message>
         <location filename="../gui/SettingsView.qml" line="1490"/>
-        <source>Process gamepad input when Moonlight is in the background</source>
-        <translation>Gamepad bemenet feldolgozása, amikor a Moonlight a háttérben van</translation>
+        <source>Process gamepad input when Vibertemis is in the background</source>
+        <translation>Gamepad bemenet feldolgozása, amikor a Vibertemis a háttérben van</translation>
     </message>
     <message>
         <location filename="../gui/SettingsView.qml" line="1501"/>
-        <source>Allows Moonlight to capture gamepad inputs even if it&apos;s not the current window in focus</source>
-        <translation>Lehetővé teszi a Moonlight számára, hogy akkor is rögzítse a gamepad bemeneteket, ha nem az aktuális ablak van fókuszban</translation>
+        <source>Allows Vibertemis to capture gamepad inputs even if it&apos;s not the current window in focus</source>
+        <translation>Lehetővé teszi a Vibertemis számára, hogy akkor is rögzítse a gamepad bemeneteket, ha nem az aktuális ablak van fókuszban</translation>
     </message>
     <message>
         <location filename="../gui/SettingsView.qml" line="949"/>
@@ -1195,6 +1195,14 @@
         <source>Automatically detect blocked connections (Recommended)</source>
         <translation>Automatikusan észleli a blokkolt kapcsolatokat (ajánlott)</translation>
     </message>
+    <message>
+        <source>Vibertemis Streaming Enhancements</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Vibertemis Features</source>
+        <translation type="unfinished"></translation>
+    </message>
 </context>
 <context>
     <name>StreamSegue</name>
@@ -1221,8 +1229,8 @@
     </message>
     <message>
         <location filename="../gui/StreamSegue.qml" line="76"/>
-        <source>This PC&apos;s Internet connection is blocking Moonlight. Streaming over the Internet may not work while connected to this network.</source>
-        <translation>Ennek a számítógépnek az internetkapcsolata blokkolja a Moonlight. Előfordulhat, hogy az interneten keresztüli streaming nem működik, amíg ehhez a hálózathoz csatlakozik.</translation>
+        <source>This PC&apos;s Internet connection is blocking Vibertemis. Streaming over the Internet may not work while connected to this network.</source>
+        <translation>Ennek a számítógépnek az internetkapcsolata blokkolja a Vibertemis. Előfordulhat, hogy az interneten keresztüli streaming nem működik, amíg ehhez a hálózathoz csatlakozik.</translation>
     </message>
     <message>
         <location filename="../gui/StreamSegue.qml" line="167"/>
@@ -1269,8 +1277,8 @@
     </message>
     <message>
         <location filename="../gui/main.qml" line="364"/>
-        <source>Update available for Moonlight: Version %1</source>
-        <translation>Frissítés elérhető a Moonlighthoz: Verzió %1</translation>
+        <source>Update available for Vibertemis: Version %1</source>
+        <translation>Frissítés elérhető a Vibertemishoz: Verzió %1</translation>
     </message>
     <message>
         <location filename="../gui/main.qml" line="411"/>
@@ -1284,13 +1292,13 @@
     </message>
     <message>
         <location filename="../gui/main.qml" line="466"/>
-        <source>This version of Moonlight isn&apos;t optimized for your PC. Please download the &apos;%1&apos; version of Moonlight for the best streaming performance.</source>
-        <translation>A Moonlight ezen verziója nincs optimalizálva a számítógépedre. Kérjük, töltse le a Moonlight &apos;%1&apos; verzióját a legjobb streaming teljesítmény eléréséhez.</translation>
+        <source>This version of Vibertemis isn&apos;t optimized for your PC. Please download the &apos;%1&apos; version of Vibertemis for the best streaming performance.</source>
+        <translation>A Vibertemis ezen verziója nincs optimalizálva a számítógépedre. Kérjük, töltse le a Vibertemis &apos;%1&apos; verzióját a legjobb streaming teljesítmény eléréséhez.</translation>
     </message>
     <message>
         <location filename="../gui/main.qml" line="475"/>
-        <source>Moonlight detected gamepads without a mapping:</source>
-        <translation>A Moonlight leképezés nélkül érzékelte a gamepadokat:</translation>
+        <source>Vibertemis detected gamepads without a mapping:</source>
+        <translation>A Vibertemis leképezés nélkül érzékelte a gamepadokat:</translation>
     </message>
     <message>
         <location filename="../gui/main.qml" line="515"/>
@@ -1304,8 +1312,8 @@
     </message>
     <message>
         <location filename="../gui/main.qml" line="449"/>
-        <source>No functioning hardware accelerated video decoder was detected by Moonlight. Your streaming performance may be severely degraded in this configuration.</source>
-        <translation>A Moonlight nem észlelt működő hardveres gyorsított videó dekódert. A streaming teljesítménye jelentősen csökkenhet ebben a konfigurációban.</translation>
+        <source>No functioning hardware accelerated video decoder was detected by Vibertemis. Your streaming performance may be severely degraded in this configuration.</source>
+        <translation>A Vibertemis nem észlelt működő hardveres gyorsított videó dekódert. A streaming teljesítménye jelentősen csökkenhet ebben a konfigurációban.</translation>
     </message>
     <message>
         <location filename="../gui/main.qml" line="451"/>

@@ -227,8 +227,8 @@
     </message>
     <message>
         <location filename="../gui/PcView.qml" line="66"/>
-        <source>This PC&apos;s Internet connection is blocking Moonlight. Streaming over the Internet may not work while connected to this network.</source>
-        <translation>இந்த கணினியின் இணைய இணைப்பு நிலவொளியைத் தடுக்கிறது. இந்த பிணையத்துடன் இணைக்கப்படும்போது இணையத்தில் ச்ட்ரீமிங் வேலை செய்யாது.</translation>
+        <source>This PC&apos;s Internet connection is blocking Vibertemis. Streaming over the Internet may not work while connected to this network.</source>
+        <translation>இந்த கணினியின் இணைய இணைப்பு Vibertemis-ஐத் தடுக்கிறது. இந்த பிணையத்துடன் இணைக்கப்படும்போது இணையத்தில் ச்ட்ரீமிங் வேலை செய்யாது.</translation>
     </message>
     <message>
         <location filename="../gui/PcView.qml" line="69"/>
@@ -272,8 +272,8 @@
     </message>
     <message>
         <location filename="../gui/PcView.qml" line="228"/>
-        <source>The version of GeForce Experience on %1 is not supported by this build of Moonlight. You must update Moonlight to stream from %1.</source>
-        <translation>%1 இல் உள்ள சியிபோர்ச் அனுபவத்தின் பதிப்பு இந்த நிலவொளியால் ஆதரிக்கப்படவில்லை. %1 இலிருந்து ச்ட்ரீம் செய்ய நீங்கள் நிலவொளியைப் புதுப்பிக்க வேண்டும்.</translation>
+        <source>The version of GeForce Experience on %1 is not supported by this build of Vibertemis. You must update Vibertemis to stream from %1.</source>
+        <translation>%1 இல் உள்ள சியிபோர்ச் அனுபவத்தின் பதிப்பு இந்த Vibertemis-ஆல் ஆதரிக்கப்படவில்லை. %1 இலிருந்து ச்ட்ரீம் செய்ய நீங்கள் Vibertemis-ஐப் புதுப்பிக்க வேண்டும்.</translation>
     </message>
     <message>
         <location filename="../gui/PcView.qml" line="331"/>
@@ -282,8 +282,8 @@
     </message>
     <message>
         <location filename="../gui/PcView.qml" line="342"/>
-        <source>This network does not appear to be blocking Moonlight. If you still have trouble connecting, check your PC&apos;s firewall settings.</source>
-        <translation>இந்த பிணையம் நிலவொளியைத் தடுப்பதாகத் தெரியவில்லை. இணைப்பதில் உங்களுக்கு இன்னும் சிக்கல் இருந்தால், உங்கள் கணினியின் ஃபயர்வால் அமைப்புகளை சரிபார்க்கவும்.</translation>
+        <source>This network does not appear to be blocking Vibertemis. If you still have trouble connecting, check your PC&apos;s firewall settings.</source>
+        <translation>இந்த பிணையம் Vibertemis-ஐத் தடுப்பதாகத் தெரியவில்லை. இணைப்பதில் உங்களுக்கு இன்னும் சிக்கல் இருந்தால், உங்கள் கணினியின் ஃபயர்வால் அமைப்புகளை சரிபார்க்கவும்.</translation>
     </message>
     <message>
         <location filename="../gui/PcView.qml" line="342"/>
@@ -292,8 +292,8 @@
     </message>
     <message>
         <location filename="../gui/PcView.qml" line="346"/>
-        <source>Your PC&apos;s current network connection seems to be blocking Moonlight. Streaming over the Internet may not work while connected to this network.</source>
-        <translation>உங்கள் கணினியின் தற்போதைய பிணைய இணைப்பு நிலவொளியைத் தடுப்பதாகத் தெரிகிறது. இந்த பிணையத்துடன் இணைக்கப்படும்போது இணையத்தில் ச்ட்ரீமிங் வேலை செய்யாது.</translation>
+        <source>Your PC&apos;s current network connection seems to be blocking Vibertemis. Streaming over the Internet may not work while connected to this network.</source>
+        <translation>உங்கள் கணினியின் தற்போதைய பிணைய இணைப்பு Vibertemis-ஐத் தடுப்பதாகத் தெரிகிறது. இந்த பிணையத்துடன் இணைக்கப்படும்போது இணையத்தில் ச்ட்ரீமிங் வேலை செய்யாது.</translation>
     </message>
     <message>
         <location filename="../gui/PcView.qml" line="346"/>
@@ -302,7 +302,7 @@
     </message>
     <message>
         <location filename="../gui/PcView.qml" line="338"/>
-        <source>The network test could not be performed because none of Moonlight&apos;s connection testing servers were reachable from this PC. Check your Internet connection or try again later.</source>
+        <source>The network test could not be performed because none of the upstream Moonlight connection testing servers were reachable from this PC. Check your Internet connection or try again later.</source>
         <translation>இந்த கணினியிலிருந்து மூன்லைட்டின் இணைப்பு சோதனை சேவையகங்கள் எதுவும் அடைய முடியாததால் பிணைய சோதனையை செய்ய முடியவில்லை. உங்கள் இணைய இணைப்பைச் சரிபார்க்கவும் அல்லது பின்னர் மீண்டும் முயற்சிக்கவும்.</translation>
     </message>
     <message>
@@ -342,8 +342,8 @@
     </message>
     <message>
         <location filename="../gui/PcView.qml" line="331"/>
-        <source>Moonlight is testing your network connection to determine if any required ports are blocked.</source>
-        <translation>தேவையான துறைமுகங்கள் தடுக்கப்பட்டுள்ளதா என்பதை தீர்மானிக்க மூன்லைட் உங்கள் பிணைய இணைப்பை சோதிக்கிறது.</translation>
+        <source>Vibertemis is testing your network connection to determine if any required ports are blocked.</source>
+        <translation>தேவையான துறைமுகங்கள் தடுக்கப்பட்டுள்ளதா என்பதை தீர்மானிக்க Vibertemis உங்கள் பிணைய இணைப்பை சோதிக்கிறது.</translation>
     </message>
     <message>
         <location filename="../gui/PcView.qml" line="358"/>
@@ -844,13 +844,13 @@
     </message>
     <message>
         <location filename="../gui/SettingsView.qml" line="929"/>
-        <source>Mute audio stream when Moonlight is not the active window</source>
-        <translation>முடக்கு ஆடியோ ச்ட்ரீம் நிலவொளி செயலில் சாளரமாக இல்லாதபோது</translation>
+        <source>Mute audio stream when Vibertemis is not the active window</source>
+        <translation>முடக்கு ஆடியோ ச்ட்ரீம் Vibertemis செயலில் சாளரமாக இல்லாதபோது</translation>
     </message>
     <message>
         <location filename="../gui/SettingsView.qml" line="940"/>
-        <source>Mutes Moonlight&apos;s audio when you Alt+Tab out of the stream or click on a different window.</source>
-        <translation>நீங்கள் ச்ட்ரீமில் இருந்து+தாவல் அல்லது வேறு சாளரத்தில் சொடுக்கு செய்யும் போது மூன்லைட் ஆடியோவை முடக்குகிறது.</translation>
+        <source>Mutes Vibertemis&apos;s audio when you Alt+Tab out of the stream or click on a different window.</source>
+        <translation>நீங்கள் ச்ட்ரீமில் இருந்து+தாவல் அல்லது வேறு சாளரத்தில் சொடுக்கு செய்யும் போது Vibertemis ஆடியோவை முடக்குகிறது.</translation>
     </message>
     <message>
         <location filename="../gui/SettingsView.qml" line="989"/>
@@ -869,8 +869,8 @@
     </message>
     <message>
         <location filename="../gui/SettingsView.qml" line="1160"/>
-        <source>You must restart Moonlight for this change to take effect</source>
-        <translation>இந்த மாற்றம் நடைமுறைக்கு வர நீங்கள் நிலவொளியை மறுதொடக்கம் செய்ய வேண்டும்</translation>
+        <source>You must restart Vibertemis for this change to take effect</source>
+        <translation>இந்த மாற்றம் நடைமுறைக்கு வர நீங்கள் Vibertemis-ஐ மறுதொடக்கம் செய்ய வேண்டும்</translation>
     </message>
     <message>
         <location filename="../gui/SettingsView.qml" line="1177"/>
@@ -938,8 +938,8 @@
     </message>
     <message>
         <location filename="../gui/SettingsView.qml" line="1329"/>
-        <source>NOTE: Certain keyboard shortcuts like Ctrl+Alt+Del on Windows cannot be intercepted by any application, including Moonlight.</source>
-        <translation>குறிப்பு: சாளரங்களில் உள்ள Ctrl+Alt+DEL போன்ற சில விசைப்பலகை குறுக்குவழிகளை மூன்லைட் உட்பட எந்தவொரு பயன்பாட்டினாலும் தடுக்க முடியாது.</translation>
+        <source>NOTE: Certain keyboard shortcuts like Ctrl+Alt+Del on Windows cannot be intercepted by any application, including Vibertemis.</source>
+        <translation>குறிப்பு: சாளரங்களில் உள்ள Ctrl+Alt+DEL போன்ற சில விசைப்பலகை குறுக்குவழிகளை Vibertemis உட்பட எந்தவொரு பயன்பாட்டினாலும் தடுக்க முடியாது.</translation>
     </message>
     <message>
         <location filename="../gui/SettingsView.qml" line="1392"/>
@@ -993,13 +993,13 @@
     </message>
     <message>
         <location filename="../gui/SettingsView.qml" line="1490"/>
-        <source>Process gamepad input when Moonlight is in the background</source>
-        <translation>மூன்லைட் பின்னணியில் இருக்கும்போது கேம்பேட் உள்ளீட்டை செயலாக்குங்கள்</translation>
+        <source>Process gamepad input when Vibertemis is in the background</source>
+        <translation>Vibertemis பின்னணியில் இருக்கும்போது கேம்பேட் உள்ளீட்டை செயலாக்குங்கள்</translation>
     </message>
     <message>
         <location filename="../gui/SettingsView.qml" line="1501"/>
-        <source>Allows Moonlight to capture gamepad inputs even if it&apos;s not the current window in focus</source>
-        <translation>கேம்பேட் உள்ளீடுகளை மையமாக இல்லாவிட்டாலும் கூட மூன்லைட் அனுமதிக்கிறது</translation>
+        <source>Allows Vibertemis to capture gamepad inputs even if it&apos;s not the current window in focus</source>
+        <translation>கேம்பேட் உள்ளீடுகளை மையமாக இல்லாவிட்டாலும் கூட Vibertemis அனுமதிக்கிறது</translation>
     </message>
     <message>
         <location filename="../gui/SettingsView.qml" line="949"/>
@@ -1195,6 +1195,14 @@
         <source>Automatically detect blocked connections (Recommended)</source>
         <translation>தடுக்கப்பட்ட இணைப்புகளை தானாக கண்டறியவும் (பரிந்துரைக்கப்படுகிறது)</translation>
     </message>
+    <message>
+        <source>Vibertemis Streaming Enhancements</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Vibertemis Features</source>
+        <translation type="unfinished"></translation>
+    </message>
 </context>
 <context>
     <name>StreamSegue</name>
@@ -1221,8 +1229,8 @@
     </message>
     <message>
         <location filename="../gui/StreamSegue.qml" line="76"/>
-        <source>This PC&apos;s Internet connection is blocking Moonlight. Streaming over the Internet may not work while connected to this network.</source>
-        <translation>இந்த கணினியின் இணைய இணைப்பு நிலவொளியைத் தடுக்கிறது. இந்த பிணையத்துடன் இணைக்கப்படும்போது இணையத்தில் ச்ட்ரீமிங் வேலை செய்யாது.</translation>
+        <source>This PC&apos;s Internet connection is blocking Vibertemis. Streaming over the Internet may not work while connected to this network.</source>
+        <translation>இந்த கணினியின் இணைய இணைப்பு Vibertemis-ஐத் தடுக்கிறது. இந்த பிணையத்துடன் இணைக்கப்படும்போது இணையத்தில் ச்ட்ரீமிங் வேலை செய்யாது.</translation>
     </message>
     <message>
         <location filename="../gui/StreamSegue.qml" line="167"/>
@@ -1269,8 +1277,8 @@
     </message>
     <message>
         <location filename="../gui/main.qml" line="364"/>
-        <source>Update available for Moonlight: Version %1</source>
-        <translation>நிலவொளிக்கு புதுப்பிப்பு கிடைக்கிறது: பதிப்பு %1</translation>
+        <source>Update available for Vibertemis: Version %1</source>
+        <translation>Vibertemis-க்கு புதுப்பிப்பு கிடைக்கிறது: பதிப்பு %1</translation>
     </message>
     <message>
         <location filename="../gui/main.qml" line="411"/>
@@ -1284,13 +1292,13 @@
     </message>
     <message>
         <location filename="../gui/main.qml" line="466"/>
-        <source>This version of Moonlight isn&apos;t optimized for your PC. Please download the &apos;%1&apos; version of Moonlight for the best streaming performance.</source>
-        <translation>மூன்லைட்டின் இந்த பதிப்பு உங்கள் கணினிக்கு உகந்ததாக இல்லை. சிறந்த ச்ட்ரீமிங் செயல்திறனுக்காக மூன்லைட்டின் &apos;%1&apos; பதிப்பைப் பதிவிறக்கவும்.</translation>
+        <source>This version of Vibertemis isn&apos;t optimized for your PC. Please download the &apos;%1&apos; version of Vibertemis for the best streaming performance.</source>
+        <translation>Vibertemis-இன் இந்த பதிப்பு உங்கள் கணினிக்கு உகந்ததாக இல்லை. சிறந்த ச்ட்ரீமிங் செயல்திறனுக்காக Vibertemis-இன் &apos;%1&apos; பதிப்பைப் பதிவிறக்கவும்.</translation>
     </message>
     <message>
         <location filename="../gui/main.qml" line="475"/>
-        <source>Moonlight detected gamepads without a mapping:</source>
-        <translation>மேப்பிங் இல்லாமல் மூன்லைட் கேம்பேடுகளைக் கண்டறிந்தது:</translation>
+        <source>Vibertemis detected gamepads without a mapping:</source>
+        <translation>மேப்பிங் இல்லாமல் Vibertemis கேம்பேடுகளைக் கண்டறிந்தது:</translation>
     </message>
     <message>
         <location filename="../gui/main.qml" line="388"/>
@@ -1299,8 +1307,8 @@
     </message>
     <message>
         <location filename="../gui/main.qml" line="449"/>
-        <source>No functioning hardware accelerated video decoder was detected by Moonlight. Your streaming performance may be severely degraded in this configuration.</source>
-        <translation>செயல்படும் வன்பொருள் முடுக்கப்பட்ட வீடியோ டிகோடர் மூன்லைட் மூலம் கண்டறியப்படவில்லை. இந்த உள்ளமைவில் உங்கள் ச்ட்ரீமிங் செயல்திறன் கடுமையாக சிதைக்கப்படலாம்.</translation>
+        <source>No functioning hardware accelerated video decoder was detected by Vibertemis. Your streaming performance may be severely degraded in this configuration.</source>
+        <translation>செயல்படும் வன்பொருள் முடுக்கப்பட்ட வீடியோ டிகோடர் Vibertemis மூலம் கண்டறியப்படவில்லை. இந்த உள்ளமைவில் உங்கள் ச்ட்ரீமிங் செயல்திறன் கடுமையாக சிதைக்கப்படலாம்.</translation>
     </message>
     <message>
         <location filename="../gui/main.qml" line="451"/>
