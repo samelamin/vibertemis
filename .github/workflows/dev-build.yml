@@ -29,8 +29,12 @@ on:
       - 'codex/**'
   workflow_dispatch:  # Allow manual triggering
 
+permissions:
+  contents: read
+
 env:
   QT_VERSION: '6.8.3'
+  QT_VERSION_MACOS: '6.11.1'
 
 jobs:
   setup-version:
@@ -193,7 +197,8 @@ jobs:
       - name: Setup Qt 6
         uses: jurplel/install-qt-action@v3
         with:
-          version: ${{ env.QT_VERSION }}
+          # Qt 6.11.1 contains the QTBUG-145239 fix required by the macOS 26 SDK.
+          version: ${{ matrix.os == 'macos-latest' && env.QT_VERSION_MACOS || env.QT_VERSION }}
           host: ${{ matrix.os == 'macos-latest' && 'mac' || 'linux' }}
           target: 'desktop'
           modules: 'qtmultimedia'
@@ -801,188 +806,68 @@ jobs:
     - name: Setup Qt
       uses: jurplel/install-qt-action@v3
       with:
-        version: ${{ env.QT_VERSION }}
+        version: ${{ env.QT_VERSION_MACOS }}
         host: 'mac'
         target: 'desktop'
         modules: 'qtmultimedia'
-        
+
     - name: Set macOS deployment target for compatibility
       run: |
         echo "MACOSX_DEPLOYMENT_TARGET=14.0" >> $GITHUB_ENV
         echo "Qt6_DIR=$Qt6_DIR" >> $GITHUB_ENV
-    
+
+    - name: Display macOS toolchain info
+      run: |
+        export PATH="$Qt6_DIR/bin:$PATH"
+        echo "Runner image: ${ImageOS:-unknown} ${ImageVersion:-unknown}"
+        sw_vers
+        echo "SDK: $(xcrun --show-sdk-version)"
+        clang --version
+        qmake6 -v
+        echo "Architecture: $(uname -m)"
+
     - name: Install dependencies
       run: |
         brew install create-dmg ffmpeg opus sdl2 sdl2_ttf
-    
-    - name: Clean any existing build
-      run: |
-        rm -f .qmake.stash .qmake.cache
-        find . -name "Makefile*" -delete
-        find . -name "*.moc" -delete
-        find . -name "moc_*.cpp" -delete
-        find . -name "moc_*.h" -delete
-        rm -rf moonlight-common-c/Makefile* moonlight-common-c/.qmake.stash
-        rm -rf qmdnsengine/Makefile* qmdnsengine/.qmake.stash 
-        rm -rf h264bitstream/Makefile* h264bitstream/.qmake.stash
-        rm -rf soundio/Makefile* soundio/.qmake.stash
-        rm -rf app/Makefile* app/.qmake.stash
-        rm -rf app/debug app/release
-    
-    - name: Build
-      run: |
-        export PATH="$Qt6_DIR/bin:$PATH"
-        export QMAKE="$Qt6_DIR/bin/qmake6"
-        export MACOSX_DEPLOYMENT_TARGET=14.0
-        
-        # Force a complete clean build to ensure MOC files are generated
-        make clean || true
-        qmake6 artemis.pro CONFIG+=release CONFIG+=sdk_no_version_check QMAKE_MACOSX_DEPLOYMENT_TARGET=14.0
-        
-        # Generate MOC files explicitly and ensure they're created before building
-        make -j$(sysctl -n hw.ncpu) qmake_all
-        
-        # Force generation of specific problematic MOC files first
-        cd app
-        if [ -f Makefile.Release ]; then
-          # Generate MOC headers explicitly
-          make -f Makefile.Release compiler_moc_header_make_all || echo "MOC header generation completed"
-          # Generate MOC source files explicitly  
-          make -f Makefile.Release compiler_moc_source_make_all || echo "MOC source generation completed"
-          
-          # Verify critical MOC files exist, generate manually if needed
-          # Generate into the source folder so #include "*.moc" resolves relative to the .cpp file
-          if [ ! -f backend/computermanager.moc ]; then
-            echo "Manually generating backend/computermanager.moc"
-            "$Qt6_DIR/libexec/moc" backend/computermanager.cpp -o backend/computermanager.moc
-          fi
-          if [ ! -f backend/boxartmanager.moc ]; then
-            echo "Manually generating backend/boxartmanager.moc"
-            "$Qt6_DIR/libexec/moc" backend/boxartmanager.cpp -o backend/boxartmanager.moc
-          fi
-          if [ ! -f gui/computermodel.moc ]; then
-            echo "Manually generating gui/computermodel.moc"
-            "$Qt6_DIR/libexec/moc" gui/computermodel.cpp -o gui/computermodel.moc
-          fi
-        fi
-        
-        # Clean and rebuild all subprojects with consistent deployment target
-        cd ..
-        make clean || true
-        
-        # Build each subproject individually with deployment target
-        for subdir in moonlight-common-c qmdnsengine h264bitstream soundio; do
-          if [ -d "$subdir" ]; then
-            echo "Building $subdir with deployment target..."
-            cd "$subdir"
-            make clean || true
-            qmake6 *.pro CONFIG+=release QMAKE_MACOSX_DEPLOYMENT_TARGET=14.0
-            make -j$(sysctl -n hw.ncpu)
-            cd ..
-          fi
-        done
-        
-        # Build app sub-project to ensure .moc is picked up correctly
-        cd app
-        qmake6 app.pro CONFIG+=release QMAKE_MACOSX_DEPLOYMENT_TARGET=14.0
-        make -j$(sysctl -n hw.ncpu) release
-        cd ..
-        
-        # Final build
-        qmake6 artemis.pro CONFIG+=release CONFIG+=sdk_no_version_check QMAKE_MACOSX_DEPLOYMENT_TARGET=14.0
-        make -j$(sysctl -n hw.ncpu)
-    
-    - name: Package macOS Development Build
+
+    - name: Test, build, package, and verify macOS development build
       env:
         VERSION: ${{ needs.setup-version.outputs.version }}
       run: |
-        # Install create-dmg if not available
-        if ! command -v create-dmg &> /dev/null; then
-          echo "Installing create-dmg..."
-          brew install create-dmg
+        export PATH="$Qt6_DIR/bin:$PATH"
+        mkdir -p build/tests-refreshrate
+        cd build/tests-refreshrate
+        qmake6 ../../tests/refreshrate/refreshrate.pro
+        make -j"$(sysctl -n hw.logicalcpu)"
+        ./tst_refreshrate
+        cd "$GITHUB_WORKSPACE"
+        echo "::warning::This macOS development build is unsigned and may trigger Gatekeeper warnings."
+        ARTEMIS_MAC_ARCHS="$(uname -m)" ./scripts/generate-dmg.sh Release "$VERSION"
+        ./scripts/verify-macos-bundle.sh \
+          build/build-Release/app/Artemis.app \
+          "build/installer-Release/Artemis-$VERSION.dmg"
+
+    - name: Inspect packaged architecture
+      id: macos_arch
+      run: |
+        ACTUAL_ARCHS=$(lipo -archs build/build-Release/app/Artemis.app/Contents/MacOS/Artemis)
+        if [[ " $ACTUAL_ARCHS " == *" arm64 "* && " $ACTUAL_ARCHS " == *" x86_64 "* ]]; then
+          SUFFIX=universal
+        elif [[ "$ACTUAL_ARCHS" == "arm64" ]]; then
+          SUFFIX=arm64
+        elif [[ "$ACTUAL_ARCHS" == "x86_64" ]]; then
+          SUFFIX=x86_64
+        else
+          SUFFIX=$(echo "$ACTUAL_ARCHS" | tr ' ' '-' | tr -cd '[:alnum:]_-')
         fi
-        
-        # Use the DMG generation script to create universal DMG
-        # Ensure version is available for DMG naming
-        echo "$VERSION" > app/version.txt
-        
-        # Run DMG generation with error handling
-        DMG_OUTPUT="Artemis-${VERSION}.dmg"
-        if ! ./scripts/generate-dmg.sh Release "$VERSION"; then
-          echo "DMG generation failed, checking for common issues..."
-          
-          # Check if create-dmg is available
-          create-dmg --help || echo "create-dmg not properly installed"
-          
-          # List what was actually created
-          echo "Contents of build directory:"
-          find build -name "*.dmg" -o -name "*.app" -o -name "Artemis*" | head -20
-          
-          # Try a simpler fallback DMG creation with proper .dmg extension
-          echo "Attempting fallback DMG creation..."
-          
-          if [ -d "build/build-Release" ]; then
-            # Use create-dmg directly with correct argument order
-            echo "Found Artemis.app at app/Artemis.app"
-            mkdir -p build/installer-Release
-            # Simple approach using hdiutil which is more reliable
-            if [ -d "app/Artemis.app" ]; then
-              echo "Creating DMG with hdiutil..."
-              hdiutil create -srcfolder app/Artemis.app -volname "Artemis" "build/installer-Release/Artemis-${VERSION}.dmg" || {
-                echo "hdiutil failed, trying create-dmg with minimal options..."
-                create-dmg \
-                  --volname "Artemis" \
-                  --no-internet-enable \
-                  --app-drop-link 350 185 \
-                  "build/installer-Release/Artemis-${VERSION}.dmg" \
-                  "app/" || exit 1
-              }
-            else
-              echo "Error: No Artemis.app found in app/ directory"
-              exit 1
-            fi
-            cd build/build-Release
-            # Look for the app bundle in the most likely locations
-            if [ -d "app/Artemis.app" ]; then
-              echo "Found Artemis.app at app/Artemis.app"
-              # Create a simple DMG manually with proper filename
-              mkdir -p ../installer-Release
-              create-dmg --volname "Artemis-$VERSION" \
-                --icon-size 80 \
-                --icon "app/Artemis.app" 200 190 \
-                --hide-extension "app/Artemis.app" \
-                --app-drop-link 400 185 \
-                "../installer-Release/Artemis-$VERSION.dmg" \
-                "app/Artemis.app"
-              cd ../..
-            elif [ -d "Artemis.app" ]; then
-              echo "Found Artemis.app at root level"
-              # Create a simple DMG manually with proper filename
-              mkdir -p ../installer-Release
-              create-dmg --volname "Artemis-$VERSION" \
-                --icon-size 80 \
-                --icon "Artemis.app" 200 190 \
-                --hide-extension "Artemis.app" \
-                --app-drop-link 400 185 \
-                "../installer-Release/Artemis-$VERSION.dmg" \
-                "Artemis.app"
-              cd ../..
-            else
-              echo "ERROR: Artemis.app not found in build/build-Release"
-              echo "Available directories in build/build-Release:"
-              find . -name "*.app" -type d | head -10
-              exit 1
-            fi
-          else
-            echo "ERROR: build/build-Release directory not found"
-            exit 1
-          fi
-        fi
-    
-    - name: Upload macOS Universal DMG
+        test -n "$SUFFIX"
+        echo "Architectures: $ACTUAL_ARCHS"
+        echo "suffix=$SUFFIX" >> "$GITHUB_OUTPUT"
+
+    - name: Upload macOS DMG
       uses: actions/upload-artifact@v4
       with:
-        name: artemis-macos-universal-${{ needs.setup-version.outputs.version }}
+        name: artemis-macos-${{ steps.macos_arch.outputs.suffix }}-${{ needs.setup-version.outputs.version }}
         path: build/installer-Release/Artemis-${{ needs.setup-version.outputs.version }}.dmg
         retention-days: 30
 
@@ -1697,6 +1582,8 @@ jobs:
     name: Create Development Release
     needs: [setup-version, build-windows-x64-portable, build-windows-arm64-portable, build-windows-universal-installer, build-macos-dev, build-linux-dev, build-flatpak-dev, build-raspberry-pi-dev]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     if: (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') && needs.setup-version.outputs.should_build == 'true'  # Create releases for develop/main branches when builds ran
     
     steps:
