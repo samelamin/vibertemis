@@ -83,8 +83,8 @@ jobs:
             echo "Comparing changes against first parent: $FIRST_PARENT"
             
             # Get all changed files in this merge, excluding documentation/config files but allowing workflow changes
-            CHANGED_FILES=$(git diff --name-only $FIRST_PARENT HEAD | grep -v -E "(\.md$|test.*\.txt$|README.*\.txt$|CHANGELOG.*\.txt$)" | grep -v -E "(\.yml$|\.yaml$)" | wc -l)
-            WORKFLOW_FILES=$(git diff --name-only $FIRST_PARENT HEAD | grep -E "^\.github/workflows/.*\.(yml|yaml)$" | wc -l)
+            CHANGED_FILES=$(git diff --name-only "$FIRST_PARENT" HEAD | awk '!/(\.md$|test.*\.txt$|README.*\.txt$|CHANGELOG.*\.txt$|\.(yml|yaml)$)/ { count++ } END { print count + 0 }')
+            WORKFLOW_FILES=$(git diff --name-only "$FIRST_PARENT" HEAD | awk '/^\.github\/workflows\/.*\.(yml|yaml)$/ { count++ } END { print count + 0 }')
             TOTAL_MEANINGFUL=$((CHANGED_FILES + WORKFLOW_FILES))
             echo "Meaningful files changed in merge: $CHANGED_FILES"
             echo "Workflow files changed: $WORKFLOW_FILES"
@@ -103,8 +103,8 @@ jobs:
             echo "Regular commit (not a merge) - checking for meaningful changes"
             
             # For regular commits, check against previous commit
-            CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD | grep -v -E "(\.md$|test.*\.txt$|README.*\.txt$|CHANGELOG.*\.txt$)" | grep -v -E "(\.yml$|\.yaml$)" | wc -l)
-            WORKFLOW_FILES=$(git diff --name-only HEAD~1 HEAD | grep -E "^\.github/workflows/.*\.(yml|yaml)$" | wc -l)
+            CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD | awk '!/(\.md$|test.*\.txt$|README.*\.txt$|CHANGELOG.*\.txt$|\.(yml|yaml)$)/ { count++ } END { print count + 0 }')
+            WORKFLOW_FILES=$(git diff --name-only HEAD~1 HEAD | awk '/^\.github\/workflows\/.*\.(yml|yaml)$/ { count++ } END { print count + 0 }')
             TOTAL_MEANINGFUL=$((CHANGED_FILES + WORKFLOW_FILES))
             echo "Meaningful files changed: $CHANGED_FILES"
             echo "Workflow files changed: $WORKFLOW_FILES" 

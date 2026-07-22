@@ -1,6 +1,9 @@
 from pathlib import Path
+import os
 import re
 import subprocess
+import tempfile
+import textwrap
 import unittest
 from urllib.parse import unquote
 
@@ -146,6 +149,18 @@ def workflow_job_block(workflow, job_name):
             return workflow[start:next_job]
         next_job = workflow.find("\n  ", candidate_end)
     return workflow[start:]
+
+
+def workflow_step_run_script(workflow, job_name, step_name):
+    job = workflow_job_block(workflow, job_name)
+    step_marker = f"      - name: {step_name}\n"
+    step_start = job.index(step_marker)
+    run_marker = "        run: |\n"
+    run_start = job.index(run_marker, step_start) + len(run_marker)
+    next_step = job.find("\n      - name: ", run_start)
+    if next_step == -1:
+        next_step = len(job)
+    return textwrap.dedent(job[run_start:next_step])
 
 
 class ForkIdentityTests(unittest.TestCase):
@@ -312,6 +327,142 @@ class ForkIdentityTests(unittest.TestCase):
             'if echo "$HEAD_COMMIT_MESSAGE" | grep -E',
             setup_version,
         )
+
+    def test_setup_version_handles_zero_match_counts_under_pipefail(self):
+        workflow = (
+            REPOSITORY_ROOT / ".github/workflows/dev-build.yml"
+        ).read_text(encoding="utf-8")
+        script = workflow_step_run_script(
+            workflow,
+            "setup-version",
+            "Check for meaningful changes",
+        ).replace("${{ github.ref_name }}", "codex/steam-deck")
+
+        cases = (
+            ("code only", "app/example.cpp", "int main() {}\n", "true"),
+            (
+                "workflow only",
+                ".github/workflows/example.yml",
+                "name: example\n",
+                "true",
+            ),
+            ("documentation only", "README.md", "docs\n", "false"),
+        )
+
+        for history in ("regular", "merge"):
+            for case_name, relative_path, contents, expected in cases:
+                with self.subTest(history=history, changes=case_name):
+                    with tempfile.TemporaryDirectory() as temp_dir:
+                        repository = Path(temp_dir)
+                        subprocess.run(
+                            ["git", "init", "--initial-branch=main"],
+                            cwd=repository,
+                            check=True,
+                            capture_output=True,
+                        )
+                        subprocess.run(
+                            ["git", "config", "user.name", "Artemis CI Test"],
+                            cwd=repository,
+                            check=True,
+                        )
+                        subprocess.run(
+                            ["git", "config", "user.email", "ci@example.invalid"],
+                            cwd=repository,
+                            check=True,
+                        )
+                        (repository / "initial.txt").write_text(
+                            "initial\n", encoding="utf-8"
+                        )
+                        subprocess.run(
+                            ["git", "add", "initial.txt"],
+                            cwd=repository,
+                            check=True,
+                        )
+                        subprocess.run(
+                            ["git", "commit", "-m", "initial"],
+                            cwd=repository,
+                            check=True,
+                            capture_output=True,
+                        )
+
+                        if history == "merge":
+                            subprocess.run(
+                                ["git", "switch", "-c", "feature"],
+                                cwd=repository,
+                                check=True,
+                                capture_output=True,
+                            )
+
+                        changed_path = repository / relative_path
+                        changed_path.parent.mkdir(parents=True, exist_ok=True)
+                        changed_path.write_text(contents, encoding="utf-8")
+                        subprocess.run(
+                            ["git", "add", relative_path],
+                            cwd=repository,
+                            check=True,
+                        )
+                        subprocess.run(
+                            ["git", "commit", "-m", case_name],
+                            cwd=repository,
+                            check=True,
+                            capture_output=True,
+                        )
+
+                        if history == "merge":
+                            subprocess.run(
+                                ["git", "switch", "main"],
+                                cwd=repository,
+                                check=True,
+                                capture_output=True,
+                            )
+                            subprocess.run(
+                                [
+                                    "git",
+                                    "merge",
+                                    "--no-ff",
+                                    "feature",
+                                    "-m",
+                                    "merge feature",
+                                ],
+                                cwd=repository,
+                                check=True,
+                                capture_output=True,
+                            )
+
+                        output_path = repository / "github-output"
+                        environment = os.environ.copy()
+                        environment.update(
+                            {
+                                "GITHUB_OUTPUT": str(output_path),
+                                "HEAD_COMMIT_MESSAGE": case_name,
+                            }
+                        )
+                        result = subprocess.run(
+                            [
+                                "bash",
+                                "--noprofile",
+                                "--norc",
+                                "-e",
+                                "-o",
+                                "pipefail",
+                                "-c",
+                                script,
+                            ],
+                            cwd=repository,
+                            env=environment,
+                            text=True,
+                            capture_output=True,
+                        )
+
+                        self.assertEqual(
+                            0,
+                            result.returncode,
+                            result.stdout + result.stderr,
+                        )
+                        self.assertEqual(
+                            [f"should_build={expected}"],
+                            output_path.read_text(encoding="utf-8").splitlines(),
+                        )
 
     def test_compile_sanity_has_no_duplicate_version_setup(self):
         workflow = (
