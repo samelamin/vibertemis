@@ -93,7 +93,7 @@ An existing `/Applications/Artemis.app` and its Dock alias do not automatically 
 
 For a recoverable rollback, retain the old app somewhere outside `/Applications` until verification is complete. Do not run both apps simultaneously because they share settings and pairing state.
 
-On the local Apple Silicon host, a native arm64 `Vibertemis.app` and `Vibertemis-0.6.7.dmg` were built successfully. `verify-macos-bundle.sh` passed the deployed app and the copy mounted from the DMG, including linkage, plist, `lipo`, and two Cocoa smoke launches. This is package/launch evidence only: the package is unsigned and unnotarized, no real-host stream was run, and renamed GitHub CI remains pending until this commit is pushed.
+On the local Apple Silicon host, a native arm64 `Vibertemis.app` and `Vibertemis-0.6.7.dmg` were built successfully. `verify-macos-bundle.sh` passed the deployed app and the copy mounted from the DMG, including linkage, plist, `lipo`, and two Cocoa smoke launches. This is package/launch evidence only: the package is unsigned and unnotarized, no real-host stream was run, and the exact fork CI job should be checked before downloading an artifact.
 
 Exact dependencies, package commands, verification levels, and the command-only local SDK-header workaround are in the [macOS development build guide](docs/DEVELOPMENT.md#macos-development-builds).
 
@@ -146,7 +146,7 @@ Follow the [Steam Deck setup and validation guide](docs/STEAM_DECK.md), then rep
 - HDR requires a real end-to-end HDR host, encoder, network, decoder, Gamescope/display, and content test.
 - Real streaming against Vibepollo, Apollo, and Sunshine still needs beta testers; unit and package checks do not establish live-host compatibility by themselves.
 - The locally verified native arm64 `Vibertemis.app` and `Vibertemis-0.6.7.dmg` are unsigned and unnotarized. The verifier passed the app and mounted DMG, including linkage, plist, `lipo`, and two Cocoa smoke launches, but no real-host stream was run.
-- Renamed GitHub CI remains pending until this commit is pushed. Afterward, inspect the exact commit's `macOS Development Build` job; do not infer package verification from the overall badge color.
+- CI runs in the renamed `samelamin/vibertemis` repository. Inspect the exact commit's `Flatpak Development Build` and `macOS Development Build` jobs; do not infer package verification from the overall badge color.
 
 ## Roadmap
 

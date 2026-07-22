@@ -96,8 +96,8 @@ The local result was a native arm64 `Vibertemis.app` and
 `Vibertemis-0.6.7.dmg`. `verify-macos-bundle.sh` passed the deployed app and the
 copy mounted from the DMG: linkage, plist values, the `lipo` architecture, and
 two Cocoa smoke launches all passed. The result remains unsigned and
-unnotarized, no real-host stream was run, and renamed GitHub CI remains pending
-until this commit is pushed.
+unnotarized, no real-host stream was run, and the exact fork CI job should be
+checked before downloading an artifact.
 
 `generate-dmg.sh` performs a clean release build, runs `macdeployqt`, and writes
 the DMG under `build/installer-Release/`. `create-dmg` normally adds the styled
