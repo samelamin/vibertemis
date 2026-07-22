@@ -1,6 +1,6 @@
 [Desktop Entry]
-Name=Artemis
-Comment=Stream games and other applications from a Sunshine or GeForce Experience host
+Name=Vibertemis
+Comment=Vibertemis streams games and other applications from a Sunshine or GeForce Experience host
 Exec=artemis
 Icon=com.artemisdesktop.ArtemisDesktopDev
 Terminal=false

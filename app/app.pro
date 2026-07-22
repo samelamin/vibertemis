@@ -579,9 +579,9 @@ unix:!macx: {
 }
 win32 {
     RC_ICONS = artemis.ico
-    QMAKE_TARGET_COMPANY = Artemis Desktop Project
-    QMAKE_TARGET_DESCRIPTION = Artemis Game Streaming Client
-    QMAKE_TARGET_PRODUCT = Artemis
+    QMAKE_TARGET_COMPANY = Vibertemis Project
+    QMAKE_TARGET_DESCRIPTION = Vibertemis Game Streaming Client
+    QMAKE_TARGET_PRODUCT = Vibertemis
 
     CONFIG -= embed_manifest_exe
     QMAKE_LFLAGS += /MANIFEST:embed /MANIFESTINPUT:$${PWD}/Artemis.exe.manifest

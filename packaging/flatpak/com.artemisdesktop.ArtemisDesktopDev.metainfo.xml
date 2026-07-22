@@ -3,10 +3,10 @@
   <id>com.artemisdesktop.ArtemisDesktopDev</id>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-3.0-or-later</project_license>
-  <name>Artemis</name>
-  <summary>Stream games and applications from another PC</summary>
+  <name>Vibertemis</name>
+  <summary>Vibertemis streams games and applications from another PC</summary>
   <description>
-    <p>Artemis streams games and other applications from another PC running Sunshine or GeForce Experience.</p>
+    <p>Vibertemis streams games and other applications from another PC running Sunshine or GeForce Experience.</p>
     <p>It supports hardware-accelerated H.264, HEVC, and AV1 video, surround sound, gamepads, multitouch, and remote desktop input.</p>
   </description>
   <launchable type="desktop-id">com.artemisdesktop.ArtemisDesktopDev.desktop</launchable>
@@ -15,7 +15,7 @@
   <!-- Upstream Artemis documentation (the fork has no equivalent wiki yet). -->
   <url type="help">https://github.com/wjbeckett/artemis/wiki</url>
   <developer id="com.artemisdesktop">
-    <name>Artemis Desktop Project</name>
+    <name>Vibertemis</name>
   </developer>
   <content_rating type="oars-1.1" />
 </component>

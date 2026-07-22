@@ -12,17 +12,17 @@
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs" xmlns:bal="http://wixtoolset.org/schemas/v4/wxs/bal" xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
 
   <!-- Upstream Artemis documentation (the fork has no equivalent wiki yet). -->
-  <Bundle Name="Artemis Game Streaming Client"
+  <Bundle Name="Vibertemis Game Streaming Client"
           Version="!(bind.PackageVersion.Artemis_x64)"
-          Manufacturer="Artemis Desktop Project"
+          Manufacturer="Vibertemis Project"
           UpgradeCode="b9e5d2a7-3c8f-4a91-9e4b-1f7c6a8d5e2b"
           HelpUrl="https://github.com/wjbeckett/artemis/wiki/Setup-Guide"
           UpdateUrl="https://github.com/samelamin/artemis/releases"
           DisableModify="yes"
           IconSourceFile="..\..\app\artemis.ico">
 
-    <bal:Condition Message="This version of Artemis requires Windows 10 or later." Condition="VersionNT &gt;= v10.0" />
-    <bal:Condition Message="This version of Artemis requires a 64-bit version of Windows." Condition="NativeMachine &lt;&gt; 332" />
+    <bal:Condition Message="This version of Vibertemis requires Windows 10 or later." Condition="VersionNT &gt;= v10.0" />
+    <bal:Condition Message="This version of Vibertemis requires a 64-bit version of Windows." Condition="NativeMachine &lt;&gt; 332" />
 
     <Variable Name="InstallFolder" Type="formatted" Value="[ProgramFiles6432Folder]Artemis Game Streaming" />
 

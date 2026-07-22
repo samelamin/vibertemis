@@ -364,7 +364,7 @@ ApplicationWindow {
 
                 function updateAvailable(version, url)
                 {
-                    ToolTip.text = qsTr("Update available for Artemis: Version %1").arg(version)
+                    ToolTip.text = qsTr("Update available for Vibertemis: Version %1").arg(version)
                     updateButton.browserUrl = url
                     updateButton.visible = true
                 }
@@ -450,7 +450,7 @@ ApplicationWindow {
 
     ErrorMessageDialog {
         id: noHwDecoderDialog
-        text: qsTr("No functioning hardware accelerated video decoder was detected by Artemis. " +
+        text: qsTr("No functioning hardware accelerated video decoder was detected by Vibertemis. " +
                    "Your streaming performance may be severely degraded in this configuration.")
         helpText: qsTr("Click the Help button to open the Upstream Artemis documentation for solving this problem.")
         helpUrl: "https://github.com/wjbeckett/artemis/wiki/Fixing-Hardware-Decoding-Problems"
@@ -467,7 +467,7 @@ ApplicationWindow {
     NavigableMessageDialog {
         id: wow64Dialog
         standardButtons: Dialog.Ok | Dialog.Cancel
-        text: qsTr("This version of Artemis isn't optimized for your PC. Please download the '%1' version of Artemis for the best streaming performance.").arg(SystemProperties.friendlyNativeArchName)
+        text: qsTr("This version of Vibertemis isn't optimized for your PC. Please download the '%1' version of Vibertemis for the best streaming performance.").arg(SystemProperties.friendlyNativeArchName)
         onAccepted: {
             Qt.openUrlExternally("https://github.com/samelamin/artemis/releases");
         }
@@ -476,7 +476,7 @@ ApplicationWindow {
     ErrorMessageDialog {
         id: unmappedGamepadDialog
         property string unmappedGamepads : ""
-        text: qsTr("Artemis detected gamepads without a mapping:") + "\n" + unmappedGamepads
+        text: qsTr("Vibertemis detected gamepads without a mapping:") + "\n" + unmappedGamepads
         helpTextSeparator: "\n\n"
         helpText: qsTr("Click the Help button to open the Upstream Artemis documentation for mapping gamepads.")
         helpUrl: "https://github.com/wjbeckett/artemis/wiki/Gamepad-Mapping"

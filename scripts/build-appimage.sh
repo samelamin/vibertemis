@@ -37,7 +37,7 @@ pushd $BUILD_FOLDER
 qmake $SOURCE_ROOT/artemis.pro CONFIG+=disable-wayland CONFIG+=disable-libdrm CONFIG+=disable-cuda PREFIX=$DEPLOY_FOLDER/usr DEFINES+=APP_IMAGE || fail "Qmake failed!"
 popd
 
-echo Compiling Artemis in $BUILD_CONFIG configuration
+echo Compiling Vibertemis in $BUILD_CONFIG configuration
 pushd $BUILD_FOLDER
 make -j$(nproc) $(echo "$BUILD_CONFIG" | tr '[:upper:]' '[:lower:]') || fail "Make failed!"
 popd

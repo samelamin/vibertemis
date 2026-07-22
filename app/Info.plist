@@ -5,7 +5,7 @@
 	<key>CFBundleExecutable</key>
 	<string>Artemis</string>
 	<key>CFBundleGetInfoString</key>
-	<string>Stream games and other applications from another PC</string>
+	<string>Vibertemis streams games and other applications from another PC</string>
 	<key>CFBundleIconFile</key>
 	<string>artemis</string>
 	<key>CFBundleIdentifier</key>
@@ -37,12 +37,12 @@
 		<true/>
 	</dict>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Artemis uses the local network to connect to your gaming PC for streaming.</string>
+	<string>Vibertemis uses the local network to connect to your gaming PC for streaming.</string>
 	<key>CFBundleVersion</key>
 	<string>@FULL_VERSION@</string>
 	<key>CFBundleShortVersionString</key>
 	<string>@FULL_VERSION@</string>
 	<key>CFBundleDisplayName</key>
-	<string>Artemis</string>
+	<string>Vibertemis</string>
 </dict>
 </plist>

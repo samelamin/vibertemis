@@ -590,6 +590,7 @@ int main(int argc, char *argv[])
 #endif
 
     QGuiApplication app(argc, argv);
+    QCoreApplication::setApplicationDisplayName("Vibertemis");
 
 #ifdef Q_OS_WIN32
     // If we don't have stdout or stderr handles (which will normally be the case

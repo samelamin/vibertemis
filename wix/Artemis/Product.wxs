@@ -1,5 +1,5 @@
-<?define ShortName = "Artemis" ?>
-<?define FullName = "Artemis Desktop Game Streaming Client" ?>
+<?define ShortName = "Vibertemis" ?>
+<?define FullName = "Vibertemis Desktop Game Streaming Client" ?>
 
 <?define ShortcutName = "$(var.ShortName)" ?>
 <?define ShortcutDesc = "Stream games and other applications from another PC" ?>
@@ -10,7 +10,7 @@
   <Package Name="$(var.FullName)"
            Language="1033"
            Version="!(bind.fileVersion.ArtemisExe)"
-           Manufacturer="Artemis Desktop Project"
+           Manufacturer="Vibertemis Project"
            UpgradeCode="a7e3f8c1-4d92-41b6-8f15-2c9a7b8e5d3f">
     <MajorUpgrade DowngradeErrorMessage="A newer version of [ProductName] is already installed." Schedule="afterInstallInitialize" />
     <MediaTemplate CompressionLevel="high" EmbedCab="yes" />
@@ -105,7 +105,7 @@
       <Files Include="$(var.DeployDir)\**" />
     </ComponentGroup>
 
-    <Feature Id="ProductFeature" Title="Artemis" Level="1" ConfigurableDirectory="INSTALLFOLDER">
+    <Feature Id="ProductFeature" Title="Vibertemis" Level="1" ConfigurableDirectory="INSTALLFOLDER">
       <ComponentRef Id="Artemis" />
       <ComponentRef Id="ArtemisShortcuts" />
       <ComponentRef Id="ArtemisDesktopShortcut" />

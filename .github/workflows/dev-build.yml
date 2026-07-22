@@ -280,7 +280,7 @@ jobs:
         # Add Qt to PATH for the build script
         $env:PATH = "$env:Qt6_DIR\bin;$env:PATH"
         
-        # Run our Artemis build script that handles everything
+        # Run the compatibility-named Vibertemis build script that handles everything
         cmd /c "scripts\build-artemis-arch.bat release"
         
         if ($LASTEXITCODE -ne 0) {
@@ -296,8 +296,8 @@ jobs:
         $zipFile = Get-ChildItem -Path "build\installer-x64-release" -Filter "ArtemisPortable-*.zip" | Select-Object -First 1
         
         if ($zipFile) {
-          # Rename portable ZIP for Artemis using semantic version
-          $newZipName = "artemis-windows-x64-portable-$env:SEMANTIC_VERSION.zip"
+          # Rename the portable ZIP for public Vibertemis distribution
+          $newZipName = "vibertemis-windows-x64-portable-$env:SEMANTIC_VERSION.zip"
           Move-Item $zipFile.FullName $newZipName
           echo "Created x64 portable ZIP: $newZipName"
         } else {
@@ -309,8 +309,8 @@ jobs:
     - name: Upload x64 Portable ZIP
       uses: actions/upload-artifact@v4
       with:
-        name: artemis-windows-x64-portable-${{ needs.setup-version.outputs.version }}
-        path: artemis-windows-x64-portable-${{ needs.setup-version.outputs.version }}.zip
+        name: vibertemis-windows-x64-portable-${{ needs.setup-version.outputs.version }}
+        path: vibertemis-windows-x64-portable-${{ needs.setup-version.outputs.version }}.zip
         retention-days: 30
         if-no-files-found: warn
 
@@ -440,8 +440,8 @@ jobs:
         $zipFile = Get-ChildItem -Path "build\installer-arm64-release" -Filter "ArtemisPortable-*.zip" | Select-Object -First 1
         
         if ($zipFile) {
-          # Rename portable ZIP for Artemis ARM64 using semantic version
-          $newZipName = "artemis-windows-arm64-portable-$env:SEMANTIC_VERSION.zip"
+          # Rename the portable ZIP for public Vibertemis distribution
+          $newZipName = "vibertemis-windows-arm64-portable-$env:SEMANTIC_VERSION.zip"
           Move-Item $zipFile.FullName $newZipName
           echo "Created ARM64 portable ZIP: $newZipName"
         } else {
@@ -453,8 +453,8 @@ jobs:
     - name: Upload ARM64 Portable ZIP
       uses: actions/upload-artifact@v4
       with:
-        name: artemis-windows-arm64-portable-${{ needs.setup-version.outputs.version }}
-        path: artemis-windows-arm64-portable-${{ needs.setup-version.outputs.version }}.zip
+        name: vibertemis-windows-arm64-portable-${{ needs.setup-version.outputs.version }}
+        path: vibertemis-windows-arm64-portable-${{ needs.setup-version.outputs.version }}.zip
         retention-days: 30
         if-no-files-found: warn
 
@@ -638,7 +638,7 @@ jobs:
         
         if ($bundleFile) {
           # Rename universal bundle
-          $newBundleName = "artemis-windows-universal-installer-$env:SEMANTIC_VERSION.exe"
+          $newBundleName = "vibertemis-windows-universal-installer-$env:SEMANTIC_VERSION.exe"
           Move-Item $bundleFile.FullName $newBundleName
           echo "Created universal installer: $newBundleName"
         } else {
@@ -650,8 +650,8 @@ jobs:
     - name: Upload Universal Installer
       uses: actions/upload-artifact@v4
       with:
-        name: artemis-windows-universal-installer-${{ needs.setup-version.outputs.version }}
-        path: artemis-windows-universal-installer-${{ needs.setup-version.outputs.version }}.exe
+        name: vibertemis-windows-universal-installer-${{ needs.setup-version.outputs.version }}
+        path: vibertemis-windows-universal-installer-${{ needs.setup-version.outputs.version }}.exe
         retention-days: 30
         if-no-files-found: warn
 
@@ -836,7 +836,7 @@ jobs:
         # Create launch script that sets library path
         cat > linux-package/artemis << 'EOF'
         #!/bin/bash
-        # Artemis Desktop launcher script
+        # Vibertemis launcher script (the executable name remains compatible)
         
         # Resolve the actual directory where this script is located
         # This handles symlinks properly (e.g., ~/.local/bin/artemis -> ~/.local/share/artemis-desktop/artemis)
@@ -857,7 +857,7 @@ jobs:
         # Create installation script
         cat > linux-package/install.sh << 'EOF'
         #!/bin/bash
-        echo "Installing Artemis Desktop..."
+        echo "Installing Vibertemis..."
         
         # Install to local directory
         INSTALL_DIR="$HOME/.local/share/artemis-desktop"
@@ -876,7 +876,7 @@ jobs:
         cat > "$HOME/.local/share/applications/artemis-desktop.desktop" << 'EOD'
         [Desktop Entry]
         Type=Application
-        Name=Artemis Desktop
+        Name=Vibertemis
         Comment=Game streaming client
         Exec=artemis
         Icon=artemis-desktop
@@ -902,7 +902,7 @@ jobs:
       run: |
         # Create info file with semantic versioning
         cat > linux-package/build_info.txt << EOF
-        Artemis Desktop Development Build (Linux)
+        Vibertemis Development Build (Linux)
         Version: $VERSION
         Numeric Version: ${{ needs.setup-version.outputs.numeric_version }}
         Is Prerelease: ${{ needs.setup-version.outputs.is_prerelease }}
@@ -923,7 +923,7 @@ jobs:
         
         # Create README for users
         cat > linux-package/README.md << 'EOF'
-        # Artemis Desktop - Linux Build
+        # Vibertemis - Linux Build
         
         ## Quick Installation
         
@@ -958,12 +958,12 @@ jobs:
         EOF
         
         # Package with semantic version
-        tar -czf artemis-linux-$VERSION.tar.gz -C linux-package .
+        tar -czf vibertemis-linux-$VERSION.tar.gz -C linux-package .
     - name: Upload Development Artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: artemis-linux-${{ needs.setup-version.outputs.version }}
-        path: artemis-linux-${{ needs.setup-version.outputs.version }}.tar.gz
+        name: vibertemis-linux-${{ needs.setup-version.outputs.version }}
+        path: vibertemis-linux-${{ needs.setup-version.outputs.version }}.tar.gz
         retention-days: 30
 
   build-appimage-dev:
@@ -1133,7 +1133,7 @@ jobs:
         
         echo "$HOME/bin" >> $GITHUB_PATH
     
-    - name: Build Artemis with Qt 6 for AppImage
+    - name: Build Vibertemis with Qt 6 for AppImage
       run: |
         # Set Qt 6 environment (variables are set from jurplel/install-qt-action)
         export PATH="$Qt6_DIR/bin:$PATH"
@@ -1149,7 +1149,7 @@ jobs:
         rm -f .qmake.stash .qmake.cache
         find . -name "Makefile*" -delete || true
         
-        # Build with Qt 6 (similar to Artemis but without Moonlight-specific dependencies)
+        # Build Vibertemis with Qt 6 without the optional upstream dependency bundle
         git -c submodule.libs.update=none submodule update --init --recursive
         
         # Build the project using Qt 6
@@ -1166,7 +1166,7 @@ jobs:
         # Copy the binary
         cp app/artemis build/build-release/usr/bin/
         
-        # Copy existing Artemis icons
+        # Copy the existing compatibility-named Vibertemis icons
         if [ -f "app/artemis.png" ]; then
           cp app/artemis.png build/build-release/usr/share/icons/hicolor/256x256/apps/artemis.png
         fi
@@ -1178,7 +1178,7 @@ jobs:
         cat > build/build-release/usr/share/applications/artemis.desktop << 'EOF'
         [Desktop Entry]
         Type=Application
-        Name=Artemis Desktop
+        Name=Vibertemis
         Comment=Game streaming client for NVIDIA GameStream and Sunshine
         Exec=artemis
         Icon=artemis
@@ -1227,9 +1227,9 @@ jobs:
         fi
         
         echo "=== Creating AppImage with appimagetool ==="
-        ARCH=x86_64 appimagetool . "../installer-release/Artemis-${{ needs.setup-version.outputs.version }}-x86_64.AppImage" 2>&1 | tee appimagetool.log
+        ARCH=x86_64 appimagetool . "../installer-release/Vibertemis-${{ needs.setup-version.outputs.version }}-x86_64.AppImage" 2>&1 | tee appimagetool.log
         
-        if [ ! -f "../installer-release/Artemis-${{ needs.setup-version.outputs.version }}-x86_64.AppImage" ]; then
+        if [ ! -f "../installer-release/Vibertemis-${{ needs.setup-version.outputs.version }}-x86_64.AppImage" ]; then
           echo "ERROR: appimagetool failed"
           tail -50 appimagetool.log || true
           exit 1
@@ -1261,8 +1261,8 @@ jobs:
     - name: Upload AppImage
       uses: actions/upload-artifact@v4
       with:
-        name: artemis-appimage-${{ needs.setup-version.outputs.version }}
-        path: build/installer-release/Artemis-${{ needs.setup-version.outputs.version }}-x86_64.AppImage
+        name: vibertemis-appimage-${{ needs.setup-version.outputs.version }}
+        path: build/installer-release/Vibertemis-${{ needs.setup-version.outputs.version }}-x86_64.AppImage
         retention-days: 30
 
   build-flatpak-dev:
@@ -1328,6 +1328,7 @@ jobs:
     - name: Upload Flatpak Development Artifacts
       uses: actions/upload-artifact@v4
       with:
+        # Compatibility contract: the rolling publisher consumes this established artifact name.
         name: artemis-flatpak-${{ needs.setup-version.outputs.version }}
         path: |
           artemis-flatpak-${{ needs.setup-version.outputs.version }}.flatpak
@@ -1378,6 +1379,7 @@ jobs:
         if: steps.branch-head.outputs.publish == 'true'
         run: |
           set -euo pipefail
+          # Keep established artemis-steam-deck.* asset names for existing download links.
           source_path="steam-deck-artifact/artemis-flatpak-$VERSION.flatpak"
           test -f "$source_path"
           mkdir -p release-assets
@@ -1395,7 +1397,7 @@ jobs:
         run: |
           set -euo pipefail
           cat > release-notes-pending.md <<EOF
-          # Artemis Steam Deck rolling build
+          # Vibertemis Steam Deck rolling build
 
           A new verified Flatpak is being published from commit \`$SOURCE_COMMIT\`.
           Checksum assets are withheld until the published Flatpak has been re-downloaded and verified.
@@ -1405,13 +1407,13 @@ jobs:
 
           if gh release view steam-deck-latest >/dev/null 2>&1; then
             gh release edit steam-deck-latest \
-              --title "Artemis Steam Deck rolling build" \
+              --title "Vibertemis Steam Deck rolling build" \
               --notes-file release-notes-pending.md \
               --prerelease
           else
             gh release create steam-deck-latest \
               --target "$SOURCE_COMMIT" \
-              --title "Artemis Steam Deck rolling build" \
+              --title "Vibertemis Steam Deck rolling build" \
               --notes-file release-notes-pending.md \
               --prerelease
           fi
@@ -1463,7 +1465,7 @@ jobs:
 
           expected_sha="$(awk '{print $1}' release-assets/artemis-steam-deck.flatpak.sha256)"
           cat > release-notes.md <<EOF
-          # Artemis Steam Deck rolling build
+          # Vibertemis Steam Deck rolling build
 
           - Version: \`$VERSION\`
           - Commit: \`$SOURCE_COMMIT\`
@@ -1475,7 +1477,7 @@ jobs:
           This rolling prerelease is replaced by every later successful build from the Steam Deck branch. The direct Flatpak and sidecar can briefly differ while a replacement is in progress; use the bundle for an atomic Flatpak-plus-checksum download.
           EOF
           gh release edit steam-deck-latest \
-            --title "Artemis Steam Deck rolling build ($VERSION)" \
+            --title "Vibertemis Steam Deck rolling build ($VERSION)" \
             --notes-file release-notes.md \
             --prerelease
 
@@ -1539,7 +1541,7 @@ jobs:
         # Create simple install script
         cat > artemis-package/install.sh << 'EOF'
         #!/bin/bash
-        echo "Installing Artemis Desktop for Raspberry Pi..."
+        echo "Installing Vibertemis for Raspberry Pi..."
         
         # Make binary executable
         chmod +x artemis
@@ -1553,7 +1555,7 @@ jobs:
         cat > ~/.local/share/applications/artemis-desktop.desktop << 'EOD'
         [Desktop Entry]
         Type=Application
-        Name=Artemis Desktop
+        Name=Vibertemis
         Comment=Game streaming client
         Exec=artemis
         Icon=artemis-desktop
@@ -1568,7 +1570,7 @@ jobs:
         
         # Create build info
         cat > artemis-package/build_info.txt << EOF
-        Artemis Desktop Raspberry Pi ARM64 Build
+        Vibertemis Raspberry Pi ARM64 Build
         Version: $SEMANTIC_VERSION
         Built: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
         Architecture: ARM64 (native build)
@@ -1583,14 +1585,14 @@ jobs:
 
         # Create the zip file
         cd artemis-package
-        zip -r "../artemis-raspberry-pi-arm64-$SEMANTIC_VERSION.zip" .
+        zip -r "../vibertemis-raspberry-pi-arm64-$SEMANTIC_VERSION.zip" .
         cd ..
 
     - name: Upload Raspberry Pi Development Artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: artemis-raspberry-pi-arm64-${{ needs.setup-version.outputs.version }}
-        path: artemis-raspberry-pi-arm64-${{ needs.setup-version.outputs.version }}.zip
+        name: vibertemis-raspberry-pi-arm64-${{ needs.setup-version.outputs.version }}
+        path: vibertemis-raspberry-pi-arm64-${{ needs.setup-version.outputs.version }}.zip
         retention-days: 30
 
 
@@ -1750,7 +1752,7 @@ jobs:
         body: |
           ${{ (github.ref_name == 'main' || github.ref_name == 'master') && '🚀 **Production Release** 🚀
 
-          This is an official production release of Artemis Desktop.
+          This is an official production release of Vibertemis.
 
           **✅ Stable**: This release has been tested and is recommended for general use.' || '🚧 **Development Build** 🚧
           

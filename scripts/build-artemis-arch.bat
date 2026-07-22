@@ -336,7 +336,7 @@ for /r "%BUILD_FOLDER%" %%f in (*.pdb) do (
 )
 copy %SOURCE_ROOT%\libs\windows\lib\%ARCH%\*.pdb %SYMBOLS_FOLDER%
 if !ERRORLEVEL! NEQ 0 goto Error
-7z a %SYMBOLS_FOLDER%\ArtemisDebuggingSymbols-%ARCH%-%VERSION%.zip %SYMBOLS_FOLDER%\*.pdb
+7z a %SYMBOLS_FOLDER%\VibertemisDebuggingSymbols-%ARCH%-%VERSION%.zip %SYMBOLS_FOLDER%\*.pdb
 if !ERRORLEVEL! NEQ 0 goto Error
 
 echo Copying DLL dependencies
@@ -406,13 +406,13 @@ rem This must be done after WiX harvesting and signing, since the VCRT dlls are 
 rem and should not be harvested for inclusion in the full installer
 copy "%VC_REDIST_DLL_PATH%\*.dll" %DEPLOY_FOLDER%
 if !ERRORLEVEL! NEQ 0 goto Error
-rem This file tells Artemis that it's a portable installation
+rem This file tells Vibertemis that it's a portable installation
 echo. > %DEPLOY_FOLDER%\portable.dat
 if !ERRORLEVEL! NEQ 0 goto Error
 7z a %INSTALLER_FOLDER%\ArtemisPortable-%ARCH%-%VERSION%.zip %DEPLOY_FOLDER%\*
 if !ERRORLEVEL! NEQ 0 goto Error
 
-echo Build successful for Artemis v%VERSION% %ARCH% binaries!
+echo Build successful for Vibertemis v%VERSION% %ARCH% binaries!
 exit /b 0
 
 :Error

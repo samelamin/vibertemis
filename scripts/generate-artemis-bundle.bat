@@ -65,7 +65,7 @@ for /f "usebackq delims=" %%i in (`%VSWHERE% -latest -property installationPath`
 )
 if !ERRORLEVEL! NEQ 0 goto Error
 
-echo Building universal Artemis bundle
+echo Building universal Vibertemis bundle
 rem Bundles are always x86 binaries
 msbuild -Restore %SOURCE_ROOT%\wix\ArtemisSetup\ArtemisSetup.wixproj /p:Configuration=%BUILD_CONFIG% /p:Platform=x86 /p:MSBuildProjectExtensionsPath=%BUILD_FOLDER%\
 if !ERRORLEVEL! NEQ 0 goto Error
@@ -73,7 +73,7 @@ if !ERRORLEVEL! NEQ 0 goto Error
 rem Rename the installer to match the publishing convention
 ren %INSTALLER_FOLDER%\ArtemisSetup.exe ArtemisSetup-%VERSION%.exe
 
-echo Build successful for Artemis v%VERSION% universal installer!
+echo Build successful for Vibertemis v%VERSION% universal installer!
 exit /b 0
 
 :Error

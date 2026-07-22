@@ -35,7 +35,7 @@ pushd $BUILD_FOLDER
 qmake $SOURCE_ROOT/moonlight-qt.pro QMAKE_CFLAGS_ISYSTEM= || fail "Qmake failed!"
 popd
 
-echo Compiling Moonlight in $BUILD_CONFIG configuration
+echo Compiling Vibertemis in $BUILD_CONFIG configuration
 pushd $BUILD_FOLDER
 make -j$(nproc) $(echo "$BUILD_CONFIG" | tr '[:upper:]' '[:lower:]') || fail "Make failed!"
 popd
@@ -45,7 +45,7 @@ mkdir -p $DEPLOY_FOLDER/steamlink/apps/moonlight/bin
 cp $BUILD_FOLDER/app/moonlight $DEPLOY_FOLDER/steamlink/apps/moonlight/bin/ || fail "Binary copy failed!"
 cp $SOURCE_ROOT/app/deploy/steamlink/* $DEPLOY_FOLDER/steamlink/apps/moonlight/ || fail "Metadata copy failed!"
 pushd $DEPLOY_FOLDER
-zip -r $INSTALLER_FOLDER/Moonlight-SteamLink-$VERSION.zip . || fail "Zip failed!"
+zip -r $INSTALLER_FOLDER/Vibertemis-SteamLink-$VERSION.zip . || fail "Zip failed!"
 popd
 
 echo Build completed
