@@ -27,6 +27,9 @@ private slots:
     void resolveStreamFpsFallsBackForInvalidPersistedRate();
     void protocolFpsConvertsToRoundedActualFps_data();
     void protocolFpsConvertsToRoundedActualFps();
+    void protocolFpsConvertsToClientRefreshRateX100_data();
+    void protocolFpsConvertsToClientRefreshRateX100();
+    void protocolFpsKeepsClientRefreshRateX100ConsistentAtHalfBoundary();
     void protocolFpsFormatsNvHttpModeConsistently_data();
     void protocolFpsFormatsNvHttpModeConsistently();
     void roundedCustomRateStaysConsistentAcrossProtocolConsumers();
@@ -176,6 +179,42 @@ void RefreshRateParserTest::protocolFpsConvertsToRoundedActualFps()
     QFETCH(int, expectedActualFps);
 
     QCOMPARE(RefreshRateParser::toActualFps(protocolFps, 30), expectedActualFps);
+}
+
+void RefreshRateParserTest::protocolFpsConvertsToClientRefreshRateX100_data()
+{
+    QTest::addColumn<int>("protocolFps");
+    QTest::addColumn<int>("fallbackFps");
+    QTest::addColumn<int>("expectedRefreshRateX100");
+
+    QTest::newRow("23.976") << 23976 << 60 << 2398;
+    QTest::newRow("29.97") << 29970 << 60 << 2997;
+    QTest::newRow("59.94") << 59940 << 60 << 5994;
+    QTest::newRow("119.88") << 119880 << 60 << 11988;
+    QTest::newRow("integer") << 60 << 30 << 6000;
+    QTest::newRow("fallback") << 0 << 60 << 6000;
+    QTest::newRow("large fallback still integer") << 0 << 5000 << 500000;
+    QTest::newRow("no usable rate") << 0 << 0 << 0;
+    QTest::newRow("overflowing fallback")
+        << 0 << std::numeric_limits<int>::max() << 0;
+}
+
+void RefreshRateParserTest::protocolFpsConvertsToClientRefreshRateX100()
+{
+    QFETCH(int, protocolFps);
+    QFETCH(int, fallbackFps);
+    QFETCH(int, expectedRefreshRateX100);
+
+    QCOMPARE(RefreshRateParser::protocolFpsToClientRefreshRateX100(
+                 protocolFps, fallbackFps),
+             expectedRefreshRateX100);
+}
+
+void RefreshRateParserTest::protocolFpsKeepsClientRefreshRateX100ConsistentAtHalfBoundary()
+{
+    QCOMPARE(RefreshRateParser::protocolFpsToClientRefreshRateX100(59495, 60), 5949);
+    QCOMPARE(RefreshRateParser::protocolFpsToClientRefreshRateX100(59496, 60), 5949);
+    QCOMPARE(RefreshRateParser::protocolFpsToClientRefreshRateX100(59500, 60), 5950);
 }
 
 void RefreshRateParserTest::protocolFpsFormatsNvHttpModeConsistently_data()
