@@ -91,6 +91,16 @@ case, set a custom rate of `59.94` Hz. The unit-tested wire mapping is
 `maxFPS=59940` and `clientRefreshRateX100=5994`; the whole-FPS boundary clamping
 that keeps those fields consistent is also unit-tested.
 
+Vibepollo logs the RTSP request payload and these attributes only at verbose
+level. Record the existing host log level, temporarily set
+`min_log_level = verbose` in the Vibepollo configuration, and restart or
+reconfigure Vibepollo as required by that installation before testing. Capture
+the payload lines for `x-nv-video[0].maxFPS` and
+`x-nv-video[0].clientRefreshRateX100`. After the tests, restore the previous log
+level and restart or reconfigure Vibepollo again. Verbose logs are noisy and may
+contain sensitive host, client, application, or network details, so review and
+redact them before sharing.
+
 - [ ] Confirm the Artemis client log contains `Stream refresh metadata` with the
   expected `maxFPS` and `clientRefreshRateX100` values.
 - [ ] Confirm the Vibepollo/Apollo host log reports the same two fields from the
@@ -108,6 +118,50 @@ that keeps those fields consistent is also unit-tested.
   60 FPS; confirm both sides receive the matching fallback values `maxFPS=60`
   and `clientRefreshRateX100=6000`, with no mismatch warning, and the stream
   starts normally.
+
+The settings UI rejects invalid custom rates, so reproduce the final case by
+temporarily editing the stopped Flatpak's persisted configuration. First stop
+the development application and locate its `Artemis.conf`; the organization
+subdirectory can vary, so use `find` rather than assuming its exact path:
+
+```bash
+flatpak kill com.artemisdesktop.ArtemisDesktopDev 2>/dev/null || true
+find "$HOME/.var/app/com.artemisdesktop.ArtemisDesktopDev/config" \
+  -type f -name 'Artemis.conf' -print
+```
+
+Copy the single path printed by `find` into `ARTEMIS_CONF`, verify it, and make a
+backup. If more than one path is printed, identify the file updated by the
+current development application instead of guessing.
+
+```bash
+ARTEMIS_CONF='/absolute/path/printed/by/find/Artemis.conf'
+test -f "$ARTEMIS_CONF"
+cp -- "$ARTEMIS_CONF" "$ARTEMIS_CONF.before-vibepollo-test"
+kwrite "$ARTEMIS_CONF"
+```
+
+In the existing `[General]` section, change or add these keys, save the file,
+then relaunch Artemis and perform the invalid-fallback checklist item:
+
+```ini
+[General]
+fractionalrefreshrate=true
+customrefreshrate=9
+fps=60
+```
+
+```bash
+flatpak run com.artemisdesktop.ArtemisDesktopDev
+```
+
+After capturing the result, stop Artemis before restoring the exact backup. The
+backup is intentionally retained rather than deleted.
+
+```bash
+flatpak kill com.artemisdesktop.ArtemisDesktopDev 2>/dev/null || true
+cp -- "$ARTEMIS_CONF.before-vibepollo-test" "$ARTEMIS_CONF"
+```
 
 Record the Artemis commit, Vibepollo/Apollo version, requested and effective
 rates, relevant log excerpts, and stream duration. This client change does not
