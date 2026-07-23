@@ -98,6 +98,9 @@ private slots:
     void pendingUpdateRecord();
     void pendingUpdateRejectsHostileCandidate_data();
     void pendingUpdateRejectsHostileCandidate();
+    void pendingUpdateRejectsAlternatePath();
+    void pendingUpdatePreservesFractionalTimestamps();
+    void pendingUpdateRejectsOversizedRecord();
     void rollingParser();
     void steamDeckSession();
 };
@@ -1301,6 +1304,186 @@ void AutoUpdateTest::pendingUpdateRejectsHostileCandidate()
     QCOMPARE(loaded.ok, accepted);
     QVERIFY(QFileInfo::exists(unrelatedPath));
     QVERIFY(QFileInfo::exists(record.canonicalPath));
+}
+
+void AutoUpdateTest::pendingUpdateRejectsAlternatePath()
+{
+#ifndef Q_OS_UNIX
+    QSKIP("Intermediate symlink path regression is Unix-specific");
+#else
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const QString downloads = root.path() + QStringLiteral("/Downloads");
+    const QString privateData = root.path() + QStringLiteral("/private");
+    const QString outside = root.path() + QStringLiteral("/outside");
+    const QString outsideChild = outside + QStringLiteral("/child");
+    QVERIFY(QDir().mkpath(downloads));
+    QVERIFY(QDir().mkpath(privateData));
+    QVERIFY(QDir().mkpath(outsideChild));
+    QVERIFY(QFile::link(outsideChild, downloads + QStringLiteral("/escape")));
+
+    const QByteArray payload("alternate path payload");
+    const RollingUpdateCandidate candidate = storageCandidate(payload);
+    FakeStorageProbe probe;
+    probe.available = candidate.flatpak.size
+        + PendingUpdateStore::safetyMarginBytes();
+    PendingUpdateStore store(downloads, privateData, &probe);
+    const UpdateResult<QSharedPointer<QTemporaryFile>> part =
+        store.createDownload(candidate.flatpak.size);
+    QVERIFY(part.ok);
+    QCOMPARE(part.value->write(payload), qint64(payload.size()));
+    const UpdateResult<UpdateFileStore::OpenVerifiedFile> verified =
+        store.finalizeAndVerify(part.value, candidate);
+    QVERIFY(verified.ok);
+
+    PendingUpdateRecord record;
+    record.canonicalPath = verified.value.canonicalPath;
+    record.candidate = candidate;
+    record.verifiedSize = verified.value.size;
+    record.verifiedSha256 = verified.value.sha256;
+    verified.value.file->close();
+    QVERIFY(store.save(record));
+
+    const QString filename = QFileInfo(record.canonicalPath).fileName();
+    const QString outsidePayload = outside + QDir::separator() + filename;
+    QFile outsideFile(outsidePayload);
+    QVERIFY(outsideFile.open(QIODevice::WriteOnly));
+    QCOMPARE(outsideFile.write(payload), qint64(payload.size()));
+    outsideFile.close();
+    const QString alternate =
+        downloads + QStringLiteral("/escape/../") + filename;
+
+    const QString recordPath = privateData + QStringLiteral("/pending-update.json");
+    QFile recordFile(recordPath);
+    QVERIFY(recordFile.open(QIODevice::ReadOnly));
+    const QJsonObject validObject =
+        QJsonDocument::fromJson(recordFile.readAll()).object();
+    recordFile.close();
+    auto writeRecordPath = [&](const QString &path) {
+        QJsonObject object = validObject;
+        object.insert(QStringLiteral("canonical_path"), path);
+        const QByteArray hostile =
+            QJsonDocument(object).toJson(QJsonDocument::Compact);
+        if (!recordFile.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+            return false;
+        }
+        const bool written = recordFile.write(hostile) == hostile.size();
+        recordFile.close();
+        return written;
+    };
+
+    const QString dotted =
+        downloads + QStringLiteral("/./") + filename;
+    PendingUpdateRecord dottedRecord = record;
+    dottedRecord.canonicalPath = dotted;
+    QVERIFY(!store.save(dottedRecord));
+    QVERIFY(!store.reopenAndVerify(dottedRecord, candidate).ok);
+    QVERIFY(writeRecordPath(dotted));
+    QVERIFY(!store.load().ok);
+    QVERIFY(QFileInfo::exists(record.canonicalPath));
+    QVERIFY(writeRecordPath(dotted));
+    store.clear(true);
+    QVERIFY(QFileInfo::exists(record.canonicalPath));
+
+    QVERIFY(store.save(record));
+    QVERIFY(writeRecordPath(alternate));
+    QVERIFY(!store.load().ok);
+    QVERIFY(QFileInfo::exists(outsidePayload));
+
+    QVERIFY(writeRecordPath(alternate));
+    store.clear(true);
+    QVERIFY(QFileInfo::exists(outsidePayload));
+    QVERIFY(!QFileInfo::exists(recordPath));
+#endif
+}
+
+void AutoUpdateTest::pendingUpdatePreservesFractionalTimestamps()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const QString downloads = root.path() + QStringLiteral("/Downloads");
+    const QString privateData = root.path() + QStringLiteral("/private");
+    QVERIFY(QDir().mkpath(downloads));
+    QVERIFY(QDir().mkpath(privateData));
+
+    const QByteArray payload("fractional timestamp payload");
+    RollingUpdateCandidate candidate = storageCandidate(payload);
+    candidate.releaseUpdatedAt = QDateTime::fromString(
+        QStringLiteral("2026-07-23T10:00:00.123Z"), Qt::ISODate);
+    candidate.publishedAt = QDateTime::fromString(
+        QStringLiteral("2026-07-23T10:00:00.234Z"), Qt::ISODate);
+    candidate.manifest.updatedAt = QDateTime::fromString(
+        QStringLiteral("2026-07-23T10:00:00.345Z"), Qt::ISODate);
+    candidate.flatpak.updatedAt = QDateTime::fromString(
+        QStringLiteral("2026-07-23T10:00:00.456Z"), Qt::ISODate);
+    FakeStorageProbe probe;
+    probe.available = candidate.flatpak.size
+        + PendingUpdateStore::safetyMarginBytes();
+    PendingUpdateStore store(downloads, privateData, &probe);
+    const UpdateResult<QSharedPointer<QTemporaryFile>> part =
+        store.createDownload(candidate.flatpak.size);
+    QVERIFY(part.ok);
+    QCOMPARE(part.value->write(payload), qint64(payload.size()));
+    const UpdateResult<UpdateFileStore::OpenVerifiedFile> verified =
+        store.finalizeAndVerify(part.value, candidate);
+    QVERIFY(verified.ok);
+
+    PendingUpdateRecord record;
+    record.canonicalPath = verified.value.canonicalPath;
+    record.candidate = candidate;
+    record.verifiedSize = verified.value.size;
+    record.verifiedSha256 = verified.value.sha256;
+    verified.value.file->close();
+    QVERIFY(store.save(record));
+    const UpdateResult<PendingUpdateRecord> loaded = store.load();
+    QVERIFY(loaded.ok);
+    QCOMPARE(loaded.value.candidate.releaseUpdatedAt,
+             candidate.releaseUpdatedAt);
+    QCOMPARE(loaded.value.candidate.publishedAt, candidate.publishedAt);
+    QCOMPARE(loaded.value.candidate.manifest.updatedAt,
+             candidate.manifest.updatedAt);
+    QCOMPARE(loaded.value.candidate.flatpak.updatedAt,
+             candidate.flatpak.updatedAt);
+    QVERIFY(RollingUpdateParser::matchesCandidate(
+        candidate, loaded.value.candidate).ok);
+}
+
+void AutoUpdateTest::pendingUpdateRejectsOversizedRecord()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const QString downloads = root.path() + QStringLiteral("/Downloads");
+    const QString privateData = root.path() + QStringLiteral("/private");
+    QVERIFY(QDir().mkpath(downloads));
+    QVERIFY(QDir().mkpath(privateData));
+
+    const QByteArray payload("oversized record payload");
+    RollingUpdateCandidate candidate = storageCandidate(payload);
+    FakeStorageProbe probe;
+    probe.available = candidate.flatpak.size
+        + PendingUpdateStore::safetyMarginBytes();
+    PendingUpdateStore store(downloads, privateData, &probe);
+    const UpdateResult<QSharedPointer<QTemporaryFile>> part =
+        store.createDownload(candidate.flatpak.size);
+    QVERIFY(part.ok);
+    QCOMPARE(part.value->write(payload), qint64(payload.size()));
+    const UpdateResult<UpdateFileStore::OpenVerifiedFile> verified =
+        store.finalizeAndVerify(part.value, candidate);
+    QVERIFY(verified.ok);
+
+    PendingUpdateRecord record;
+    record.canonicalPath = verified.value.canonicalPath;
+    record.candidate = candidate;
+    record.verifiedSize = verified.value.size;
+    record.verifiedSha256 = verified.value.sha256;
+    verified.value.file->close();
+    record.candidate.flatpak.downloadUrl = QUrl(
+        QStringLiteral("https://objects.githubusercontent.com/")
+        + QString(70 * 1024, QLatin1Char('a')));
+    QVERIFY(RollingUpdateParser::validateCandidate(record.candidate).ok);
+    QVERIFY(!store.save(record));
+    QVERIFY(!QFileInfo::exists(
+        privateData + QStringLiteral("/pending-update.json")));
 }
 
 void AutoUpdateTest::rollingParser()

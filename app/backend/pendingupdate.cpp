@@ -22,6 +22,7 @@ namespace {
 
 const quint64 DownloadSafetyMargin = 64ULL * 1024ULL * 1024ULL;
 const qint64 StalePartSeconds = 24LL * 60LL * 60LL;
+const int PendingRecordLimit = 64 * 1024;
 
 class SystemStorageProbe final : public StorageProbe
 {
@@ -75,7 +76,10 @@ bool parseDecimal(const QJsonValue &value, quint64 *result, bool allowZero = fal
 
 QString timestampText(const QDateTime &dateTime)
 {
-    return dateTime.toUTC().toString(Qt::ISODate);
+    const QDateTime utc = dateTime.toUTC();
+    return utc.time().msec() == 0
+        ? utc.toString(Qt::ISODate)
+        : utc.toString(Qt::ISODateWithMs);
 }
 
 bool parseTimestamp(const QJsonValue &value, QDateTime *result)
@@ -271,7 +275,7 @@ QByteArray readSmallNoFollowFile(const QString &path, bool *ok)
     const QByteArray encoded = QFile::encodeName(path);
     struct stat before;
     if (::lstat(encoded.constData(), &before) != 0 || S_ISLNK(before.st_mode)
-            || !S_ISREG(before.st_mode) || before.st_size > 64 * 1024) {
+            || !S_ISREG(before.st_mode) || before.st_size > PendingRecordLimit) {
         return body;
     }
     const int descriptor = ::open(encoded.constData(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
@@ -281,7 +285,7 @@ QByteArray readSmallNoFollowFile(const QString &path, bool *ok)
     struct stat opened;
     if (::fstat(descriptor, &opened) != 0 || !S_ISREG(opened.st_mode)
             || before.st_dev != opened.st_dev || before.st_ino != opened.st_ino
-            || opened.st_size > 64 * 1024) {
+            || opened.st_size > PendingRecordLimit) {
         ::close(descriptor);
         return body;
     }
@@ -290,19 +294,20 @@ QByteArray readSmallNoFollowFile(const QString &path, bool *ok)
         ::close(descriptor);
         return body;
     }
-    body = file.read(64 * 1024 + 1);
+    body = file.read(PendingRecordLimit + 1);
 #else
     const QFileInfo info(path);
-    if (info.isSymLink() || !info.isFile() || info.size() > 64 * 1024) {
+    if (info.isSymLink() || !info.isFile()
+            || info.size() > PendingRecordLimit) {
         return body;
     }
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly)) {
         return body;
     }
-    body = file.read(64 * 1024 + 1);
+    body = file.read(PendingRecordLimit + 1);
 #endif
-    *ok = body.size() <= 64 * 1024;
+    *ok = body.size() <= PendingRecordLimit;
     return body;
 }
 
@@ -542,14 +547,17 @@ bool PendingUpdateStore::save(const PendingUpdateRecord &record)
     if (existing.isSymLink()) {
         return false;
     }
+    const QByteArray document =
+        QJsonDocument(serializeRecord(record)).toJson(QJsonDocument::Compact);
+    if (document.size() > PendingRecordLimit) {
+        return false;
+    }
     QSaveFile file(path);
     file.setDirectWriteFallback(false);
     if (!file.open(QIODevice::WriteOnly)) {
         return false;
     }
     file.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner);
-    const QByteArray document =
-        QJsonDocument(serializeRecord(record)).toJson(QJsonDocument::Compact);
     return file.write(document) == document.size() && file.commit();
 }
 
@@ -735,7 +743,7 @@ bool PendingUpdateStore::isOwnedFinalPath(
 {
     const QString expected = finalPath(candidate);
     return !expected.isEmpty()
-        && QDir::cleanPath(QFileInfo(path).absoluteFilePath()) == expected
+        && path == expected
         && isSafeDirectChild(m_DownloadsRoot, path);
 }
 
