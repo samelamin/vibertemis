@@ -1,7 +1,10 @@
 #pragma once
 
+#include <QByteArray>
 #include <QJsonObject>
+#include <QMetaType>
 #include <QString>
+#include <QStringList>
 #include <QtGlobal>
 
 class BuildInfo
@@ -17,6 +20,11 @@ public:
         QString version;
     };
 
+    struct Preflight {
+        bool handled;
+        QByteArray output;
+    };
+
     static Identity current();
     static bool validate(const Identity &identity);
 
@@ -28,4 +36,8 @@ public:
     static QString version();
     static bool isInternallyConsistent();
     static QJsonObject toJson();
+    static Preflight preflight(const QStringList &arguments);
+    static bool requiresParentConsoleAttachment(bool stdoutUnspecified, bool stderrUnspecified);
 };
+
+Q_DECLARE_METATYPE(BuildInfo::Identity)

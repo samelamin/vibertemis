@@ -69,6 +69,11 @@ private slots:
     void buildIdentity();
     void buildIdentityValidation_data();
     void buildIdentityValidation();
+    void buildIdentityIsMetaType();
+    void buildInfoPreflight_data();
+    void buildInfoPreflight();
+    void buildInfoPreflightConsoleAttachment_data();
+    void buildInfoPreflightConsoleAttachment();
 };
 
 static QJsonArray releases(const QByteArray &json)
@@ -267,6 +272,73 @@ void AutoUpdateTest::buildIdentityValidation()
     QFETCH(bool, valid);
 
     QCOMPARE(BuildInfo::validate(identity), valid);
+}
+
+void AutoUpdateTest::buildIdentityIsMetaType()
+{
+    QVERIFY(qMetaTypeId<BuildInfo::Identity>() > 0);
+}
+
+void AutoUpdateTest::buildInfoPreflight_data()
+{
+    QTest::addColumn<QStringList>("arguments");
+    QTest::addColumn<bool>("handled");
+
+    QTest::newRow("exact request")
+        << QStringList{QStringLiteral("Artemis"), QStringLiteral("--build-info")}
+        << true;
+    QTest::newRow("no request")
+        << QStringList{QStringLiteral("Artemis")}
+        << false;
+    QTest::newRow("extra argument")
+        << QStringList{QStringLiteral("Artemis"), QStringLiteral("--build-info"), QStringLiteral("extra")}
+        << false;
+    QTest::newRow("option before request")
+        << QStringList{QStringLiteral("Artemis"), QStringLiteral("--version"), QStringLiteral("--build-info")}
+        << false;
+}
+
+void AutoUpdateTest::buildInfoPreflight()
+{
+    QFETCH(QStringList, arguments);
+    QFETCH(bool, handled);
+
+    const BuildInfo::Preflight result = BuildInfo::preflight(arguments);
+    QCOMPARE(result.handled, handled);
+
+    if (!handled) {
+        QVERIFY(result.output.isEmpty());
+        return;
+    }
+
+    QCOMPARE(result.output.count('\n'), 1);
+    QVERIFY(result.output.endsWith('\n'));
+
+    QJsonParseError error;
+    const QJsonDocument json = QJsonDocument::fromJson(result.output, &error);
+    QCOMPARE(error.error, QJsonParseError::NoError);
+    QCOMPARE(json.toJson(QJsonDocument::Compact) + '\n', result.output);
+}
+
+void AutoUpdateTest::buildInfoPreflightConsoleAttachment_data()
+{
+    QTest::addColumn<bool>("stdoutUnspecified");
+    QTest::addColumn<bool>("stderrUnspecified");
+    QTest::addColumn<bool>("expected");
+
+    QTest::newRow("no inherited handles") << true << true << true;
+    QTest::newRow("stdout redirected") << false << true << true;
+    QTest::newRow("stderr redirected") << true << false << true;
+    QTest::newRow("both redirected") << false << false << false;
+}
+
+void AutoUpdateTest::buildInfoPreflightConsoleAttachment()
+{
+    QFETCH(bool, stdoutUnspecified);
+    QFETCH(bool, stderrUnspecified);
+    QFETCH(bool, expected);
+
+    QCOMPARE(BuildInfo::requiresParentConsoleAttachment(stdoutUnspecified, stderrUnspecified), expected);
 }
 
 QTEST_MAIN(AutoUpdateTest)

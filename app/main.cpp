@@ -15,6 +15,8 @@
 #include <QTemporaryFile>
 #include <QRegularExpression>
 
+#include <cstdio>
+
 // Don't let SDL hook our main function, since Qt is already
 // doing the same thing. This needs to be before any headers
 // that might include SDL.h themselves.
@@ -72,7 +74,10 @@ static ConsoleHandles attachParentConsole()
 
     // Do not replace redirected standard handles. A GUI-subsystem binary has no
     // inherited console handles, so attach to the parent console in that case.
-    if (AttachConsole(ATTACH_PARENT_PROCESS)) {
+    if (BuildInfo::requiresParentConsoleAttachment(
+            IS_UNSPECIFIED_HANDLE(oldHandles.output),
+            IS_UNSPECIFIED_HANDLE(oldHandles.error)) &&
+        AttachConsole(ATTACH_PARENT_PROCESS)) {
         if (IS_UNSPECIFIED_HANDLE(oldHandles.output)) {
             freopen("CONOUT$", "w", stdout);
             setvbuf(stdout, NULL, _IONBF, 0);
@@ -355,9 +360,15 @@ int main(int argc, char *argv[])
     const ConsoleHandles oldConsoleHandles = attachParentConsole();
 #endif
 
-    if (argc == 2 && QString::fromLocal8Bit(argv[1]) == QStringLiteral("--build-info")) {
+    QStringList commandLineArguments;
+    for (int i = 0; i < argc; i++) {
+        commandLineArguments.append(QString::fromLocal8Bit(argv[i]));
+    }
+    const BuildInfo::Preflight preflight = BuildInfo::preflight(commandLineArguments);
+    if (preflight.handled) {
         QCoreApplication application(argc, argv);
-        QTextStream(stdout) << QJsonDocument(BuildInfo::toJson()).toJson(QJsonDocument::Compact) << Qt::endl;
+        std::fwrite(preflight.output.constData(), 1, static_cast<size_t>(preflight.output.size()), stdout);
+        std::fflush(stdout);
         return 0;
     }
 

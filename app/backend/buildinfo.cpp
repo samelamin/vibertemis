@@ -1,5 +1,6 @@
 #include "buildinfo.h"
 
+#include <QJsonDocument>
 #include <QRegularExpression>
 
 namespace {
@@ -121,4 +122,18 @@ QJsonObject BuildInfo::toJson()
         {QStringLiteral("sequence"), QString::number(identity.sequence)},
         {QStringLiteral("internallyConsistent"), validate(identity)}
     };
+}
+
+BuildInfo::Preflight BuildInfo::preflight(const QStringList &arguments)
+{
+    if (arguments.size() != 2 || arguments.at(1) != QStringLiteral("--build-info")) {
+        return {false, QByteArray()};
+    }
+
+    return {true, QJsonDocument(toJson()).toJson(QJsonDocument::Compact) + '\n'};
+}
+
+bool BuildInfo::requiresParentConsoleAttachment(bool stdoutUnspecified, bool stderrUnspecified)
+{
+    return stdoutUnspecified || stderrUnspecified;
 }
