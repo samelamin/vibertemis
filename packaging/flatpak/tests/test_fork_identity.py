@@ -1079,7 +1079,6 @@ class ForkIdentityTests(unittest.TestCase):
                 "build-windows-arm64-portable",
                 "Build ARM64 portable package only",
             ),
-            ("build-windows-universal-installer", "Build ARM64 MSI"),
         )
 
         for job_name, step_name in arm64_steps:
@@ -1092,6 +1091,16 @@ class ForkIdentityTests(unittest.TestCase):
             with self.subTest(job=job_name, step=step_name):
                 self.assertEqual(1, step.count(qt_version_root))
                 self.assertEqual(1, step.count(qt_arm64_path))
+
+        msi_components = workflow_job_block(
+            workflow, "build-windows-msi-components"
+        )
+        self.assertIn(
+            '$env:PATH = "$env:Qt6_DIR\\bin;$env:PATH"',
+            msi_components,
+        )
+        self.assertNotIn(qt_version_root, msi_components)
+        self.assertNotIn(qt_arm64_path, msi_components)
 
         portable_job = workflow_job_block(
             workflow, "build-windows-arm64-portable"

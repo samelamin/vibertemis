@@ -298,6 +298,45 @@ class ManifestValidatorTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse(output_path.exists())
 
+    def test_ci_manifest_preparer_rejects_every_qmake_identity_mutation(self):
+        mutation_forms = (
+            "{key}=value",
+            "{key} = value",
+            " {key}= value ",
+            "{key}+=value",
+            "{key} += value",
+            "{key}+= value",
+            "{key}-=value",
+            "{key} -= value",
+            "{key}*=value",
+            "{key} *= value",
+            "{key}~=s/value/replacement/",
+            "{key} ~= s/value/replacement/",
+        )
+        for key in (
+            "VIBERTEMIS_BUILD_COMMIT",
+            "VIBERTEMIS_UPDATE_CHANNEL",
+            "VIBERTEMIS_BUILD_SEQUENCE",
+            "VIBERTEMIS_APPLICATION_ID",
+        ):
+            for index, mutation_form in enumerate(mutation_forms):
+                option = mutation_form.format(key=key)
+                manifest = valid_manifest()
+                artemis = manifest["modules"][2]
+                if index % 2:
+                    artemis["build-options"] = {
+                        "nested": {"config-opts": [option]}
+                    }
+                else:
+                    artemis["config-opts"].append(option)
+
+                with self.subTest(key=key, option=option):
+                    result, _, output_path, _ = self.run_manifest_preparer(
+                        manifest
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertFalse(output_path.exists())
+
     def test_requires_application_id_and_kde_610_runtime(self):
         manifest = valid_manifest()
         manifest["app-id"] = "com.example.Wrong"

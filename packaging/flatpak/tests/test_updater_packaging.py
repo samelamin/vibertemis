@@ -421,6 +421,106 @@ class UpdaterQmlContractTests(unittest.TestCase):
             r"sudo apt-get install[\s\S]*libdbus-1-dev",
         )
 
+    def test_windows_portable_builds_use_architecture_compatible_runners(self):
+        x64_job = self.workflow[
+            self.workflow.index("  build-windows-x64-portable:") :
+            self.workflow.index("\n  build-windows-arm64-portable:")
+        ]
+        arm64_job = self.workflow[
+            self.workflow.index("  build-windows-arm64-portable:") :
+            self.workflow.index("\n  build-windows-msi-components:")
+        ]
+
+        self.assertIn("runs-on: windows-latest", x64_job)
+        self.assertIn("arch: 'win64_msvc2022_64'", x64_job)
+        self.assertIn(
+            r'build\build-x64-release\app\release\Artemis.exe',
+            x64_job,
+        )
+
+        self.assertIn("runs-on: windows-11-arm", arm64_job)
+        self.assertNotIn("runs-on: windows-latest", arm64_job)
+        self.assertIn("host: 'windows_arm64'", arm64_job)
+        self.assertIn("arch: 'win64_msvc2022_arm64'", arm64_job)
+        self.assertNotIn("win64_msvc2022_arm64_cross_compiled", arm64_job)
+        self.assertRegex(arm64_job, r"(?m)^\s+arch: arm64\s*$")
+        self.assertNotIn("arch: amd64_arm64", arm64_job)
+        self.assertIn(
+            r'build\build-arm64-release\app\release\Artemis.exe',
+            arm64_job,
+        )
+
+    def test_windows_msi_components_use_native_matrix_and_artifact_handoff(self):
+        component_marker = "  build-windows-msi-components:"
+        self.assertIn(component_marker, self.workflow)
+        components_job = self.workflow[
+            self.workflow.index(component_marker) :
+            self.workflow.index("\n  build-windows-universal-installer:")
+        ]
+        universal_job = self.workflow[
+            self.workflow.index("  build-windows-universal-installer:") :
+            self.workflow.index("\n  build-macos-dev:")
+        ]
+
+        self.assertIn("architecture: [x64, arm64]", components_job)
+        self.assertIn(
+            "runs-on: ${{ matrix.architecture == 'arm64' && "
+            "'windows-11-arm' || 'windows-latest' }}",
+            components_job,
+        )
+        self.assertIn(
+            "arch: ${{ matrix.architecture == 'arm64' && "
+            "'arm64' || 'x64' }}",
+            components_job,
+        )
+        self.assertIn("if: matrix.architecture == 'x64'", components_job)
+        self.assertIn("uses: jurplel/install-qt-action@v3", components_job)
+        self.assertIn("host: 'windows'", components_job)
+        self.assertIn("arch: 'win64_msvc2022_64'", components_job)
+        self.assertIn("if: matrix.architecture == 'arm64'", components_job)
+        self.assertIn("uses: jurplel/install-qt-action@v4", components_job)
+        self.assertIn("host: 'windows_arm64'", components_job)
+        self.assertIn("arch: 'win64_msvc2022_arm64'", components_job)
+        self.assertNotIn(
+            "win64_msvc2022_arm64_cross_compiled",
+            components_job,
+        )
+        self.assertNotIn("arch: amd64_arm64", components_job)
+        self.assertIn(
+            r'build\build-x64-release\app\release\Artemis.exe',
+            components_job,
+        )
+        self.assertIn(
+            r'build\build-arm64-release\app\release\Artemis.exe',
+            components_job,
+        )
+        self.assertIn(
+            "name: vibertemis-windows-msi-${{ matrix.architecture }}-"
+            "${{ needs.setup-version.outputs.version }}",
+            components_job,
+        )
+
+        self.assertIn(
+            "needs: [setup-version, build-windows-msi-components]",
+            universal_job,
+        )
+        self.assertIn("runs-on: windows-latest", universal_job)
+        for architecture in ("x64", "arm64"):
+            artifact_name = (
+                f"name: vibertemis-windows-msi-{architecture}-"
+                "${{ needs.setup-version.outputs.version }}"
+            )
+            with self.subTest(architecture=architecture):
+                self.assertIn(artifact_name, universal_job)
+                self.assertIn(
+                    f"path: build/build-{architecture}-release",
+                    universal_job,
+                )
+        self.assertNotIn(
+            r'build\build-arm64-release\app\release\Artemis.exe',
+            universal_job,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

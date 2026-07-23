@@ -349,7 +349,7 @@ jobs:
   build-windows-arm64-portable:
     name: Windows ARM64 Portable Build
     needs: setup-version
-    runs-on: windows-latest
+    runs-on: windows-11-arm
     if: needs.setup-version.outputs.should_build == 'true'
     
     steps:
@@ -365,52 +365,31 @@ jobs:
         echo "Using numeric version: ${{ needs.setup-version.outputs.numeric_version }}"
         echo "Is prerelease: ${{ needs.setup-version.outputs.is_prerelease }}"
     
-    - name: Setup Qt Desktop (required for ARM64)
-      uses: jurplel/install-qt-action@v3
+    - name: Setup native Qt for ARM64
+      uses: jurplel/install-qt-action@v4
       with:
         version: ${{ env.QT_VERSION }}
-        host: 'windows'
+        host: 'windows_arm64'
         target: 'desktop'
-        arch: 'win64_msvc2022_64'
+        arch: 'win64_msvc2022_arm64'
         modules: 'qtmultimedia'
-      continue-on-error: true
-      id: qt_install_desktop
-        
-    - name: Setup Qt for ARM64
-      uses: jurplel/install-qt-action@v3
-      with:
-        version: ${{ env.QT_VERSION }}  # Use Qt 6.8.3 LTS which has ARM64 support
-        host: 'windows'
-        target: 'desktop'
-        arch: 'win64_msvc2022_arm64_cross_compiled'  # Correct ARM64 architecture name
-        set-env: false  # Don't let this override our Qt6_DIR - we'll set it manually
       continue-on-error: true
       id: qt_install_arm64
-    
-    - name: Retry Qt Desktop Installation (if failed)
-      if: steps.qt_install_desktop.outcome == 'failure'
-      uses: jurplel/install-qt-action@v3
-      with:
-        version: ${{ env.QT_VERSION }}
-        host: 'windows'
-        target: 'desktop'
-        arch: 'win64_msvc2022_64'
-        modules: 'qtmultimedia'
-    
+
     - name: Retry Qt ARM64 Installation (if failed)
       if: steps.qt_install_arm64.outcome == 'failure'
-      uses: jurplel/install-qt-action@v3
+      uses: jurplel/install-qt-action@v4
       with:
         version: ${{ env.QT_VERSION }}
-        host: 'windows'
+        host: 'windows_arm64'
         target: 'desktop'
-        arch: 'win64_msvc2022_arm64_cross_compiled'
-        set-env: false
+        arch: 'win64_msvc2022_arm64'
+        modules: 'qtmultimedia'
     
     - name: Setup MSVC for ARM64
       uses: ilammy/msvc-dev-cmd@v1
       with:
-        arch: amd64_arm64  # Cross-compile from x64 host to ARM64 target
+        arch: arm64
         
     - name: Verify MSVC ARM64 Setup
       run: |
@@ -508,9 +487,126 @@ jobs:
         retention-days: 30
         if-no-files-found: warn
 
+  build-windows-msi-components:
+    name: Windows ${{ matrix.architecture }} MSI Component
+    needs: setup-version
+    if: needs.setup-version.outputs.should_build == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        architecture: [x64, arm64]
+    runs-on: ${{ matrix.architecture == 'arm64' && 'windows-11-arm' || 'windows-latest' }}
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        submodules: 'recursive'
+        fetch-depth: 0
+
+    - name: Setup Qt for x64
+      if: matrix.architecture == 'x64'
+      uses: jurplel/install-qt-action@v3
+      with:
+        version: ${{ env.QT_VERSION }}
+        host: 'windows'
+        target: 'desktop'
+        arch: 'win64_msvc2022_64'
+        modules: 'qtmultimedia'
+      continue-on-error: true
+      id: qt_install_msi_x64
+
+    - name: Retry x64 Qt Installation (if failed)
+      if: matrix.architecture == 'x64' && steps.qt_install_msi_x64.outcome == 'failure'
+      uses: jurplel/install-qt-action@v3
+      with:
+        version: ${{ env.QT_VERSION }}
+        host: 'windows'
+        target: 'desktop'
+        arch: 'win64_msvc2022_64'
+        modules: 'qtmultimedia'
+
+    - name: Setup native Qt for ARM64
+      if: matrix.architecture == 'arm64'
+      uses: jurplel/install-qt-action@v4
+      with:
+        version: ${{ env.QT_VERSION }}
+        host: 'windows_arm64'
+        target: 'desktop'
+        arch: 'win64_msvc2022_arm64'
+        modules: 'qtmultimedia'
+      continue-on-error: true
+      id: qt_install_msi_arm64
+
+    - name: Retry ARM64 Qt Installation (if failed)
+      if: matrix.architecture == 'arm64' && steps.qt_install_msi_arm64.outcome == 'failure'
+      uses: jurplel/install-qt-action@v4
+      with:
+        version: ${{ env.QT_VERSION }}
+        host: 'windows_arm64'
+        target: 'desktop'
+        arch: 'win64_msvc2022_arm64'
+        modules: 'qtmultimedia'
+
+    - name: Setup native MSVC environment
+      uses: ilammy/msvc-dev-cmd@v1
+      with:
+        arch: ${{ matrix.architecture == 'arm64' && 'arm64' || 'x64' }}
+
+    - name: Update version file
+      env:
+        NUMERIC_VERSION: ${{ needs.setup-version.outputs.numeric_version }}
+      run: echo $env:NUMERIC_VERSION > app\version.txt
+
+    - name: Build and verify MSI component
+      env:
+        SEMANTIC_VERSION: ${{ needs.setup-version.outputs.version }}
+        TARGET_ARCH: ${{ matrix.architecture }}
+      run: |
+        $env:PATH = "$env:Qt6_DIR\bin;$env:PATH"
+        cmd /c "scripts\build-artemis-arch.bat release"
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+        if ($env:TARGET_ARCH -eq "arm64") {
+          $binary = "build\build-arm64-release\app\release\Artemis.exe"
+          $installerDirectory = "build\installer-arm64-release"
+          $handoffDirectory = "build\build-arm64-release"
+        } else {
+          $binary = "build\build-x64-release\app\release\Artemis.exe"
+          $installerDirectory = "build\installer-x64-release"
+          $handoffDirectory = "build\build-x64-release"
+        }
+        $buildInfo = (& $binary --build-info | ConvertFrom-Json)
+        if ($LASTEXITCODE -ne 0) { throw "$binary --build-info failed" }
+        $expectedVersion = (Get-Content app\version.txt -Raw).Trim()
+        if ($buildInfo.schema -ne 1 -or
+            $buildInfo.applicationId -ne $env:VIBERTEMIS_APPLICATION_ID -or
+            $buildInfo.commit -ne $env:VIBERTEMIS_BUILD_COMMIT -or
+            $buildInfo.channel -ne $env:VIBERTEMIS_UPDATE_CHANNEL -or
+            [string]$buildInfo.sequence -ne "0" -or
+            $buildInfo.version -ne $expectedVersion -or
+            $buildInfo.internallyConsistent -ne $true) {
+          throw "Unexpected $env:TARGET_ARCH MSI build identity: $($buildInfo | ConvertTo-Json -Compress)"
+        }
+
+        $msiFile = Get-ChildItem -Path $installerDirectory -Filter "*.msi" |
+          Select-Object -First 1
+        if (-not $msiFile) {
+          throw "$env:TARGET_ARCH MSI not found in $installerDirectory"
+        }
+        Copy-Item $msiFile.FullName "$handoffDirectory\Artemis.msi" -Force
+
+    - name: Upload verified MSI component
+      uses: actions/upload-artifact@v4
+      with:
+        name: vibertemis-windows-msi-${{ matrix.architecture }}-${{ needs.setup-version.outputs.version }}
+        path: build/build-${{ matrix.architecture }}-release/Artemis.msi
+        retention-days: 1
+        if-no-files-found: error
+
   build-windows-universal-installer:
     name: Windows Universal Installer
-    needs: setup-version
+    needs: [setup-version, build-windows-msi-components]
     runs-on: windows-latest
     if: needs.setup-version.outputs.should_build == 'true'
     
@@ -520,49 +616,19 @@ jobs:
       with:
         submodules: 'recursive'
         fetch-depth: 0
-    
-    - name: Setup Qt
-      uses: jurplel/install-qt-action@v3
+
+    - name: Download verified x64 MSI component
+      uses: actions/download-artifact@v4
       with:
-        version: ${{ env.QT_VERSION }}
-        host: 'windows'
-        target: 'desktop'
-        arch: 'win64_msvc2022_64'
-        modules: 'qtmultimedia'
-      continue-on-error: true
-      id: qt_install_universal_desktop
-        
-    - name: Setup Qt for ARM64
-      uses: jurplel/install-qt-action@v3
+        name: vibertemis-windows-msi-x64-${{ needs.setup-version.outputs.version }}
+        path: build/build-x64-release
+
+    - name: Download verified ARM64 MSI component
+      uses: actions/download-artifact@v4
       with:
-        version: ${{ env.QT_VERSION }}
-        host: 'windows'
-        target: 'desktop'
-        arch: 'win64_msvc2022_arm64_cross_compiled'
-        set-env: false
-      continue-on-error: true
-      id: qt_install_universal_arm64
-    
-    - name: Retry Qt Desktop Installation (if failed)
-      if: steps.qt_install_universal_desktop.outcome == 'failure'
-      uses: jurplel/install-qt-action@v3
-      with:
-        version: ${{ env.QT_VERSION }}
-        host: 'windows'
-        target: 'desktop'
-        arch: 'win64_msvc2022_64'
-        modules: 'qtmultimedia'
-    
-    - name: Retry Qt ARM64 Installation (if failed)
-      if: steps.qt_install_universal_arm64.outcome == 'failure'
-      uses: jurplel/install-qt-action@v3
-      with:
-        version: ${{ env.QT_VERSION }}
-        host: 'windows'
-        target: 'desktop'
-        arch: 'win64_msvc2022_arm64_cross_compiled'
-        set-env: false
-    
+        name: vibertemis-windows-msi-arm64-${{ needs.setup-version.outputs.version }}
+        path: build/build-arm64-release
+
     - name: Setup build environment
       run: |
         # Install .NET SDK first (required for WiX v5)
@@ -576,89 +642,6 @@ jobs:
         
         # Also install Visual Studio Build Tools (includes MSBuild) for compatibility
         choco install visualstudio2022buildtools --package-parameters "--includeRecommended --includeOptional --quiet --wait" -y
-    
-    - name: Setup MSVC
-      uses: ilammy/msvc-dev-cmd@v1
-    
-    - name: Setup MSVC for ARM64
-      uses: ilammy/msvc-dev-cmd@v1
-      with:
-        arch: amd64_arm64
-    
-    - name: Update version file
-      env:
-        NUMERIC_VERSION: ${{ needs.setup-version.outputs.numeric_version }}
-      run: |
-        echo $env:NUMERIC_VERSION > app\version.txt
-
-    - name: Build x64 MSI
-      env:
-        SEMANTIC_VERSION: ${{ needs.setup-version.outputs.version }}
-      run: |
-        $env:PATH = "$env:Qt6_DIR\bin;$env:PATH"
-        cmd /c "scripts\build-artemis-arch.bat release"
-        
-        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-        $binary = "build\build-x64-release\app\release\Artemis.exe"
-        $buildInfo = (& $binary --build-info | ConvertFrom-Json)
-        if ($LASTEXITCODE -ne 0) { throw "$binary --build-info failed" }
-        $expectedVersion = (Get-Content app\version.txt -Raw).Trim()
-        if ($buildInfo.schema -ne 1 -or
-            $buildInfo.applicationId -ne $env:VIBERTEMIS_APPLICATION_ID -or
-            $buildInfo.commit -ne $env:VIBERTEMIS_BUILD_COMMIT -or
-            $buildInfo.channel -ne $env:VIBERTEMIS_UPDATE_CHANNEL -or
-            [string]$buildInfo.sequence -ne "0" -or
-            $buildInfo.version -ne $expectedVersion -or
-            $buildInfo.internallyConsistent -ne $true) {
-          throw "Unexpected x64 MSI build identity: $($buildInfo | ConvertTo-Json -Compress)"
-        }
-        
-        # Ensure MSI was created
-        $msiFile = Get-ChildItem -Path "build\installer-x64-release" -Filter "*.msi" | Select-Object -First 1
-        if (-not $msiFile) {
-          echo "ERROR: x64 MSI not found in build\installer-x64-release"
-          exit 1
-        }
-        
-        echo "x64 MSI created successfully: $($msiFile.FullName)"
-    
-    - name: Build ARM64 MSI
-      env:
-        SEMANTIC_VERSION: ${{ needs.setup-version.outputs.version }}
-      run: |
-        # Set up Qt ARM64 environment
-        $qtVersionRoot = Join-Path $env:RUNNER_WORKSPACE "Qt\$env:QT_VERSION"
-        $qtArm64Path = Join-Path $qtVersionRoot "msvc2022_arm64"
-        $env:Qt6_DIR = $qtArm64Path
-        $env:PATH = "$qtArm64Path\bin;$env:PATH"
-        
-        cmd /c "scripts\build-artemis-arch.bat release"
-        
-        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-        $binary = "build\build-arm64-release\app\release\Artemis.exe"
-        $buildInfo = (& $binary --build-info | ConvertFrom-Json)
-        if ($LASTEXITCODE -ne 0) { throw "$binary --build-info failed" }
-        $expectedVersion = (Get-Content app\version.txt -Raw).Trim()
-        if ($buildInfo.schema -ne 1 -or
-            $buildInfo.applicationId -ne $env:VIBERTEMIS_APPLICATION_ID -or
-            $buildInfo.commit -ne $env:VIBERTEMIS_BUILD_COMMIT -or
-            $buildInfo.channel -ne $env:VIBERTEMIS_UPDATE_CHANNEL -or
-            [string]$buildInfo.sequence -ne "0" -or
-            $buildInfo.version -ne $expectedVersion -or
-            $buildInfo.internallyConsistent -ne $true) {
-          throw "Unexpected ARM64 MSI build identity: $($buildInfo | ConvertTo-Json -Compress)"
-        }
-        
-        # Ensure MSI was created
-        $msiFile = Get-ChildItem -Path "build\installer-arm64-release" -Filter "*.msi" | Select-Object -First 1
-        if (-not $msiFile) {
-          echo "ERROR: ARM64 MSI not found in build\installer-arm64-release"
-          exit 1
-        }
-        
-        echo "ARM64 MSI created successfully: $($msiFile.FullName)"
     
     - name: Generate Universal Bundle  
       env:

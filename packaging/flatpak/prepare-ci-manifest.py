@@ -20,6 +20,9 @@ IDENTITY_KEYS = (
 )
 COMMIT_PATTERN = re.compile(r"[0-9a-f]{40}")
 SEQUENCE_PATTERN = re.compile(r"(?:0|[1-9][0-9]*)")
+QMAKE_ASSIGNMENT_PATTERN = re.compile(
+    r"^\s*(?P<key>[A-Za-z_][A-Za-z0-9_]*)\s*(?:\+=|-=|\*=|~=|=)"
+)
 
 
 def fail(message):
@@ -118,9 +121,12 @@ def prepare_manifest(manifest, arguments):
     for option in walk_config_options(artemis):
         if not isinstance(option, str):
             fail("artemis config-opts must contain only strings")
-        key = option.split("=", 1)[0].strip()
-        if key in IDENTITY_KEYS:
-            fail(f"duplicate build identity option: {key}")
+        assignment = QMAKE_ASSIGNMENT_PATTERN.match(option)
+        if assignment is not None and assignment.group("key") in IDENTITY_KEYS:
+            fail(
+                "duplicate build identity option: "
+                f"{assignment.group('key')}"
+            )
 
     options.extend(
         (
