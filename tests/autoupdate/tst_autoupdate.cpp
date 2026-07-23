@@ -87,6 +87,8 @@ private slots:
     void rollingParserRequiresNewerSequence();
     void steamDeckSessionClassifiesEnvironment_data();
     void steamDeckSessionClassifiesEnvironment();
+    void rollingParser();
+    void steamDeckSession();
 };
 
 static const QString RollingCommit(40, QLatin1Char('b'));
@@ -449,6 +451,12 @@ void AutoUpdateTest::rollingParserRejectsInvalidReleaseAndManifest_data()
         << replaceOnce(validReleaseJson(), "artemis-steam-deck-update.json", "other.json") << validManifestJson() << true;
     QTest::newRow("foreign API repository")
         << replaceOnce(validReleaseJson(), "samelamin/vibertemis/releases/assets/11223", "evil/vibertemis/releases/assets/11223") << validManifestJson() << true;
+    QTest::newRow("API endpoint is not an asset")
+        << replaceOnce(validReleaseJson(), "releases/assets/11223", "issues/1") << validManifestJson() << true;
+    QTest::newRow("API asset ID does not bind")
+        << replaceOnce(validReleaseJson(), "assets/11223", "assets/11224") << validManifestJson() << true;
+    QTest::newRow("API and download URLs cannot swap")
+        << replaceOnce(validReleaseJson(), "https://api.github.com/repos/samelamin/vibertemis/releases/assets/11223", "https://github.com/samelamin/vibertemis/releases/download/steam-deck-latest/artemis-steam-deck-update.json") << validManifestJson() << true;
     QTest::newRow("non HTTPS")
         << replaceOnce(validReleaseJson(), "https://github.com/samelamin/vibertemis/releases/tag", "http://github.com/samelamin/vibertemis/releases/tag") << validManifestJson() << true;
     QTest::newRow("URL user info")
@@ -563,8 +571,18 @@ void AutoUpdateTest::rollingParserResolvesAnnotatedTags()
         RollingUpdateParser::resolveTagCommit(ref.value, QList<RollingTagObject>{tag.value, commit.value});
     QVERIFY(resolved.ok);
     QCOMPARE(resolved.value.tagRefObjectId, TagObject);
-    QCOMPARE(resolved.value.tagObjectId, RollingCommit);
+    QCOMPARE(resolved.value.tagObjectId, TagCommit);
     QCOMPARE(resolved.value.commit, RollingCommit);
+
+    const UpdateResult<RollingTagObject> lightweight = RollingUpdateParser::parseTagReference(
+        QStringLiteral("{\"object\":{\"type\":\"commit\",\"sha\":\"%1\"}}").arg(RollingCommit).toUtf8());
+    QVERIFY(lightweight.ok);
+    const UpdateResult<TagResolution> lightweightResolved =
+        RollingUpdateParser::resolveTagCommit(lightweight.value, QList<RollingTagObject>());
+    QVERIFY(lightweightResolved.ok);
+    QCOMPARE(lightweightResolved.value.tagRefObjectId, RollingCommit);
+    QVERIFY(lightweightResolved.value.tagObjectId.isEmpty());
+    QCOMPARE(lightweightResolved.value.commit, RollingCommit);
 
     const UpdateResult<RollingUpdateCandidate> release = RollingUpdateParser::parseRelease(validReleaseJson());
     QVERIFY(release.ok);
@@ -575,11 +593,18 @@ void AutoUpdateTest::rollingParserResolvesAnnotatedTags()
         RollingUpdateParser::bindTagResolution(candidate.value, resolved.value);
     QVERIFY(bound.ok);
     QCOMPARE(bound.value.tagRefObjectId, TagObject);
-    QCOMPARE(bound.value.tagObjectId, RollingCommit);
+    QCOMPARE(bound.value.tagObjectId, TagCommit);
     QVERIFY(!RollingUpdateParser::matchesTagResolution(
-        bound.value, TagResolution{QString(40, QLatin1Char('f')), RollingCommit, RollingCommit}).ok);
+        bound.value, TagResolution{QString(40, QLatin1Char('f')), TagCommit, RollingCommit}).ok);
     QVERIFY(!RollingUpdateParser::matchesTagResolution(
         bound.value, TagResolution{TagObject, QString(40, QLatin1Char('f')), RollingCommit}).ok);
+
+    RollingUpdateCandidate changedTagField = bound.value;
+    changedTagField.tagRefObjectId = QString(40, QLatin1Char('f'));
+    QVERIFY(!RollingUpdateParser::matchesCandidate(bound.value, changedTagField).ok);
+    changedTagField = bound.value;
+    changedTagField.tagObjectId = QString(40, QLatin1Char('f'));
+    QVERIFY(!RollingUpdateParser::matchesCandidate(bound.value, changedTagField).ok);
 }
 
 void AutoUpdateTest::rollingParserRejectsInvalidTagGraphs()
@@ -651,6 +676,31 @@ void AutoUpdateTest::steamDeckSessionClassifiesEnvironment()
     QFETCH(QProcessEnvironment, environment);
     QFETCH(SteamDeckSession::Mode, expected);
     QCOMPARE(SteamDeckSession::classify(environment), expected);
+}
+
+void AutoUpdateTest::rollingParser()
+{
+    const UpdateResult<RollingUpdateCandidate> release = RollingUpdateParser::parseRelease(validReleaseJson());
+    QVERIFY(release.ok);
+    const UpdateResult<RollingUpdateCandidate> candidate =
+        RollingUpdateParser::parseManifest(validManifestJson(), release.value);
+    QVERIFY(candidate.ok);
+    QCOMPARE(candidate.value.sequence, quint64(5678));
+    QVERIFY(!RollingUpdateParser::parseRelease(replaceOnce(
+        validReleaseJson(), "releases/assets/11223", "issues/1")).ok);
+}
+
+void AutoUpdateTest::steamDeckSession()
+{
+    QProcessEnvironment gaming;
+    gaming.insert(QStringLiteral("GAMESCOPE_WAYLAND_DISPLAY"), QStringLiteral("gamescope-0"));
+    QCOMPARE(SteamDeckSession::classify(gaming), SteamDeckSession::Gaming);
+
+    QProcessEnvironment desktop;
+    desktop.insert(QStringLiteral("XDG_CURRENT_DESKTOP"), QStringLiteral("KDE"));
+    desktop.insert(QStringLiteral("KDE_FULL_SESSION"), QStringLiteral("true"));
+    desktop.insert(QStringLiteral("XDG_SESSION_TYPE"), QStringLiteral("wayland"));
+    QCOMPARE(SteamDeckSession::classify(desktop), SteamDeckSession::Desktop);
 }
 
 QTEST_MAIN(AutoUpdateTest)

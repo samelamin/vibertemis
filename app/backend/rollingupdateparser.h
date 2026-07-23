@@ -64,6 +64,8 @@ public:
                                              const QByteArray &document);
     static UpdateResult<bool> matchesManifest(const RollingUpdateCandidate &expected,
                                               const QByteArray &document);
+    static UpdateResult<bool> matchesCandidate(const RollingUpdateCandidate &expected,
+                                               const RollingUpdateCandidate &actual);
     static UpdateResult<bool> matchesTagResolution(const RollingUpdateCandidate &expected,
                                                    const TagResolution &resolution);
     static UpdateResult<bool> isInstallable(const QString &runningCommit,

@@ -101,6 +101,30 @@ bool approvedCdnHost(const QString &host)
     return false;
 }
 
+bool approvedApiAssetUrl(const QUrl &url, quint64 id)
+{
+    const QString expectedPath = QStringLiteral("/repos/") + QString::fromLatin1(Repository)
+        + QStringLiteral("/releases/assets/") + QString::number(id);
+    return RollingUpdateParser::isApprovedUrl(url)
+        && url.host().compare(QStringLiteral("api.github.com"), Qt::CaseInsensitive) == 0
+        && url.path() == expectedPath;
+}
+
+bool approvedReleaseDownloadUrl(const QUrl &url, const QString &name)
+{
+    if (!RollingUpdateParser::isApprovedUrl(url)) {
+        return false;
+    }
+    const QString host = url.host().toLower();
+    if (host == QStringLiteral("github.com")) {
+        const QString expectedPath = QStringLiteral("/") + QString::fromLatin1(Repository)
+            + QStringLiteral("/releases/download/") + QString::fromLatin1(RollingTag)
+            + QLatin1Char('/') + name;
+        return url.path() == expectedPath;
+    }
+    return approvedCdnHost(host) && url.path().size() > 1;
+}
+
 UpdateResult<RollingAssetIdentity> parseAsset(const QJsonObject &asset)
 {
     RollingAssetIdentity result;
@@ -118,8 +142,8 @@ UpdateResult<RollingAssetIdentity> parseAsset(const QJsonObject &asset)
     result.name = asset.value(QStringLiteral("name")).toString();
     result.apiUrl = QUrl(asset.value(QStringLiteral("url")).toString());
     result.downloadUrl = QUrl(asset.value(QStringLiteral("browser_download_url")).toString());
-    if (!RollingUpdateParser::isApprovedUrl(result.apiUrl)
-        || !RollingUpdateParser::isApprovedUrl(result.downloadUrl)) {
+    if (!approvedApiAssetUrl(result.apiUrl, result.id)
+        || !approvedReleaseDownloadUrl(result.downloadUrl, result.name)) {
         return failure<RollingAssetIdentity>(UpdateError::UnsafeUrl,
                                              QStringLiteral("Release asset URL is not approved."));
     }
@@ -148,6 +172,8 @@ bool sameCandidate(const RollingUpdateCandidate &left, const RollingUpdateCandid
         && left.releaseUpdatedAt == right.releaseUpdatedAt
         && left.sourceCommit == right.sourceCommit
         && left.sequence == right.sequence
+        && left.tagRefObjectId == right.tagRefObjectId
+        && left.tagObjectId == right.tagObjectId
         && left.manifestSchema == right.manifestSchema
         && left.publishedAt == right.publishedAt
         && sameAsset(left.manifest, right.manifest, false)
@@ -336,6 +362,13 @@ UpdateResult<TagResolution> RollingUpdateParser::resolveTagCommit(
         return failure<TagResolution>(UpdateError::InvalidMetadata,
                                       QStringLiteral("Tag reference is invalid."));
     }
+    if (reference.type == QStringLiteral("commit")) {
+        UpdateResult<TagResolution> result;
+        result.ok = true;
+        result.value = TagResolution{reference.id, QString(), reference.targetId};
+        return result;
+    }
+
     QString current = reference.targetId;
     QSet<QString> visited;
     for (;;) {
@@ -353,7 +386,7 @@ UpdateResult<TagResolution> RollingUpdateParser::resolveTagCommit(
             if (object.type == QStringLiteral("commit") && fullLowerHex(object.targetId, 40)) {
                 UpdateResult<TagResolution> result;
                 result.ok = true;
-                result.value = TagResolution{reference.targetId, object.targetId, object.targetId};
+                result.value = TagResolution{reference.id, object.id, object.targetId};
                 return result;
             }
             if (object.type != QStringLiteral("tag") || !fullLowerHex(object.targetId, 40)) {
@@ -374,7 +407,7 @@ UpdateResult<RollingUpdateCandidate> RollingUpdateParser::bindTagResolution(
     const RollingUpdateCandidate &candidate, const TagResolution &resolution)
 {
     if (!fullLowerHex(resolution.tagRefObjectId, 40)
-        || !fullLowerHex(resolution.tagObjectId, 40)
+        || (!resolution.tagObjectId.isEmpty() && !fullLowerHex(resolution.tagObjectId, 40))
         || resolution.commit != candidate.sourceCommit) {
         return failure<RollingUpdateCandidate>(UpdateError::InvalidMetadata,
                                                QStringLiteral("Tag does not resolve to the published commit."));
@@ -428,6 +461,19 @@ UpdateResult<bool> RollingUpdateParser::matchesManifest(const RollingUpdateCandi
     if (!parsed.ok || !sameCandidate(parsed.value, expected)) {
         return failure<bool>(UpdateError::PublisherChanged,
                              QStringLiteral("Update manifest changed."));
+    }
+    UpdateResult<bool> result;
+    result.ok = true;
+    result.value = true;
+    return result;
+}
+
+UpdateResult<bool> RollingUpdateParser::matchesCandidate(const RollingUpdateCandidate &expected,
+                                                         const RollingUpdateCandidate &actual)
+{
+    if (!sameCandidate(expected, actual)) {
+        return failure<bool>(UpdateError::PublisherChanged,
+                             QStringLiteral("Rolling update metadata changed."));
     }
     UpdateResult<bool> result;
     result.ok = true;
