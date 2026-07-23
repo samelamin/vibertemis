@@ -1984,6 +1984,19 @@ Flickable {
                 anchors.fill: parent
                 spacing: 10
 
+                Button {
+                    id: checkForUpdatesButton
+                    text: qsTr("Check for updates")
+                    activeFocusOnTab: true
+                    Keys.onReturnPressed: clicked()
+                    Keys.onEnterPressed: clicked()
+                    Keys.onRightPressed: nextItemInFocusChain(true).forceActiveFocus(Qt.TabFocus)
+                    Keys.onLeftPressed: nextItemInFocusChain(false).forceActiveFocus(Qt.TabFocus)
+                    onClicked: {
+                        window.checkForUpdatesFromSettings()
+                    }
+                }
+
                 ClipboardSettings {
                     id: clipboardSettings
                     width: parent.width

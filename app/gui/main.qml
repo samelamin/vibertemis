@@ -98,6 +98,11 @@ ApplicationWindow {
         }
     }
 
+    function checkForUpdatesFromSettings() {
+        AutoUpdateChecker.checkNow()
+        updateDialog.openForUserAction()
+    }
+
     StackView {
         id: stackView
         anchors.fill: parent
@@ -342,8 +347,6 @@ ApplicationWindow {
             }
 
             NavigableToolButton {
-                property string browserUrl: ""
-
                 id: updateButton
 
                 iconSource: "qrc:/res/update.svg"
@@ -352,25 +355,22 @@ ApplicationWindow {
                 ToolTip.timeout: 3000
                 ToolTip.visible: hovered || visible
 
-                // Invisible until we get a callback notifying us that
-                // an update is available
-                visible: false
+                // Keep the entry available while a verified download is
+                // preserved so Later never strands controller-only users.
+                visible: AutoUpdateChecker.releaseUrl !== ""
 
                 onClicked: {
-                    if (SystemProperties.hasBrowser) {
-                        Qt.openUrlExternally(browserUrl);
+                    if (AutoUpdateChecker.rollingInstallSupported) {
+                        updateDialog.openForUserAction()
+                    } else {
+                        AutoUpdateChecker.openReleasePage()
                     }
                 }
 
-                function updateAvailable(version, url)
-                {
-                    ToolTip.text = qsTr("Update available for Vibertemis: Version %1").arg(version)
-                    updateButton.browserUrl = url
-                    updateButton.visible = true
-                }
+                ToolTip.text: qsTr("Update available for Vibertemis: Version %1")
+                                  .arg(AutoUpdateChecker.availableBuild)
 
                 Component.onCompleted: {
-                    AutoUpdateChecker.onUpdateAvailable.connect(updateAvailable)
                     AutoUpdateChecker.start()
                 }
 
@@ -454,6 +454,10 @@ ApplicationWindow {
                    "Your streaming performance may be severely degraded in this configuration.")
         helpText: qsTr("Click the Help button to open the Upstream Artemis documentation for solving this problem.")
         helpUrl: "https://github.com/wjbeckett/artemis/wiki/Fixing-Hardware-Decoding-Problems"
+    }
+
+    UpdateDialog {
+        id: updateDialog
     }
 
     ErrorMessageDialog {
