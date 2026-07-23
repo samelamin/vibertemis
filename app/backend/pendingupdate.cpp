@@ -1,5 +1,6 @@
 #include "pendingupdate.h"
 
+#include <cerrno>
 #include <limits>
 
 #include <QCryptographicHash>
@@ -267,49 +268,125 @@ bool candidatesMatch(const RollingUpdateCandidate &left,
         && RollingUpdateParser::matchesCandidate(left, right).ok;
 }
 
-QByteArray readSmallNoFollowFile(const QString &path, bool *ok)
+UpdateResult<QByteArray> recordReadFailure(UpdateError error,
+                                           const QString &message)
 {
-    *ok = false;
-    QByteArray body;
-#ifdef Q_OS_UNIX
-    const QByteArray encoded = QFile::encodeName(path);
-    struct stat before;
-    if (::lstat(encoded.constData(), &before) != 0 || S_ISLNK(before.st_mode)
-            || !S_ISREG(before.st_mode) || before.st_size > PendingRecordLimit) {
-        return body;
-    }
-    const int descriptor = ::open(encoded.constData(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
-    if (descriptor < 0) {
-        return body;
-    }
-    struct stat opened;
-    if (::fstat(descriptor, &opened) != 0 || !S_ISREG(opened.st_mode)
-            || before.st_dev != opened.st_dev || before.st_ino != opened.st_ino
-            || opened.st_size > PendingRecordLimit) {
-        ::close(descriptor);
-        return body;
-    }
-    QFile file;
-    if (!file.open(descriptor, QIODevice::ReadOnly, QFileDevice::AutoCloseHandle)) {
-        ::close(descriptor);
-        return body;
-    }
-    body = file.read(PendingRecordLimit + 1);
-#else
-    const QFileInfo info(path);
-    if (info.isSymLink() || !info.isFile()
-            || info.size() > PendingRecordLimit) {
-        return body;
-    }
-    QFile file(path);
-    if (!file.open(QIODevice::ReadOnly)) {
-        return body;
-    }
-    body = file.read(PendingRecordLimit + 1);
-#endif
-    *ok = body.size() <= PendingRecordLimit;
-    return body;
+    UpdateResult<QByteArray> result;
+    result.error = error;
+    result.message = message;
+    return result;
 }
+
+class SystemPendingRecordReader final : public PendingRecordReader
+{
+public:
+    UpdateResult<QByteArray> read(const QString &path,
+                                  qint64 maximumSize) const override
+    {
+#ifdef Q_OS_UNIX
+        const QByteArray encoded = QFile::encodeName(path);
+        struct stat before;
+        if (::lstat(encoded.constData(), &before) != 0) {
+            const int error = errno;
+            return recordReadFailure(
+                error == ENOENT || error == ENOTDIR
+                    ? UpdateError::InvalidMetadata : UpdateError::IoFailure,
+                error == ENOENT || error == ENOTDIR
+                    ? QStringLiteral("No pending update record was found")
+                    : QStringLiteral("The pending update record could not be inspected"));
+        }
+        if (S_ISLNK(before.st_mode) || !S_ISREG(before.st_mode)) {
+            return recordReadFailure(
+                UpdateError::UnsafePath,
+                QStringLiteral("The pending update record path is unsafe"));
+        }
+        if (before.st_size < 0 || before.st_size > maximumSize) {
+            return recordReadFailure(
+                UpdateError::InvalidMetadata,
+                QStringLiteral("The pending update record is too large"));
+        }
+        const int descriptor = ::open(
+            encoded.constData(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+        if (descriptor < 0) {
+            const int error = errno;
+            return recordReadFailure(
+                error == ENOENT || error == ENOTDIR
+                    ? UpdateError::InvalidMetadata
+                    : error == ELOOP ? UpdateError::UnsafePath
+                                     : UpdateError::IoFailure,
+                QStringLiteral("The pending update record could not be opened"));
+        }
+        struct stat opened;
+        if (::fstat(descriptor, &opened) != 0) {
+            ::close(descriptor);
+            return recordReadFailure(
+                UpdateError::IoFailure,
+                QStringLiteral("The pending update record could not be inspected"));
+        }
+        if (!S_ISREG(opened.st_mode)
+                || before.st_dev != opened.st_dev
+                || before.st_ino != opened.st_ino) {
+            ::close(descriptor);
+            return recordReadFailure(
+                UpdateError::UnsafePath,
+                QStringLiteral("The pending update record changed while opening"));
+        }
+        if (opened.st_size < 0 || opened.st_size > maximumSize) {
+            ::close(descriptor);
+            return recordReadFailure(
+                UpdateError::InvalidMetadata,
+                QStringLiteral("The pending update record is too large"));
+        }
+        QFile file;
+        if (!file.open(descriptor, QIODevice::ReadOnly,
+                       QFileDevice::AutoCloseHandle)) {
+            ::close(descriptor);
+            return recordReadFailure(
+                UpdateError::IoFailure,
+                QStringLiteral("The pending update record could not be read"));
+        }
+#else
+        const QFileInfo info(path);
+        if (!info.exists()) {
+            return recordReadFailure(
+                UpdateError::InvalidMetadata,
+                QStringLiteral("No pending update record was found"));
+        }
+        if (info.isSymLink() || !info.isFile()) {
+            return recordReadFailure(
+                UpdateError::UnsafePath,
+                QStringLiteral("The pending update record path is unsafe"));
+        }
+        if (info.size() < 0 || info.size() > maximumSize) {
+            return recordReadFailure(
+                UpdateError::InvalidMetadata,
+                QStringLiteral("The pending update record is too large"));
+        }
+        QFile file(path);
+        if (!file.open(QIODevice::ReadOnly)) {
+            return recordReadFailure(
+                QFileInfo::exists(path)
+                    ? UpdateError::IoFailure : UpdateError::InvalidMetadata,
+                QStringLiteral("The pending update record could not be opened"));
+        }
+#endif
+        const QByteArray body = file.read(maximumSize + 1);
+        if (file.error() != QFileDevice::NoError) {
+            return recordReadFailure(
+                UpdateError::IoFailure,
+                QStringLiteral("The pending update record could not be read"));
+        }
+        if (body.size() > maximumSize) {
+            return recordReadFailure(
+                UpdateError::InvalidMetadata,
+                QStringLiteral("The pending update record is too large"));
+        }
+        UpdateResult<QByteArray> result;
+        result.ok = true;
+        result.value = body;
+        return result;
+    }
+};
 
 bool isSafeDirectChild(const QString &root, const QString &path)
 {
@@ -339,18 +416,24 @@ UpdateResult<UpdateFileStore::OpenVerifiedFile> verifiedResult(
 
 PendingUpdateStore::PendingUpdateStore(QString downloadsRoot,
                                        QString privateDataRoot,
-                                       StorageProbe *probe) :
+                                       StorageProbe *probe,
+                                       PendingRecordReader *recordReader) :
     m_DownloadsRoot(downloadsRoot.isEmpty()
                         ? QStandardPaths::writableLocation(QStandardPaths::DownloadLocation)
                         : QDir::cleanPath(downloadsRoot)),
     m_PrivateDataRoot(privateDataRoot.isEmpty()
                           ? QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
                           : QDir::cleanPath(privateDataRoot)),
-    m_Probe(probe)
+    m_Probe(probe),
+    m_RecordReader(recordReader)
 {
     if (!m_Probe) {
         m_OwnedProbe.reset(new SystemStorageProbe);
         m_Probe = m_OwnedProbe.data();
+    }
+    if (!m_RecordReader) {
+        m_OwnedRecordReader.reset(new SystemPendingRecordReader);
+        m_RecordReader = m_OwnedRecordReader.data();
     }
 }
 
@@ -566,10 +649,15 @@ bool PendingUpdateStore::save(const PendingUpdateRecord &record)
 UpdateResult<PendingUpdateRecord> PendingUpdateStore::load()
 {
     UpdateResult<PendingUpdateRecord> result;
-    bool readOk = false;
-    const QByteArray document = readSmallNoFollowFile(recordPath(), &readOk);
+    const UpdateResult<QByteArray> document =
+        m_RecordReader->read(recordPath(), PendingRecordLimit);
+    if (!document.ok) {
+        result.error = document.error;
+        result.message = document.message;
+        return result;
+    }
     PendingUpdateRecord record;
-    if (!readOk || !parseRecord(document, &record)
+    if (!parseRecord(document.value, &record)
             || !isOwnedFinalPath(record.canonicalPath, record.candidate)) {
         QFile::remove(recordPath());
         result.error = UpdateError::InvalidMetadata;
@@ -600,10 +688,11 @@ UpdateResult<PendingUpdateRecord> PendingUpdateStore::load()
 
 void PendingUpdateStore::clear(bool removeOwnedPayloadRequested)
 {
-    bool readOk = false;
-    const QByteArray document = readSmallNoFollowFile(recordPath(), &readOk);
+    const UpdateResult<QByteArray> document =
+        m_RecordReader->read(recordPath(), PendingRecordLimit);
     PendingUpdateRecord record;
-    if (removeOwnedPayloadRequested && readOk && parseRecord(document, &record)
+    if (removeOwnedPayloadRequested && document.ok
+            && parseRecord(document.value, &record)
             && isOwnedFinalPath(record.canonicalPath, record.candidate)) {
         removeOwnedPayload(record);
     }

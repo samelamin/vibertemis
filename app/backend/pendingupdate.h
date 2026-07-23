@@ -20,6 +20,14 @@ public:
     virtual void verificationFileOpened(const QString &) const {}
 };
 
+class PendingRecordReader
+{
+public:
+    virtual ~PendingRecordReader() {}
+    virtual UpdateResult<QByteArray> read(const QString &path,
+                                          qint64 maximumSize) const = 0;
+};
+
 struct PendingUpdateRecord {
     int schema = 1;
     QString canonicalPath;
@@ -59,7 +67,8 @@ class PendingUpdateStore final : public UpdateFileStore
 public:
     explicit PendingUpdateStore(QString downloadsRoot = QString(),
                                 QString privateDataRoot = QString(),
-                                StorageProbe *probe = nullptr);
+                                StorageProbe *probe = nullptr,
+                                PendingRecordReader *recordReader = nullptr);
     ~PendingUpdateStore() override;
 
     static quint64 safetyMarginBytes();
@@ -95,4 +104,6 @@ private:
     QString m_PrivateDataRoot;
     StorageProbe *m_Probe;
     QScopedPointer<StorageProbe> m_OwnedProbe;
+    PendingRecordReader *m_RecordReader;
+    QScopedPointer<PendingRecordReader> m_OwnedRecordReader;
 };

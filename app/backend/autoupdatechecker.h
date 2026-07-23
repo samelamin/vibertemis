@@ -15,6 +15,14 @@
 class QNetworkReply;
 class QCryptographicHash;
 
+class UpdateCheckPolicy
+{
+public:
+    virtual ~UpdateCheckPolicy() {}
+    virtual bool rollingInstallSupported() const = 0;
+    virtual bool stableCheckSupported() const = 0;
+};
+
 class AutoUpdateChecker : public QObject
 {
     Q_OBJECT
@@ -52,6 +60,11 @@ public:
                       UpdateFileStore *files,
                       SessionModeProvider *session,
                       QObject *parent = nullptr);
+    AutoUpdateChecker(QNetworkAccessManager *network,
+                      UpdateFileStore *files,
+                      SessionModeProvider *session,
+                      UpdateCheckPolicy *policy,
+                      QObject *parent = nullptr);
     ~AutoUpdateChecker() override;
 
     State state() const;
@@ -86,7 +99,6 @@ signals:
     void errorChanged();
 
 private slots:
-    void handleUpdateCheckRequestFinished(QNetworkReply *reply);
     void handleReplyReadyRead();
     void handleReplyFinished();
     void handleConnectTimeout();
@@ -154,8 +166,10 @@ private:
     QNetworkAccessManager *m_Nam;
     UpdateFileStore *m_Files;
     SessionModeProvider *m_Session;
+    UpdateCheckPolicy *m_Policy;
     QScopedPointer<UpdateFileStore> m_OwnedFiles;
     QScopedPointer<SessionModeProvider> m_OwnedSession;
+    QScopedPointer<UpdateCheckPolicy> m_OwnedPolicy;
     QNetworkReply *m_Reply;
     RequestStage m_RequestStage;
     qint64 m_ResponseLimit;
@@ -174,6 +188,7 @@ private:
     QList<RollingTagObject> m_TagObjects;
     PendingUpdateRecord m_RestoreRecord;
     bool m_Restoring;
+    bool m_ReloadPendingRecord;
 
     QSharedPointer<QTemporaryFile> m_Temporary;
     QSharedPointer<QFile> m_VerifiedFile;

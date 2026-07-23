@@ -24,46 +24,6 @@
 #include "backend/steamdecksession.h"
 #include "backend/updatestatemachine.h"
 
-class StaticNetworkReply : public QNetworkReply
-{
-public:
-    StaticNetworkReply(const QByteArray &body, QObject *parent) :
-        QNetworkReply(parent),
-        m_Body(body),
-        m_Offset(0)
-    {
-        open(QIODevice::ReadOnly | QIODevice::Unbuffered);
-        setFinished(true);
-        setError(QNetworkReply::NoError, QString());
-    }
-
-    void abort() override
-    {
-    }
-
-    qint64 bytesAvailable() const override
-    {
-        return m_Body.size() - m_Offset + QIODevice::bytesAvailable();
-    }
-
-protected:
-    qint64 readData(char *data, qint64 maxSize) override
-    {
-        if (m_Offset >= m_Body.size()) {
-            return -1;
-        }
-
-        const qint64 bytesToRead = qMin(maxSize, m_Body.size() - m_Offset);
-        memcpy(data, m_Body.constData() + m_Offset, static_cast<size_t>(bytesToRead));
-        m_Offset += bytesToRead;
-        return bytesToRead;
-    }
-
-private:
-    QByteArray m_Body;
-    qint64 m_Offset;
-};
-
 struct NetworkScript {
     QByteArray body;
     int status = 200;
@@ -212,6 +172,16 @@ class FakeSessionModeProvider : public SessionModeProvider
 public:
     SteamDeckSession::Mode value = SteamDeckSession::Desktop;
     SteamDeckSession::Mode mode() const override { return value; }
+};
+
+class FakeUpdateCheckPolicy : public UpdateCheckPolicy
+{
+public:
+    bool rolling = true;
+    bool stable = false;
+
+    bool rollingInstallSupported() const override { return rolling; }
+    bool stableCheckSupported() const override { return stable; }
 };
 
 class FakeUpdateFileStore : public UpdateFileStore
@@ -442,6 +412,30 @@ public:
         swapSucceeded = true;
     }
 #endif
+};
+
+class ScriptedPendingRecordReader : public PendingRecordReader
+{
+public:
+    UpdateResult<QByteArray> read(const QString &path,
+                                  qint64 maximumSize) const override
+    {
+        ++calls;
+        paths.append(path);
+        limits.append(maximumSize);
+        if (results.isEmpty()) {
+            UpdateResult<QByteArray> unexpected;
+            unexpected.error = UpdateError::IoFailure;
+            unexpected.message = QStringLiteral("unexpected record read");
+            return unexpected;
+        }
+        return results.takeFirst();
+    }
+
+    mutable QList<UpdateResult<QByteArray>> results;
+    mutable QStringList paths;
+    mutable QList<qint64> limits;
+    mutable int calls = 0;
 };
 
 static RollingUpdateCandidate storageCandidate(const QByteArray &payload)
@@ -714,21 +708,25 @@ void AutoUpdateTest::updateDecisionUsesSemverNumericCore()
     QFETCH(QString, releaseVersion);
     QFETCH(bool, updateExpected);
 
-    AutoUpdateChecker checker;
+    FakeNetworkAccessManager network;
+    FakeUpdateFileStore files;
+    FakeSessionModeProvider session;
+    FakeUpdateCheckPolicy policy;
+    policy.rolling = false;
+    policy.stable = true;
+    AutoUpdateChecker checker(&network, &files, &session, &policy);
     QSignalSpy updateSpy(&checker, &AutoUpdateChecker::onUpdateAvailable);
 
     QJsonObject release;
     release.insert(QStringLiteral("tag_name"), releaseVersion);
     release.insert(QStringLiteral("html_url"), QStringLiteral("https://example.invalid/release"));
     const QByteArray responseBody = QJsonDocument(QJsonArray{release}).toJson();
-    StaticNetworkReply *reply = new StaticNetworkReply(responseBody, &checker);
+    network.enqueue(networkScript(responseBody));
+    checker.start();
 
-    QVERIFY(QMetaObject::invokeMethod(
-        &checker,
-        "handleUpdateCheckRequestFinished",
-        Qt::DirectConnection,
-        Q_ARG(QNetworkReply *, reply)));
-
+    QTRY_COMPARE(checker.state(), updateExpected
+                 ? AutoUpdateChecker::Available : AutoUpdateChecker::NoUpdate);
+    QCOMPARE(network.requests.size(), 1);
     QCOMPARE(updateSpy.count(), updateExpected ? 1 : 0);
     if (updateExpected) {
         QCOMPARE(updateSpy.at(0).at(0).toString(), releaseVersion);
@@ -1841,9 +1839,6 @@ void AutoUpdateTest::pendingUpdateRejectsOversizedRecord()
 
 void AutoUpdateTest::pendingUpdatePreservesTransientIoFailure()
 {
-#ifndef Q_OS_UNIX
-    QSKIP("Unix file permissions provide the deterministic transient I/O fixture");
-#else
     QTemporaryDir root;
     QVERIFY(root.isValid());
     const QString downloads = root.path() + QStringLiteral("/Downloads");
@@ -1851,18 +1846,23 @@ void AutoUpdateTest::pendingUpdatePreservesTransientIoFailure()
     QVERIFY(QDir().mkpath(downloads));
     QVERIFY(QDir().mkpath(privateData));
 
-    const QByteArray payload("temporarily unreadable pending update");
-    const RollingUpdateCandidate candidate = storageCandidate(payload);
+    const QByteArray payload = rollingPayload();
+    const RollingUpdateCandidate candidate =
+        boundCandidateForPayload(payload);
     FakeStorageProbe probe;
     probe.available = candidate.flatpak.size
         + PendingUpdateStore::safetyMarginBytes();
-    PendingUpdateStore store(downloads, privateData, &probe);
+    PendingUpdateStore writer(downloads, privateData, &probe);
+    const UpdateResult<PendingUpdateRecord> absent = writer.load();
+    QVERIFY(!absent.ok);
+    QCOMPARE(absent.error, UpdateError::InvalidMetadata);
+
     const UpdateResult<QSharedPointer<QTemporaryFile>> part =
-        store.createDownload(candidate.flatpak.size);
+        writer.createDownload(candidate.flatpak.size);
     QVERIFY(part.ok);
     QCOMPARE(part.value->write(payload), qint64(payload.size()));
     const UpdateResult<UpdateFileStore::OpenVerifiedFile> verified =
-        store.finalizeAndVerify(part.value, candidate);
+        writer.finalizeAndVerify(part.value, candidate);
     QVERIFY(verified.ok);
 
     PendingUpdateRecord record;
@@ -1871,32 +1871,57 @@ void AutoUpdateTest::pendingUpdatePreservesTransientIoFailure()
     record.verifiedSize = verified.value.size;
     record.verifiedSha256 = verified.value.sha256;
     verified.value.file->close();
-    QVERIFY(store.save(record));
+    QVERIFY(writer.save(record));
     const QString recordPath =
         privateData + QStringLiteral("/pending-update.json");
-    QVERIFY(QFile::setPermissions(record.canonicalPath, QFileDevice::Permissions()));
+    QFile recordFile(recordPath);
+    QVERIFY(recordFile.open(QIODevice::ReadOnly));
+    const QByteArray document = recordFile.readAll();
+    recordFile.close();
 
-    const UpdateResult<PendingUpdateRecord> unavailable = store.load();
-    QVERIFY(!unavailable.ok);
-    QCOMPARE(unavailable.error, UpdateError::IoFailure);
+    ScriptedPendingRecordReader unsafeReader;
+    UpdateResult<QByteArray> unsafe;
+    unsafe.error = UpdateError::UnsafePath;
+    unsafe.message = QStringLiteral("unsafe record fixture");
+    unsafeReader.results.append(unsafe);
+    PendingUpdateStore unsafeStore(
+        downloads, privateData, &probe, &unsafeReader);
+    const UpdateResult<PendingUpdateRecord> unsafeLoad = unsafeStore.load();
+    QVERIFY(!unsafeLoad.ok);
+    QCOMPARE(unsafeLoad.error, UpdateError::UnsafePath);
+    QVERIFY(QFileInfo::exists(recordPath));
+
+    ScriptedPendingRecordReader reader;
+    UpdateResult<QByteArray> unavailable;
+    unavailable.error = UpdateError::IoFailure;
+    unavailable.message = QStringLiteral("record storage temporarily unavailable");
+    reader.results.append(unavailable);
+    UpdateResult<QByteArray> recovered;
+    recovered.ok = true;
+    recovered.value = document;
+    reader.results.append(recovered);
+
+    PendingUpdateStore store(downloads, privateData, &probe, &reader);
+    FakeNetworkAccessManager network;
+    FakeSessionModeProvider session;
+    enqueueUnchangedRefetch(&network, manifestForPayload(payload));
+    AutoUpdateChecker checker(&network, &store, &session);
+    checker.start();
+
+    QCOMPARE(checker.state(), AutoUpdateChecker::RestoreError);
+    QCOMPARE(reader.calls, 1);
+    QCOMPARE(network.requests.size(), 0);
+    QVERIFY(checker.availableBuild().isEmpty());
+    QVERIFY(QFileInfo::exists(recordPath));
+    QVERIFY(QFileInfo::exists(record.canonicalPath));
+
+    checker.retry();
+    QTRY_COMPARE(checker.state(), AutoUpdateChecker::ReadyToHandOff);
+    QCOMPARE(reader.calls, 2);
+    QCOMPARE(network.requests.size(), 3);
     QVERIFY(RollingUpdateParser::matchesCandidate(
-        record.candidate, unavailable.value.candidate).ok);
-    QVERIFY(QFileInfo::exists(recordPath));
-    QVERIFY(QFileInfo::exists(record.canonicalPath));
-
-    const UpdateResult<UpdateFileStore::OpenVerifiedFile> reopened =
-        store.reopenAndVerify(record, candidate);
-    QVERIFY(!reopened.ok);
-    QCOMPARE(reopened.error, UpdateError::IoFailure);
-    QVERIFY(QFileInfo::exists(recordPath));
-    QVERIFY(QFileInfo::exists(record.canonicalPath));
-
-    QVERIFY(QFile::setPermissions(
-        record.canonicalPath,
-        QFileDevice::ReadOwner | QFileDevice::WriteOwner));
-    const UpdateResult<PendingUpdateRecord> loaded = store.load();
-    QVERIFY2(loaded.ok, qPrintable(loaded.message));
-#endif
+        record.candidate, candidate).ok);
+    QVERIFY(!checker.downloadedPath().isEmpty());
 }
 
 void AutoUpdateTest::rollingParser()
@@ -2002,25 +2027,6 @@ void AutoUpdateTest::stateMachine()
     QVERIFY(meta.indexOfProperty("errorMessage") >= 0);
     QVERIFY(meta.indexOfProperty("rollingInstallSupported") >= 0);
 
-    AutoUpdateChecker stableChecker;
-    QSignalSpy stableSignal(
-        &stableChecker, &AutoUpdateChecker::onUpdateAvailable);
-    QJsonObject stableRelease;
-    stableRelease.insert(QStringLiteral("tag_name"),
-                         QStringLiteral("0.6.8"));
-    stableRelease.insert(
-        QStringLiteral("html_url"),
-        QStringLiteral("https://github.com/samelamin/vibertemis/releases/tag/0.6.8"));
-    StaticNetworkReply *stableReply = new StaticNetworkReply(
-        QJsonDocument(QJsonArray{stableRelease}).toJson(), &stableChecker);
-    QVERIFY(QMetaObject::invokeMethod(
-        &stableChecker, "handleUpdateCheckRequestFinished",
-        Qt::DirectConnection, Q_ARG(QNetworkReply *, stableReply)));
-    QCOMPARE(stableSignal.count(), 1);
-    QCOMPARE(stableSignal.at(0).at(0).toString(),
-             QStringLiteral("0.6.8"));
-    QCOMPARE(stableSignal.at(0).at(1).toString(),
-             QStringLiteral("https://github.com/samelamin/vibertemis/releases/tag/0.6.8"));
 }
 
 void AutoUpdateTest::boundedNetwork()

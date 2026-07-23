@@ -35,6 +35,25 @@ QString shortCommit(const QString &commit)
     return commit.size() == 40 ? commit.left(12) : commit;
 }
 
+class SystemUpdateCheckPolicy final : public UpdateCheckPolicy
+{
+public:
+    bool rollingInstallSupported() const override
+    {
+        return BuildInfo::channel() == BuildInfo::RollingChannel
+            && BuildInfo::isInternallyConsistent();
+    }
+
+    bool stableCheckSupported() const override
+    {
+#if defined(Q_OS_WIN32) || defined(Q_OS_DARWIN) || defined(STEAM_LINK) || defined(APP_IMAGE)
+        return true;
+#else
+        return false;
+#endif
+    }
+};
+
 } // namespace
 
 AutoUpdateChecker::AutoUpdateChecker(QObject *parent) :
@@ -45,11 +64,13 @@ AutoUpdateChecker::AutoUpdateChecker(QObject *parent) :
     m_Nam(new QNetworkAccessManager(this)),
     m_Files(nullptr),
     m_Session(nullptr),
+    m_Policy(nullptr),
     m_Reply(nullptr),
     m_RequestStage(NoRequest),
     m_ResponseLimit(0),
     m_Redirects(0),
     m_Restoring(false),
+    m_ReloadPendingRecord(false),
     m_BytesReceived(0),
     m_BytesTotal(0)
 {
@@ -64,6 +85,15 @@ AutoUpdateChecker::AutoUpdateChecker(QNetworkAccessManager *network,
                                      UpdateFileStore *files,
                                      SessionModeProvider *session,
                                      QObject *parent) :
+    AutoUpdateChecker(network, files, session, nullptr, parent)
+{
+}
+
+AutoUpdateChecker::AutoUpdateChecker(QNetworkAccessManager *network,
+                                     UpdateFileStore *files,
+                                     SessionModeProvider *session,
+                                     UpdateCheckPolicy *policy,
+                                     QObject *parent) :
     QObject(parent),
     m_State(Idle),
     m_RetryOrigin(NoRetry),
@@ -71,11 +101,13 @@ AutoUpdateChecker::AutoUpdateChecker(QNetworkAccessManager *network,
     m_Nam(network),
     m_Files(files),
     m_Session(session),
+    m_Policy(policy),
     m_Reply(nullptr),
     m_RequestStage(NoRequest),
     m_ResponseLimit(0),
     m_Redirects(0),
     m_Restoring(false),
+    m_ReloadPendingRecord(false),
     m_BytesReceived(0),
     m_BytesTotal(0)
 {
@@ -92,6 +124,10 @@ AutoUpdateChecker::~AutoUpdateChecker()
 
 void AutoUpdateChecker::initialize()
 {
+    if (!m_Policy) {
+        m_OwnedPolicy.reset(new SystemUpdateCheckPolicy);
+        m_Policy = m_OwnedPolicy.data();
+    }
     m_Nam->setStrictTransportSecurityEnabled(true);
 #if QT_VERSION >= QT_VERSION_CHECK(5, 14, 0) \
         && QT_VERSION < QT_VERSION_CHECK(5, 15, 1) \
@@ -138,8 +174,7 @@ qint64 AutoUpdateChecker::bytesTotal() const { return m_BytesTotal; }
 QString AutoUpdateChecker::errorMessage() const { return m_ErrorMessage; }
 bool AutoUpdateChecker::rollingInstallSupported() const
 {
-    return BuildInfo::channel() == BuildInfo::RollingChannel
-        && BuildInfo::isInternallyConsistent();
+    return m_Policy->rollingInstallSupported();
 }
 
 bool AutoUpdateChecker::isApprovedRedirect(const QUrl &url)
@@ -243,6 +278,7 @@ void AutoUpdateChecker::invalidatePendingAndCheck(
     m_RestoreRecord = PendingUpdateRecord();
     m_ExpectedCandidate = RollingUpdateCandidate();
     m_Restoring = false;
+    m_ReloadPendingRecord = false;
     if (!m_DownloadedPath.isEmpty()) {
         m_DownloadedPath.clear();
         emit downloadedPathChanged();
@@ -267,16 +303,18 @@ void AutoUpdateChecker::start()
     m_Files->cleanStaleParts();
     const UpdateResult<PendingUpdateRecord> loaded = m_Files->load();
     if (!loaded.ok) {
-        if (loaded.error == UpdateError::IoFailure
-                && RollingUpdateParser::validateCandidate(
-                    loaded.value.candidate).ok) {
+        if (loaded.error == UpdateError::IoFailure) {
             if (!applyTransition(UpdateStateMachine::BeginRestore)) {
                 return;
             }
             m_Restoring = true;
-            m_RestoreRecord = loaded.value;
-            m_ExpectedCandidate = loaded.value.candidate;
-            setCandidate(loaded.value.candidate);
+            m_ReloadPendingRecord = true;
+            if (RollingUpdateParser::validateCandidate(
+                    loaded.value.candidate).ok) {
+                m_RestoreRecord = loaded.value;
+                m_ExpectedCandidate = loaded.value.candidate;
+                setCandidate(loaded.value.candidate);
+            }
             applyTransition(UpdateStateMachine::RestoreFailed);
             setError(loaded.error,
                      loaded.message.isEmpty()
@@ -289,6 +327,7 @@ void AutoUpdateChecker::start()
         checkNow();
         return;
     }
+    m_ReloadPendingRecord = false;
     if (!applyTransition(UpdateStateMachine::BeginRestore)) {
         return;
     }
@@ -311,6 +350,7 @@ void AutoUpdateChecker::checkNow()
     }
     clearError();
     m_Restoring = false;
+    m_ReloadPendingRecord = false;
     clearCandidate();
     if (rollingInstallSupported()) {
         beginRollingCheck();
@@ -339,6 +379,7 @@ void AutoUpdateChecker::beginRollingCheck()
 void AutoUpdateChecker::beginRestoration(const PendingUpdateRecord &record)
 {
     m_Restoring = true;
+    m_ReloadPendingRecord = false;
     m_RestoreRecord = record;
     m_ExpectedCandidate = record.candidate;
     setCandidate(record.candidate);
@@ -385,6 +426,7 @@ void AutoUpdateChecker::cancel()
     m_Temporary.reset();
     m_VerifiedFile.reset();
     m_DownloadHash.reset();
+    m_ReloadPendingRecord = false;
     if (previous == ReadyForDesktop || previous == ReadyToHandOff
             || previous == RestoringPending || previous == RestoreError) {
         m_Files->clear(true);
@@ -426,6 +468,37 @@ void AutoUpdateChecker::retry()
             return;
         }
         clearError();
+        if (m_ReloadPendingRecord) {
+            const UpdateResult<PendingUpdateRecord> loaded = m_Files->load();
+            if (!loaded.ok) {
+                if (loaded.error != UpdateError::IoFailure) {
+                    invalidatePendingAndCheck(loaded.message);
+                    return;
+                }
+                if (RollingUpdateParser::validateCandidate(
+                        loaded.value.candidate).ok) {
+                    m_RestoreRecord = loaded.value;
+                    m_ExpectedCandidate = loaded.value.candidate;
+                    setCandidate(loaded.value.candidate);
+                }
+                applyTransition(UpdateStateMachine::RestoreFailed);
+                setError(loaded.error,
+                         loaded.message.isEmpty()
+                            ? QStringLiteral("The pending update could not be read.")
+                            : loaded.message,
+                         RestoreRetry);
+                return;
+            }
+            m_ReloadPendingRecord = false;
+            if (loaded.value.candidate.sourceCommit == BuildInfo::commit()) {
+                m_Files->clear(false);
+                clearCandidate();
+                applyTransition(UpdateStateMachine::CandidateCurrent);
+                return;
+            }
+            beginRestoration(loaded.value);
+            return;
+        }
         beginRevalidation(true);
         return;
     }
@@ -1046,34 +1119,6 @@ void AutoUpdateChecker::saveVerifiedPending()
     }
 }
 
-void AutoUpdateChecker::handleUpdateCheckRequestFinished(QNetworkReply *reply)
-{
-    if (!reply || !reply->isFinished()) {
-        return;
-    }
-    const QByteArray body = reply->readAll();
-    reply->deleteLater();
-    if (reply->error() != QNetworkReply::NoError) {
-        return;
-    }
-    QJsonParseError error;
-    const QJsonDocument json = QJsonDocument::fromJson(body, &error);
-    if (error.error != QJsonParseError::NoError || !json.isArray()) {
-        return;
-    }
-    const ReleaseVersionSelection release =
-        ReleaseVersionSelector::select(json.array());
-    if (!release.valid) {
-        return;
-    }
-    QString version = release.version;
-    QVector<int> latest;
-    parseStringToVersionQuad(version, latest);
-    if (compareVersion(m_CurrentVersionQuad, latest) < 0) {
-        emit onUpdateAvailable(release.version, release.url);
-    }
-}
-
 QString AutoUpdateChecker::rateLimitMessage(QNetworkReply *reply) const
 {
     const QByteArray remaining = reply->rawHeader(QByteArrayLiteral("X-RateLimit-Remaining"));
@@ -1094,11 +1139,7 @@ QString AutoUpdateChecker::rateLimitMessage(QNetworkReply *reply) const
 
 bool AutoUpdateChecker::supportsStableCheck() const
 {
-#if defined(Q_OS_WIN32) || defined(Q_OS_DARWIN) || defined(STEAM_LINK) || defined(APP_IMAGE)
-    return true;
-#else
-    return false;
-#endif
+    return m_Policy->stableCheckSupported();
 }
 
 void AutoUpdateChecker::parseStringToVersionQuad(QString &string,
