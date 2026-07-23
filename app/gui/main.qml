@@ -103,6 +103,26 @@ ApplicationWindow {
         updateDialog.openForUserAction()
     }
 
+    function updateEntryVisible() {
+        if (AutoUpdateChecker.releaseUrl === "") {
+            return false
+        }
+        if (!AutoUpdateChecker.rollingInstallSupported) {
+            return AutoUpdateChecker.state === AutoUpdateChecker.Available
+        }
+        return AutoUpdateChecker.state === AutoUpdateChecker.Available ||
+               AutoUpdateChecker.state === AutoUpdateChecker.Downloading ||
+               AutoUpdateChecker.state === AutoUpdateChecker.Verifying ||
+               AutoUpdateChecker.state === AutoUpdateChecker.ReadyForDesktop ||
+               AutoUpdateChecker.state === AutoUpdateChecker.ReadyToHandOff ||
+               AutoUpdateChecker.state === AutoUpdateChecker.HandingOff ||
+               AutoUpdateChecker.state === AutoUpdateChecker.HandOffRequested ||
+               AutoUpdateChecker.state === AutoUpdateChecker.DownloadError ||
+               AutoUpdateChecker.state === AutoUpdateChecker.VerificationError ||
+               AutoUpdateChecker.state === AutoUpdateChecker.RestoreError ||
+               AutoUpdateChecker.state === AutoUpdateChecker.HandOffError
+    }
+
     StackView {
         id: stackView
         anchors.fill: parent
@@ -357,7 +377,7 @@ ApplicationWindow {
 
                 // Keep the entry available while a verified download is
                 // preserved so Later never strands controller-only users.
-                visible: AutoUpdateChecker.releaseUrl !== ""
+                visible: window.updateEntryVisible()
 
                 onClicked: {
                     if (AutoUpdateChecker.rollingInstallSupported) {

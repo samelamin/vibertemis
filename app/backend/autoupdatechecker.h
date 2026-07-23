@@ -34,6 +34,7 @@ class AutoUpdateChecker : public QObject
     Q_PROPERTY(QString downloadedPath READ downloadedPath NOTIFY downloadedPathChanged)
     Q_PROPERTY(qint64 bytesReceived READ bytesReceived NOTIFY progressChanged)
     Q_PROPERTY(qint64 bytesTotal READ bytesTotal NOTIFY progressChanged)
+    Q_PROPERTY(qint64 expectedDownloadBytes READ expectedDownloadBytes NOTIFY expectedDownloadBytesChanged)
     Q_PROPERTY(QString errorMessage READ errorMessage NOTIFY errorChanged)
     Q_PROPERTY(bool rollingInstallSupported READ rollingInstallSupported CONSTANT)
 
@@ -83,6 +84,7 @@ public:
     QString downloadedPath() const;
     qint64 bytesReceived() const;
     qint64 bytesTotal() const;
+    qint64 expectedDownloadBytes() const;
     QString errorMessage() const;
     bool rollingInstallSupported() const;
 
@@ -106,6 +108,7 @@ signals:
     void candidateChanged();
     void downloadedPathChanged();
     void progressChanged();
+    void expectedDownloadBytesChanged();
     void errorChanged();
 
 private slots:
@@ -153,6 +156,7 @@ private:
     void setError(UpdateError error, const QString &message, RetryOrigin origin);
     void clearError();
     void setCandidate(const RollingUpdateCandidate &candidate);
+    void setExpectedDownloadBytes(qint64 bytes);
     void clearCandidate();
     void invalidatePendingAndCheck(const QString &diagnostic);
     void beginStableCheck();
@@ -225,4 +229,5 @@ private:
     QString m_DownloadedPath;
     qint64 m_BytesReceived;
     qint64 m_BytesTotal;
+    qint64 m_ExpectedDownloadBytes;
 };

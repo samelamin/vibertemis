@@ -50,6 +50,37 @@ NavigableDialog {
                 AutoUpdateChecker.state === AutoUpdateChecker.HandOffError)
     }
 
+    function candidateDetailsVisible() {
+        return AutoUpdateChecker.releaseUrl !== "" &&
+               (AutoUpdateChecker.state === AutoUpdateChecker.Available ||
+                AutoUpdateChecker.state === AutoUpdateChecker.Downloading ||
+                AutoUpdateChecker.state === AutoUpdateChecker.Verifying ||
+                AutoUpdateChecker.state === AutoUpdateChecker.ReadyForDesktop ||
+                AutoUpdateChecker.state === AutoUpdateChecker.ReadyToHandOff ||
+                AutoUpdateChecker.state === AutoUpdateChecker.HandingOff ||
+                AutoUpdateChecker.state === AutoUpdateChecker.HandOffRequested ||
+                AutoUpdateChecker.state === AutoUpdateChecker.DownloadError ||
+                AutoUpdateChecker.state === AutoUpdateChecker.VerificationError ||
+                AutoUpdateChecker.state === AutoUpdateChecker.RestoreError ||
+                AutoUpdateChecker.state === AutoUpdateChecker.HandOffError)
+    }
+
+    function formatDownloadSize(bytes) {
+        var value = bytes
+        var unit = qsTr("bytes")
+        if (bytes >= 1024 * 1024 * 1024) {
+            value = bytes / (1024 * 1024 * 1024)
+            unit = qsTr("GiB")
+        } else if (bytes >= 1024 * 1024) {
+            value = bytes / (1024 * 1024)
+            unit = qsTr("MiB")
+        } else if (bytes >= 1024) {
+            value = bytes / 1024
+            unit = qsTr("KiB")
+        }
+        return value.toFixed(value >= 10 ? 0 : 1) + " " + unit
+    }
+
     function stateHeading() {
         switch (AutoUpdateChecker.state) {
         case AutoUpdateChecker.RestoringPending:
@@ -174,7 +205,7 @@ NavigableDialog {
 
     Connections {
         target: AutoUpdateChecker
-        onStateChanged: {
+        function onStateChanged() {
             if (updateDialog.visible) {
                 focusStateAction.restart()
             }
@@ -206,6 +237,49 @@ NavigableDialog {
             Layout.fillWidth: true
             text: updateDialog.stateMessage()
             wrapMode: Text.Wrap
+        }
+
+        GridLayout {
+            Layout.fillWidth: true
+            columns: 2
+            columnSpacing: 12
+            rowSpacing: 4
+
+            Label {
+                text: qsTr("Current build:")
+                font.bold: true
+            }
+            Label {
+                Layout.fillWidth: true
+                text: AutoUpdateChecker.currentBuild
+                elide: Text.ElideMiddle
+            }
+
+            Label {
+                visible: updateDialog.candidateDetailsVisible()
+                text: qsTr("Available build:")
+                font.bold: true
+            }
+            Label {
+                Layout.fillWidth: true
+                visible: updateDialog.candidateDetailsVisible()
+                text: AutoUpdateChecker.availableBuild
+                elide: Text.ElideMiddle
+            }
+
+            Label {
+                visible: updateDialog.candidateDetailsVisible() &&
+                         AutoUpdateChecker.expectedDownloadBytes > 0
+                text: qsTr("Download size:")
+                font.bold: true
+            }
+            Label {
+                Layout.fillWidth: true
+                visible: updateDialog.candidateDetailsVisible() &&
+                         AutoUpdateChecker.expectedDownloadBytes > 0
+                text: updateDialog.formatDownloadSize(
+                          AutoUpdateChecker.expectedDownloadBytes)
+            }
         }
 
         BusyIndicator {
@@ -293,7 +367,7 @@ NavigableDialog {
         Button {
             id: viewReleaseButton
             text: qsTr("View release")
-            visible: AutoUpdateChecker.releaseUrl !== ""
+            visible: updateDialog.candidateDetailsVisible()
             enabled: visible
             activeFocusOnTab: visible && enabled
             onClicked: AutoUpdateChecker.openReleasePage()

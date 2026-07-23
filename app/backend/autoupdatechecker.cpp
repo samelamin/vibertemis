@@ -77,7 +77,8 @@ AutoUpdateChecker::AutoUpdateChecker(QObject *parent) :
     m_ReloadPendingRecord(false),
     m_HandOffRetry(false),
     m_BytesReceived(0),
-    m_BytesTotal(0)
+    m_BytesTotal(0),
+    m_ExpectedDownloadBytes(0)
 {
     m_OwnedFiles.reset(new PendingUpdateStore);
     m_OwnedSession.reset(new EnvironmentSessionModeProvider);
@@ -138,7 +139,8 @@ AutoUpdateChecker::AutoUpdateChecker(QNetworkAccessManager *network,
     m_ReloadPendingRecord(false),
     m_HandOffRetry(false),
     m_BytesReceived(0),
-    m_BytesTotal(0)
+    m_BytesTotal(0),
+    m_ExpectedDownloadBytes(0)
 {
     Q_ASSERT(m_Nam);
     Q_ASSERT(m_Files);
@@ -221,6 +223,10 @@ QString AutoUpdateChecker::releaseUrl() const
 QString AutoUpdateChecker::downloadedPath() const { return m_DownloadedPath; }
 qint64 AutoUpdateChecker::bytesReceived() const { return m_BytesReceived; }
 qint64 AutoUpdateChecker::bytesTotal() const { return m_BytesTotal; }
+qint64 AutoUpdateChecker::expectedDownloadBytes() const
+{
+    return m_ExpectedDownloadBytes;
+}
 QString AutoUpdateChecker::errorMessage() const { return m_ErrorMessage; }
 bool AutoUpdateChecker::rollingInstallSupported() const
 {
@@ -311,8 +317,18 @@ void AutoUpdateChecker::setCandidate(
     }
 }
 
+void AutoUpdateChecker::setExpectedDownloadBytes(qint64 bytes)
+{
+    if (m_ExpectedDownloadBytes == bytes) {
+        return;
+    }
+    m_ExpectedDownloadBytes = bytes;
+    emit expectedDownloadBytesChanged();
+}
+
 void AutoUpdateChecker::clearCandidate()
 {
+    setExpectedDownloadBytes(0);
     setCandidate(RollingUpdateCandidate());
 }
 
@@ -365,6 +381,8 @@ void AutoUpdateChecker::start()
                 m_RestoreRecord = loaded.value;
                 m_ExpectedCandidate = loaded.value.candidate;
                 setCandidate(loaded.value.candidate);
+                setExpectedDownloadBytes(
+                    static_cast<qint64>(loaded.value.candidate.flatpak.size));
             }
             applyTransition(UpdateStateMachine::RestoreFailed);
             setError(loaded.error,
@@ -435,6 +453,8 @@ void AutoUpdateChecker::beginRestoration(const PendingUpdateRecord &record)
     m_RestoreRecord = record;
     m_ExpectedCandidate = record.candidate;
     setCandidate(record.candidate);
+    setExpectedDownloadBytes(
+        static_cast<qint64>(record.candidate.flatpak.size));
     beginRevalidation(true);
 }
 
@@ -479,6 +499,7 @@ void AutoUpdateChecker::cancel()
     m_VerifiedFile.reset();
     m_DownloadHash.reset();
     m_ReloadPendingRecord = false;
+    setExpectedDownloadBytes(0);
     if (previous == ReadyForDesktop || previous == ReadyToHandOff
             || previous == RestoringPending || previous == RestoreError) {
         m_Files->clear(true);
@@ -532,6 +553,8 @@ void AutoUpdateChecker::retry()
                     m_RestoreRecord = loaded.value;
                     m_ExpectedCandidate = loaded.value.candidate;
                     setCandidate(loaded.value.candidate);
+                    setExpectedDownloadBytes(static_cast<qint64>(
+                        loaded.value.candidate.flatpak.size));
                 }
                 applyTransition(UpdateStateMachine::RestoreFailed);
                 setError(loaded.error,
@@ -1162,6 +1185,8 @@ void AutoUpdateChecker::finishCompare(const QByteArray &body)
         applyTransition(UpdateStateMachine::CandidateCurrent);
         return;
     }
+    setExpectedDownloadBytes(
+        static_cast<qint64>(m_Candidate.flatpak.size));
     applyTransition(UpdateStateMachine::CandidateAvailable);
 }
 

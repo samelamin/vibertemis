@@ -38,9 +38,32 @@ class UpdaterQmlContractTests(unittest.TestCase):
                 re.DOTALL,
             ),
         )
-        self.assertRegex(
+        self.assertNotRegex(
             self.main,
             r"visible:\s*AutoUpdateChecker\.releaseUrl\s*!==\s*\"\"",
+        )
+        self.assertRegex(
+            self.main,
+            re.compile(
+                r"function\s+updateEntryVisible\(\)\s*\{.*?"
+                r"AutoUpdateChecker\.releaseUrl\s*===\s*\"\".*?"
+                r"!AutoUpdateChecker\.rollingInstallSupported.*?"
+                r"AutoUpdateChecker\.state\s*===\s*AutoUpdateChecker\.Available.*?"
+                r"AutoUpdateChecker\.Downloading.*?"
+                r"AutoUpdateChecker\.Verifying.*?"
+                r"AutoUpdateChecker\.ReadyForDesktop.*?"
+                r"AutoUpdateChecker\.ReadyToHandOff.*?"
+                r"AutoUpdateChecker\.HandOffRequested.*?"
+                r"AutoUpdateChecker\.DownloadError.*?"
+                r"AutoUpdateChecker\.VerificationError.*?"
+                r"AutoUpdateChecker\.RestoreError.*?"
+                r"AutoUpdateChecker\.HandOffError",
+                re.DOTALL,
+            ),
+        )
+        self.assertRegex(
+            self.main,
+            r"visible:\s*window\.updateEntryVisible\(\)",
         )
         self.assertNotRegex(
             self.main,
@@ -116,6 +139,31 @@ class UpdaterQmlContractTests(unittest.TestCase):
         ):
             with self.subTest(action=action):
                 self.assertIn(f"AutoUpdateChecker.{action}()", self.dialog)
+
+    def test_dialog_shows_build_identity_and_expected_download_size(self):
+        for label in (
+            "Current build:",
+            "Available build:",
+            "Download size:",
+        ):
+            with self.subTest(label=label):
+                self.assertIn(f'qsTr("{label}")', self.dialog)
+
+        self.assertIn("AutoUpdateChecker.currentBuild", self.dialog)
+        self.assertIn("AutoUpdateChecker.availableBuild", self.dialog)
+        self.assertIn("AutoUpdateChecker.expectedDownloadBytes", self.dialog)
+        self.assertRegex(
+            self.dialog,
+            r"function\s+formatDownloadSize\(bytes\)\s*\{",
+        )
+        for unit in ("KiB", "MiB", "GiB"):
+            with self.subTest(unit=unit):
+                self.assertIn(f'qsTr("{unit}")', self.dialog)
+        self.assertRegex(
+            self.dialog,
+            r"formatDownloadSize\(\s*"
+            r"AutoUpdateChecker\.expectedDownloadBytes\s*\)",
+        )
 
     def test_installer_and_progress_are_gated_by_verified_state(self):
         self.assertRegex(
@@ -196,7 +244,8 @@ class UpdaterQmlContractTests(unittest.TestCase):
             self.dialog,
             r"Connections\s*\{[\s\S]{0,300}"
             r"target:\s*AutoUpdateChecker[\s\S]{0,500}"
-            r"onStateChanged:[\s\S]{0,300}focus",
+            r"(?:onStateChanged:|function\s+onStateChanged\(\))"
+            r"[\s\S]{0,300}focus",
         )
         self.assertIn(
             "nextItemInFocusChain(true).forceActiveFocus(Qt.TabFocus)",

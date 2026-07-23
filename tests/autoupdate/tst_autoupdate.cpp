@@ -870,6 +870,7 @@ void AutoUpdateTest::updateDecisionUsesSemverNumericCore()
         QCOMPARE(updateSpy.at(0).at(0).toString(), releaseVersion);
         QCOMPARE(updateSpy.at(0).at(1).toString(), QStringLiteral("https://example.invalid/release"));
     }
+    QCOMPARE(checker.expectedDownloadBytes(), qint64(0));
 }
 
 void AutoUpdateTest::buildIdentity()
@@ -2176,6 +2177,7 @@ void AutoUpdateTest::stateMachine()
     QVERIFY(meta.indexOfProperty("downloadedPath") >= 0);
     QVERIFY(meta.indexOfProperty("bytesReceived") >= 0);
     QVERIFY(meta.indexOfProperty("bytesTotal") >= 0);
+    QVERIFY(meta.indexOfProperty("expectedDownloadBytes") >= 0);
     QVERIFY(meta.indexOfProperty("errorMessage") >= 0);
     QVERIFY(meta.indexOfProperty("rollingInstallSupported") >= 0);
 
@@ -2233,6 +2235,8 @@ void AutoUpdateTest::desktopPortal()
     acceptedChecker.start();
     QTRY_COMPARE(acceptedChecker.state(),
                  AutoUpdateChecker::ReadyToHandOff);
+    QCOMPARE(acceptedChecker.expectedDownloadBytes(),
+             qint64(payload.size()));
     acceptedChecker.openInstaller();
     QCOMPARE(acceptedChecker.state(), AutoUpdateChecker::HandingOff);
     QCOMPARE(acceptedPortal.calls, 1);
@@ -2251,6 +2255,7 @@ void AutoUpdateTest::desktopPortal()
         &acceptedChecker, &AutoUpdateChecker::downloadedPathChanged);
     acceptedChecker.discardPendingUpdate();
     QCOMPARE(acceptedChecker.state(), AutoUpdateChecker::Cancelled);
+    QCOMPARE(acceptedChecker.expectedDownloadBytes(), qint64(0));
     QCOMPARE(acceptedFiles.clearCalls, 1);
     QVERIFY(acceptedFiles.lastClearRemovedPayload);
     QCOMPARE(acceptedStateSignal.count(), 1);
@@ -2540,8 +2545,13 @@ void AutoUpdateTest::boundedNetwork()
     enqueueAvailableCheck(&network, manifest);
     AutoUpdateChecker checker(&network, &files, &desktop);
     QSignalSpy candidateSignal(&checker, &AutoUpdateChecker::candidateChanged);
+    QSignalSpy expectedSizeSignal(
+        &checker, &AutoUpdateChecker::expectedDownloadBytesChanged);
+    QCOMPARE(checker.expectedDownloadBytes(), qint64(0));
     checker.start();
     QTRY_COMPARE(checker.state(), AutoUpdateChecker::Available);
+    QCOMPARE(checker.expectedDownloadBytes(), qint64(payload.size()));
+    QCOMPARE(expectedSizeSignal.count(), 1);
     QCOMPARE(candidateSignal.count(), 1);
     QCOMPARE(network.requests.size(), 4);
     QCOMPARE(checker.availableBuild(), RollingCommit.left(12));
@@ -2584,6 +2594,8 @@ void AutoUpdateTest::boundedNetwork()
     network.enqueue(networkScript(lightweightTagJson()));
     checker.downloadUpdate();
     QTRY_COMPARE(checker.state(), AutoUpdateChecker::ReadyToHandOff);
+    QCOMPARE(checker.expectedDownloadBytes(), qint64(payload.size()));
+    QCOMPARE(expectedSizeSignal.count(), 1);
     QCOMPARE(checker.bytesReceived(), qint64(payload.size()));
     QCOMPARE(checker.bytesTotal(), qint64(payload.size()));
     QCOMPARE(files.finalizeCalls, 1);
@@ -2613,6 +2625,8 @@ void AutoUpdateTest::boundedNetwork()
     network.enqueue(recheckStall);
     checker.checkNow();
     QCOMPARE(checker.state(), AutoUpdateChecker::Checking);
+    QCOMPARE(checker.expectedDownloadBytes(), qint64(0));
+    QCOMPARE(expectedSizeSignal.count(), 2);
     QCOMPARE(candidateSignal.count(), 2);
     QVERIFY(checker.availableBuild().isEmpty());
     QVERIFY(checker.releaseUrl().isEmpty());
