@@ -81,9 +81,11 @@ UpdateResult<AutoUpdateChecker::State> UpdateStateMachine::reduce(
     case S::HandOffRequested:
         if (event == E::BeginCheck) return transition(S::Checking);
         if (event == E::Retry) return transition(S::Verifying);
+        if (event == E::DiscardPending) return transition(S::Cancelled);
         break;
     case S::HandOffError:
         if (event == E::Retry) return transition(S::Verifying);
+        if (event == E::DiscardPending) return transition(S::Cancelled);
         break;
     case S::CheckError:
         if (event == E::Retry || event == E::BeginCheck) return transition(S::Checking);

@@ -22,6 +22,7 @@ public:
         BeginHandOff,
         HandOffAccepted,
         HandOffFailed,
+        DiscardPending,
         Retry,
         Cancel
     };

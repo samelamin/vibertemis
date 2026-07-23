@@ -245,6 +245,81 @@ public:
     QSharedPointer<QFile> file;
 };
 
+class FakeDesktopPortalTransport : public DesktopPortalTransport
+{
+public:
+    explicit FakeDesktopPortalTransport(QObject *parent = nullptr) :
+        DesktopPortalTransport(parent)
+    {
+    }
+
+    QString callerUniqueName() const override
+    {
+        return uniqueName;
+    }
+
+    bool subscribeResponse(const QString &requestPath) override
+    {
+        subscribed.append(requestPath);
+        activePath = requestPath;
+        return subscribeSucceeds;
+    }
+
+    void unsubscribeResponse(const QString &requestPath) override
+    {
+        unsubscribed.append(requestPath);
+        if (activePath == requestPath) {
+            activePath.clear();
+        }
+    }
+
+    void openFile(int descriptor, const QVariantMap &options) override
+    {
+        ++calls;
+        observedDescriptor = descriptor;
+        observedOptions = options;
+        subscribedBeforeCall = !activePath.isEmpty();
+        const QString token =
+            options.value(QStringLiteral("handle_token")).toString();
+        const QString predicted =
+            DesktopInstallerPortal::requestPath(uniqueName, token);
+        if (sendImmediateResponse) {
+            emit requestResponse(predicted, immediateResponseCode,
+                                 QVariantMap());
+        }
+        emit methodFinished(
+            methodSucceeds,
+            returnedPath.isEmpty() ? predicted : returnedPath,
+            methodSucceeds ? QString() : QStringLiteral("method failed"));
+    }
+
+    void sendResponse(const QString &path, uint code)
+    {
+        if (path == activePath) {
+            emit requestResponse(path, code, QVariantMap());
+        }
+    }
+
+    void sendRawResponse(const QString &path, uint code)
+    {
+        emit requestResponse(path, code, QVariantMap());
+    }
+
+    QString uniqueName = QStringLiteral(":1.42");
+    QString returnedPath;
+    QString activePath;
+    QStringList subscribed;
+    QStringList unsubscribed;
+    QVariantMap observedOptions;
+    int observedDescriptor = -1;
+    int calls = 0;
+    uint immediateResponseCode = 0;
+    bool sendImmediateResponse = false;
+    bool methodSucceeds = true;
+    bool subscribeSucceeds = true;
+    bool subscribedBeforeCall = false;
+};
+
 class FakeUpdateFileStore : public UpdateFileStore
 {
 public:
@@ -424,6 +499,7 @@ private slots:
     void steamDeckSession();
     void stateMachine();
     void desktopPortal();
+    void desktopPortalResponseRace();
     void boundedNetwork();
 };
 
@@ -2058,7 +2134,9 @@ void AutoUpdateTest::stateMachine()
         {S::HandingOff, E::HandOffFailed, S::HandOffError},
         {S::HandOffRequested, E::BeginCheck, S::Checking},
         {S::HandOffRequested, E::Retry, S::Verifying},
+        {S::HandOffRequested, E::DiscardPending, S::Cancelled},
         {S::HandOffError, E::Retry, S::Verifying},
+        {S::HandOffError, E::DiscardPending, S::Cancelled},
         {S::CheckError, E::Retry, S::Checking},
         {S::CheckError, E::BeginCheck, S::Checking},
         {S::DownloadError, E::Retry, S::Available},
@@ -2086,6 +2164,8 @@ void AutoUpdateTest::stateMachine()
                                         E::HandOffAccepted).ok);
     QVERIFY(!UpdateStateMachine::reduce(S::HandOffError,
                                         E::BeginHandOff).ok);
+    QVERIFY(!UpdateStateMachine::reduce(S::HandingOff,
+                                        E::DiscardPending).ok);
 
     const QMetaObject &meta = AutoUpdateChecker::staticMetaObject;
     QVERIFY(meta.indexOfEnumerator("State") >= 0);
@@ -2114,7 +2194,7 @@ void AutoUpdateTest::desktopPortal()
     const QVariantMap options = DesktopInstallerPortal::openFileOptions();
     QCOMPARE(options.value(QStringLiteral("writable")).toBool(), false);
     QCOMPARE(options.value(QStringLiteral("ask")).toBool(), true);
-    QCOMPARE(options.size(), 2);
+    QVERIFY(!options.contains(QStringLiteral("handle_token")));
 
     const QByteArray payload = rollingPayload();
     const QByteArray manifest = manifestForPayload(payload);
@@ -2165,9 +2245,19 @@ void AutoUpdateTest::desktopPortal()
     QCOMPARE(acceptedChecker.state(), AutoUpdateChecker::HandOffRequested);
     QCOMPARE(acceptedFiles.clearCalls, 0);
     QVERIFY(QFileInfo::exists(acceptedRecord.canonicalPath));
+    QSignalSpy acceptedStateSignal(
+        &acceptedChecker, &AutoUpdateChecker::stateChanged);
+    QSignalSpy acceptedPathSignal(
+        &acceptedChecker, &AutoUpdateChecker::downloadedPathChanged);
     acceptedChecker.discardPendingUpdate();
+    QCOMPARE(acceptedChecker.state(), AutoUpdateChecker::Cancelled);
     QCOMPARE(acceptedFiles.clearCalls, 1);
     QVERIFY(acceptedFiles.lastClearRemovedPayload);
+    QCOMPARE(acceptedStateSignal.count(), 1);
+    QCOMPARE(acceptedPathSignal.count(), 1);
+    enqueueAvailableCheck(&acceptedNetwork, manifest);
+    acceptedChecker.checkNow();
+    QTRY_COMPARE(acceptedChecker.state(), AutoUpdateChecker::Available);
 
     FakeNetworkAccessManager deniedNetwork;
     FakeUpdateFileStore deniedFiles;
@@ -2210,6 +2300,19 @@ void AutoUpdateTest::desktopPortal()
     QCOMPARE(failedChecker.state(), AutoUpdateChecker::HandOffError);
     QVERIFY(failedChecker.errorMessage().contains(
         QStringLiteral("method failed")));
+    QSignalSpy failedStateSignal(
+        &failedChecker, &AutoUpdateChecker::stateChanged);
+    QSignalSpy failedPathSignal(
+        &failedChecker, &AutoUpdateChecker::downloadedPathChanged);
+    failedChecker.discardPendingUpdate();
+    QCOMPARE(failedChecker.state(), AutoUpdateChecker::Cancelled);
+    QCOMPARE(failedFiles.clearCalls, 1);
+    QVERIFY(failedFiles.lastClearRemovedPayload);
+    QCOMPARE(failedStateSignal.count(), 1);
+    QCOMPARE(failedPathSignal.count(), 1);
+    enqueueAvailableCheck(&failedNetwork, manifest);
+    failedChecker.checkNow();
+    QTRY_COMPARE(failedChecker.state(), AutoUpdateChecker::Available);
 
     for (SteamDeckSession::Mode mode :
          {SteamDeckSession::Gaming, SteamDeckSession::Unknown}) {
@@ -2249,6 +2352,160 @@ void AutoUpdateTest::desktopPortal()
     QCOMPARE(changedSessionPortal.calls, 0);
     QCOMPARE(changedSessionChecker.state(),
              AutoUpdateChecker::ReadyToHandOff);
+
+    for (UpdateError hostile :
+         {UpdateError::UnsafePath, UpdateError::DigestMismatch}) {
+        FakeNetworkAccessManager hostileNetwork;
+        FakeUpdateFileStore hostileFiles;
+        pendingRecord(&hostileFiles);
+        FakeInstallerPortal hostilePortal;
+        enqueueUnchangedRefetch(&hostileNetwork, manifest);
+        AutoUpdateChecker hostileChecker(
+            &hostileNetwork, &hostileFiles, &desktop, &hostilePortal);
+        hostileChecker.start();
+        QTRY_COMPARE(hostileChecker.state(),
+                     AutoUpdateChecker::ReadyToHandOff);
+        hostileChecker.openInstaller();
+        hostilePortal.rejectResponse();
+        QCOMPARE(hostileChecker.state(), AutoUpdateChecker::HandOffError);
+        hostileFiles.reopenError = hostile;
+        QList<AutoUpdateChecker::State> states;
+        connect(&hostileChecker, &AutoUpdateChecker::stateChanged,
+                &hostileChecker, [&]() {
+            states.append(hostileChecker.state());
+        });
+        enqueueUnchangedRefetch(&hostileNetwork, manifest);
+        enqueueAvailableCheck(&hostileNetwork, manifest);
+        hostileChecker.retry();
+        QTRY_COMPARE(hostileChecker.state(), AutoUpdateChecker::Available);
+        QVERIFY(states.contains(AutoUpdateChecker::VerificationError));
+        QVERIFY(states.contains(AutoUpdateChecker::Checking));
+        QCOMPARE(hostileFiles.clearCalls, 1);
+        QVERIFY(hostileFiles.lastClearRemovedPayload);
+    }
+
+    FakeNetworkAccessManager transientNetwork;
+    FakeUpdateFileStore transientFiles;
+    pendingRecord(&transientFiles);
+    FakeInstallerPortal transientPortal;
+    enqueueUnchangedRefetch(&transientNetwork, manifest);
+    AutoUpdateChecker transientChecker(
+        &transientNetwork, &transientFiles, &desktop, &transientPortal);
+    transientChecker.start();
+    QTRY_COMPARE(transientChecker.state(),
+                 AutoUpdateChecker::ReadyToHandOff);
+    transientChecker.openInstaller();
+    transientPortal.rejectResponse();
+    transientFiles.reopenError = UpdateError::IoFailure;
+    enqueueUnchangedRefetch(&transientNetwork, manifest);
+    transientChecker.retry();
+    QTRY_COMPARE(transientChecker.state(),
+                 AutoUpdateChecker::VerificationError);
+    QCOMPARE(transientFiles.clearCalls, 0);
+    transientFiles.reopenError = UpdateError::None;
+    enqueueUnchangedRefetch(&transientNetwork, manifest);
+    transientChecker.retry();
+    QTRY_COMPARE(transientChecker.state(),
+                 AutoUpdateChecker::ReadyToHandOff);
+
+    FakeNetworkAccessManager changedBindingNetwork;
+    FakeUpdateFileStore changedBindingFiles;
+    pendingRecord(&changedBindingFiles);
+    FakeInstallerPortal changedBindingPortal;
+    enqueueUnchangedRefetch(&changedBindingNetwork, manifest);
+    AutoUpdateChecker changedBindingChecker(
+        &changedBindingNetwork, &changedBindingFiles, &desktop,
+        &changedBindingPortal);
+    changedBindingChecker.start();
+    QTRY_COMPARE(changedBindingChecker.state(),
+                 AutoUpdateChecker::ReadyToHandOff);
+    changedBindingChecker.openInstaller();
+    changedBindingPortal.rejectResponse();
+    QList<AutoUpdateChecker::State> changedBindingStates;
+    connect(&changedBindingChecker, &AutoUpdateChecker::stateChanged,
+            &changedBindingChecker, [&]() {
+        changedBindingStates.append(changedBindingChecker.state());
+    });
+    changedBindingNetwork.enqueue(networkScript(replaceOnce(
+        validGitHubReleaseJson(), "\"id\":24680", "\"id\":24681")));
+    enqueueAvailableCheck(&changedBindingNetwork, manifest);
+    changedBindingChecker.retry();
+    QTRY_COMPARE(changedBindingChecker.state(),
+                 AutoUpdateChecker::Available);
+    QVERIFY(changedBindingStates.contains(
+        AutoUpdateChecker::VerificationError));
+    QVERIFY(changedBindingStates.contains(AutoUpdateChecker::Checking));
+    QCOMPARE(changedBindingFiles.clearCalls, 1);
+}
+
+void AutoUpdateTest::desktopPortalResponseRace()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    QSharedPointer<QFile> verified(
+        new QFile(root.path() + QStringLiteral("/verified.flatpak")));
+    QVERIFY(verified->open(QIODevice::WriteOnly));
+    QCOMPARE(verified->write("verified"), qint64(8));
+    verified->close();
+    QVERIFY(verified->open(QIODevice::ReadOnly));
+
+    FakeDesktopPortalTransport immediateTransport;
+    immediateTransport.sendImmediateResponse = true;
+    DesktopInstallerPortal immediatePortal(&immediateTransport);
+    QSignalSpy immediateResponse(
+        &immediatePortal, &InstallerPortal::response);
+    immediatePortal.openFlatpak(verified);
+    QCOMPARE(immediateTransport.calls, 1);
+    QVERIFY(immediateTransport.subscribedBeforeCall);
+    QVERIFY(immediateTransport.observedDescriptor >= 0);
+    QCOMPARE(immediateTransport.observedOptions
+                 .value(QStringLiteral("writable")).toBool(), false);
+    QCOMPARE(immediateTransport.observedOptions
+                 .value(QStringLiteral("ask")).toBool(), true);
+    const QString token = immediateTransport.observedOptions
+        .value(QStringLiteral("handle_token")).toString();
+    QVERIFY(DesktopInstallerPortal::isValidHandleToken(token));
+    QVERIFY(!DesktopInstallerPortal::isValidHandleToken(
+        QString::fromUtf8("\xc3\xa9")));
+    QVERIFY(!DesktopInstallerPortal::isValidHandleToken(
+        QStringLiteral("invalid-token")));
+    QCOMPARE(immediateTransport.subscribed.constFirst(),
+             DesktopInstallerPortal::requestPath(
+                 immediateTransport.uniqueName, token));
+    QCOMPARE(immediateResponse.count(), 1);
+    QCOMPARE(immediateResponse.constFirst().at(0).toBool(), true);
+
+    FakeDesktopPortalTransport reboundTransport;
+    reboundTransport.sendImmediateResponse = true;
+    reboundTransport.returnedPath = QStringLiteral(
+        "/org/freedesktop/portal/desktop/request/1_42/different");
+    DesktopInstallerPortal reboundPortal(&reboundTransport);
+    QSignalSpy reboundResponse(
+        &reboundPortal, &InstallerPortal::response);
+    reboundPortal.openFlatpak(verified);
+    QCOMPARE(reboundResponse.count(), 0);
+    QCOMPARE(reboundTransport.subscribed.size(), 2);
+    QCOMPARE(reboundTransport.subscribed.constLast(),
+             reboundTransport.returnedPath);
+    QVERIFY(reboundTransport.unsubscribed.contains(
+        reboundTransport.subscribed.constFirst()));
+    reboundTransport.sendRawResponse(
+        reboundTransport.subscribed.constFirst(), 0);
+    QCOMPARE(reboundResponse.count(), 0);
+    reboundTransport.sendResponse(reboundTransport.returnedPath, 0);
+    QCOMPARE(reboundResponse.count(), 1);
+    QCOMPARE(reboundResponse.constFirst().at(0).toBool(), true);
+
+    FakeDesktopPortalTransport invalidTransport;
+    invalidTransport.returnedPath = QStringLiteral("/not/a/portal/request");
+    DesktopInstallerPortal invalidPortal(&invalidTransport);
+    QSignalSpy invalidResponse(
+        &invalidPortal, &InstallerPortal::response);
+    invalidPortal.openFlatpak(verified);
+    QCOMPARE(invalidResponse.count(), 1);
+    QCOMPARE(invalidResponse.constFirst().at(0).toBool(), false);
+    QVERIFY(invalidResponse.constFirst().at(1).toString().contains(
+        QStringLiteral("invalid"), Qt::CaseInsensitive));
 }
 
 void AutoUpdateTest::boundedNetwork()
