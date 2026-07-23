@@ -35,6 +35,12 @@ permissions:
 env:
   QT_VERSION: '6.8.3'
   QT_VERSION_MACOS: '6.11.1'
+  VIBERTEMIS_BUILD_COMMIT: ${{ github.sha }}
+  VIBERTEMIS_UPDATE_CHANNEL: >-
+    ${{ github.repository == 'samelamin/vibertemis' &&
+        github.ref == 'refs/heads/main' && 'stable' || 'none' }}
+  VIBERTEMIS_BUILD_SEQUENCE: 0
+  VIBERTEMIS_APPLICATION_ID: com.artemis_desktop.Artemis
 
 jobs:
   setup-version:
@@ -215,13 +221,22 @@ jobs:
             libopus-dev libsdl2-dev libsdl2-ttf-dev \
             libssl-dev libavcodec-dev libavformat-dev libavutil-dev libswscale-dev \
             libxkbcommon-dev wayland-protocols libdrm-dev libgbm-dev \
-            libplacebo-dev
+            libplacebo-dev libdbus-1-dev
 
       - name: Build (qmake + make)
         run: |
           export PATH="$Qt6_DIR/bin:$PATH"
           qmake6 artemis.pro CONFIG+=release "QMAKE_CXXFLAGS+=-fPIC"
           make -j$(/usr/bin/env bash -lc 'command -v sysctl >/dev/null 2>&1 && sysctl -n hw.ncpu || nproc')
+
+      - name: Build and run updater tests
+        run: |
+          export PATH="$Qt6_DIR/bin:$PATH"
+          mkdir -p build/tests-autoupdate
+          cd build/tests-autoupdate
+          qmake6 ../../tests/autoupdate/autoupdate.pro
+          make -j"$(sysctl -n hw.logicalcpu 2>/dev/null || nproc)"
+          QT_QPA_PLATFORM=offscreen ./tst_autoupdate
   build-windows-x64-portable:
     name: Windows x64 Portable Build
     needs: setup-version
@@ -286,6 +301,23 @@ jobs:
         if ($LASTEXITCODE -ne 0) {
           echo "Build failed with exit code $LASTEXITCODE"
           exit $LASTEXITCODE
+        }
+
+    - name: Verify x64 native build identity
+      shell: pwsh
+      run: |
+        $binary = "build\build-x64-release\app\release\Artemis.exe"
+        $buildInfo = (& $binary --build-info | ConvertFrom-Json)
+        if ($LASTEXITCODE -ne 0) { throw "$binary --build-info failed" }
+        $expectedVersion = (Get-Content app\version.txt -Raw).Trim()
+        if ($buildInfo.schema -ne 1 -or
+            $buildInfo.applicationId -ne $env:VIBERTEMIS_APPLICATION_ID -or
+            $buildInfo.commit -ne $env:VIBERTEMIS_BUILD_COMMIT -or
+            $buildInfo.channel -ne $env:VIBERTEMIS_UPDATE_CHANNEL -or
+            [string]$buildInfo.sequence -ne "0" -or
+            $buildInfo.version -ne $expectedVersion -or
+            $buildInfo.internallyConsistent -ne $true) {
+          throw "Unexpected x64 build identity: $($buildInfo | ConvertTo-Json -Compress)"
         }
     
     - name: Rename portable ZIP
@@ -432,6 +464,23 @@ jobs:
           echo "ERROR: Build script failed with exit code $buildExitCode"
           exit $buildExitCode
         }
+
+    - name: Verify ARM64 native build identity
+      shell: pwsh
+      run: |
+        $binary = "build\build-arm64-release\app\release\Artemis.exe"
+        $buildInfo = (& $binary --build-info | ConvertFrom-Json)
+        if ($LASTEXITCODE -ne 0) { throw "$binary --build-info failed" }
+        $expectedVersion = (Get-Content app\version.txt -Raw).Trim()
+        if ($buildInfo.schema -ne 1 -or
+            $buildInfo.applicationId -ne $env:VIBERTEMIS_APPLICATION_ID -or
+            $buildInfo.commit -ne $env:VIBERTEMIS_BUILD_COMMIT -or
+            $buildInfo.channel -ne $env:VIBERTEMIS_UPDATE_CHANNEL -or
+            [string]$buildInfo.sequence -ne "0" -or
+            $buildInfo.version -ne $expectedVersion -or
+            $buildInfo.internallyConsistent -ne $true) {
+          throw "Unexpected ARM64 build identity: $($buildInfo | ConvertTo-Json -Compress)"
+        }
     
     - name: Rename ARM64 portable ZIP
       env:
@@ -550,6 +599,20 @@ jobs:
         cmd /c "scripts\build-artemis-arch.bat release"
         
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+        $binary = "build\build-x64-release\app\release\Artemis.exe"
+        $buildInfo = (& $binary --build-info | ConvertFrom-Json)
+        if ($LASTEXITCODE -ne 0) { throw "$binary --build-info failed" }
+        $expectedVersion = (Get-Content app\version.txt -Raw).Trim()
+        if ($buildInfo.schema -ne 1 -or
+            $buildInfo.applicationId -ne $env:VIBERTEMIS_APPLICATION_ID -or
+            $buildInfo.commit -ne $env:VIBERTEMIS_BUILD_COMMIT -or
+            $buildInfo.channel -ne $env:VIBERTEMIS_UPDATE_CHANNEL -or
+            [string]$buildInfo.sequence -ne "0" -or
+            $buildInfo.version -ne $expectedVersion -or
+            $buildInfo.internallyConsistent -ne $true) {
+          throw "Unexpected x64 MSI build identity: $($buildInfo | ConvertTo-Json -Compress)"
+        }
         
         # Ensure MSI was created
         $msiFile = Get-ChildItem -Path "build\installer-x64-release" -Filter "*.msi" | Select-Object -First 1
@@ -573,6 +636,20 @@ jobs:
         cmd /c "scripts\build-artemis-arch.bat release"
         
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+        $binary = "build\build-arm64-release\app\release\Artemis.exe"
+        $buildInfo = (& $binary --build-info | ConvertFrom-Json)
+        if ($LASTEXITCODE -ne 0) { throw "$binary --build-info failed" }
+        $expectedVersion = (Get-Content app\version.txt -Raw).Trim()
+        if ($buildInfo.schema -ne 1 -or
+            $buildInfo.applicationId -ne $env:VIBERTEMIS_APPLICATION_ID -or
+            $buildInfo.commit -ne $env:VIBERTEMIS_BUILD_COMMIT -or
+            $buildInfo.channel -ne $env:VIBERTEMIS_UPDATE_CHANNEL -or
+            [string]$buildInfo.sequence -ne "0" -or
+            $buildInfo.version -ne $expectedVersion -or
+            $buildInfo.internallyConsistent -ne $true) {
+          throw "Unexpected ARM64 MSI build identity: $($buildInfo | ConvertTo-Json -Compress)"
+        }
         
         # Ensure MSI was created
         $msiFile = Get-ChildItem -Path "build\installer-arm64-release" -Filter "*.msi" | Select-Object -First 1
@@ -716,6 +793,23 @@ jobs:
         cd "$GITHUB_WORKSPACE"
         echo "::warning::This macOS development build is unsigned and may trigger Gatekeeper warnings."
         ARTEMIS_MAC_ARCHS="$(uname -m)" ./scripts/generate-dmg.sh Release "$VERSION"
+        build/build-Release/app/Vibertemis.app/Contents/MacOS/Artemis \
+          --build-info > native-build-info.json
+        export EXPECTED_VERSION="$(tr -d '\r\n' < app/version.txt)"
+        python3 - <<'PY'
+        import json
+        import os
+
+        with open("native-build-info.json", encoding="utf-8") as build_info_file:
+            data = json.load(build_info_file)
+        assert data["schema"] == 1
+        assert data["applicationId"] == os.environ["VIBERTEMIS_APPLICATION_ID"]
+        assert data["commit"] == os.environ["VIBERTEMIS_BUILD_COMMIT"]
+        assert data["channel"] == os.environ["VIBERTEMIS_UPDATE_CHANNEL"]
+        assert data["sequence"] == "0"
+        assert data["version"] == os.environ["EXPECTED_VERSION"]
+        assert data["internallyConsistent"] is True
+        PY
         ./scripts/verify-macos-bundle.sh \
           build/build-Release/app/Vibertemis.app \
           "build/installer-Release/Vibertemis-$VERSION.dmg"
@@ -1157,6 +1251,23 @@ jobs:
         # Build the project using Qt 6
         qmake6 artemis.pro CONFIG+=release "QMAKE_CXXFLAGS+=-fPIC"
         make -j$(nproc)
+
+        app/artemis --build-info > native-build-info.json
+        export EXPECTED_VERSION="$(tr -d '\r\n' < app/version.txt)"
+        python3 - <<'PY'
+        import json
+        import os
+
+        with open("native-build-info.json", encoding="utf-8") as build_info_file:
+            data = json.load(build_info_file)
+        assert data["schema"] == 1
+        assert data["applicationId"] == os.environ["VIBERTEMIS_APPLICATION_ID"]
+        assert data["commit"] == os.environ["VIBERTEMIS_BUILD_COMMIT"]
+        assert data["channel"] == os.environ["VIBERTEMIS_UPDATE_CHANNEL"]
+        assert data["sequence"] == "0"
+        assert data["version"] == os.environ["EXPECTED_VERSION"]
+        assert data["internallyConsistent"] is True
+        PY
         
         # Create AppImage directory structure
         mkdir -p build/installer-release
@@ -1295,18 +1406,71 @@ jobs:
         python3 -m unittest discover -s packaging/flatpak/tests -p 'test_*.py' -v
         python3 packaging/flatpak/validate-manifest.py packaging/flatpak/com.artemisdesktop.ArtemisDesktopDev.json
 
+    - name: Derive Flatpak build identity
+      id: flatpak_identity
+      shell: bash
+      run: |
+        set -euo pipefail
+        channel=none
+        sequence=0
+        if [[ "$GITHUB_REPOSITORY" == "samelamin/vibertemis" &&
+              "$GITHUB_REF" == "refs/heads/main" ]]; then
+          channel=rolling
+          sequence=$GITHUB_RUN_ID
+        fi
+        {
+          echo "commit=$GITHUB_SHA"
+          echo "channel=$channel"
+          echo "sequence=$sequence"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Prepare immutable CI Flatpak manifest
+      run: |
+        python3 packaging/flatpak/prepare-ci-manifest.py \
+          --input packaging/flatpak/com.artemisdesktop.ArtemisDesktopDev.json \
+          --output packaging/flatpak/com.artemisdesktop.ArtemisDesktopDev.ci.json \
+          --commit "${{ steps.flatpak_identity.outputs.commit }}" \
+          --channel "${{ steps.flatpak_identity.outputs.channel }}" \
+          --sequence "${{ steps.flatpak_identity.outputs.sequence }}" \
+          --application-id com.artemisdesktop.ArtemisDesktopDev
+
     - name: Allow Flatpak local submodule mirrors
       run: |
         # This runner is ephemeral. Flatpak-builder uses local Git mirrors to
         # populate the pinned submodules after downloading their exact commits.
         git config --global protocol.file.allow always
     
-    - name: Build tracked Flatpak
+    - name: Build identity-stamped Flatpak
       env:
         VERSION: ${{ needs.setup-version.outputs.version }}
       run: |
-        flatpak-builder --force-clean --install-deps-from=flathub --repo=flatpak-repo flatpak-build packaging/flatpak/com.artemisdesktop.ArtemisDesktopDev.json
+        flatpak-builder --force-clean --install-deps-from=flathub --repo=flatpak-repo flatpak-build packaging/flatpak/com.artemisdesktop.ArtemisDesktopDev.ci.json
         flatpak build flatpak-build env QT_QPA_PLATFORM=offscreen /app/libexec/tst_refreshrate
+
+    - name: Verify Flatpak build identity and bundle
+      env:
+        VERSION: ${{ needs.setup-version.outputs.version }}
+        EXPECTED_COMMIT: ${{ steps.flatpak_identity.outputs.commit }}
+        EXPECTED_CHANNEL: ${{ steps.flatpak_identity.outputs.channel }}
+        EXPECTED_SEQUENCE: ${{ steps.flatpak_identity.outputs.sequence }}
+      run: |
+        flatpak build flatpak-build env QT_QPA_PLATFORM=offscreen \
+          /app/bin/artemis --build-info > flatpak-build-info.json
+        export EXPECTED_VERSION="$(tr -d '\r\n' < app/version.txt)"
+        python3 - <<'PY'
+        import json
+        import os
+
+        with open("flatpak-build-info.json", encoding="utf-8") as build_info_file:
+            data = json.load(build_info_file)
+        assert data["schema"] == 1
+        assert data["applicationId"] == "com.artemisdesktop.ArtemisDesktopDev"
+        assert data["commit"] == os.environ["EXPECTED_COMMIT"]
+        assert data["channel"] == os.environ["EXPECTED_CHANNEL"]
+        assert data["sequence"] == os.environ["EXPECTED_SEQUENCE"]
+        assert data["version"] == os.environ["EXPECTED_VERSION"]
+        assert data["internallyConsistent"] is True
+        PY
         flatpak build-bundle flatpak-repo "artemis-flatpak-$VERSION.flatpak" com.artemisdesktop.ArtemisDesktopDev
 
     - name: Verify Flatpak build result
@@ -1334,6 +1498,7 @@ jobs:
         name: artemis-flatpak-${{ needs.setup-version.outputs.version }}
         path: |
           artemis-flatpak-${{ needs.setup-version.outputs.version }}.flatpak
+          flatpak-build-info.json
           artemis-smoke.log
         retention-days: 30
 

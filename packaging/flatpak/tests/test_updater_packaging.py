@@ -10,6 +10,7 @@ QML_RESOURCE = REPOSITORY_ROOT / "app" / "qml.qrc"
 MAIN_QML = REPOSITORY_ROOT / "app" / "gui" / "main.qml"
 SETTINGS_QML = REPOSITORY_ROOT / "app" / "gui" / "SettingsView.qml"
 UPDATE_DIALOG_QML = REPOSITORY_ROOT / "app" / "gui" / "UpdateDialog.qml"
+WORKFLOW = REPOSITORY_ROOT / ".github" / "workflows" / "dev-build.yml"
 
 
 class UpdaterQmlContractTests(unittest.TestCase):
@@ -23,6 +24,7 @@ class UpdaterQmlContractTests(unittest.TestCase):
             if UPDATE_DIALOG_QML.exists()
             else ""
         )
+        cls.workflow = WORKFLOW.read_text(encoding="utf-8")
 
     def test_update_dialog_is_packaged_as_a_qml_resource(self):
         self.assertTrue(UPDATE_DIALOG_QML.is_file())
@@ -324,6 +326,99 @@ class UpdaterQmlContractTests(unittest.TestCase):
             self.dialog,
             r"onAboutToHide:\s*\{[\s\S]{0,300}"
             r"(?:previousFocusItem|stackView)\.forceActiveFocus",
+        )
+
+    def test_workflow_sets_safe_native_identity_defaults(self):
+        workflow_env = self.workflow[
+            self.workflow.index("env:") : self.workflow.index("\njobs:")
+        ]
+        self.assertIn("VIBERTEMIS_BUILD_COMMIT: ${{ github.sha }}", workflow_env)
+        self.assertRegex(
+            workflow_env,
+            re.compile(
+                r"VIBERTEMIS_UPDATE_CHANNEL:\s*>-.*?"
+                r"github\.repository\s*==\s*'samelamin/vibertemis'.*?"
+                r"github\.ref\s*==\s*'refs/heads/main'.*?"
+                r"'stable'\s*\|\|\s*'none'",
+                re.DOTALL,
+            ),
+        )
+        self.assertIn("VIBERTEMIS_BUILD_SEQUENCE: 0", workflow_env)
+        self.assertIn(
+            "VIBERTEMIS_APPLICATION_ID: com.artemis_desktop.Artemis",
+            workflow_env,
+        )
+
+    def test_flatpak_job_derives_and_embeds_exact_rolling_identity(self):
+        flatpak_job = self.workflow[self.workflow.index("  build-flatpak-dev:") :]
+        flatpak_job = flatpak_job[
+            : flatpak_job.index("\n  publish-steam-deck-release:")
+        ]
+        for token in (
+            "id: flatpak_identity",
+            'GITHUB_REPOSITORY" == "samelamin/vibertemis',
+            'GITHUB_REF" == "refs/heads/main',
+            "channel=rolling",
+            "sequence=$GITHUB_RUN_ID",
+            "channel=none",
+            "sequence=0",
+            "packaging/flatpak/prepare-ci-manifest.py",
+            "--commit \"${{ steps.flatpak_identity.outputs.commit }}\"",
+            "--channel \"${{ steps.flatpak_identity.outputs.channel }}\"",
+            "--sequence \"${{ steps.flatpak_identity.outputs.sequence }}\"",
+            "--application-id com.artemisdesktop.ArtemisDesktopDev",
+            "packaging/flatpak/com.artemisdesktop.ArtemisDesktopDev.ci.json",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, flatpak_job)
+        self.assertNotIn(
+            "flatpak-builder --force-clean --install-deps-from=flathub "
+            "--repo=flatpak-repo flatpak-build "
+            "packaging/flatpak/com.artemisdesktop.ArtemisDesktopDev.json",
+            flatpak_job,
+        )
+
+    def test_workflow_verifies_every_package_build_identity_before_upload(self):
+        for binary in (
+            r"build\build-x64-release\app\release\Artemis.exe",
+            r"build\build-arm64-release\app\release\Artemis.exe",
+            "build/build-Release/app/Vibertemis.app/Contents/MacOS/Artemis",
+            "app/artemis",
+            "/app/bin/artemis",
+        ):
+            with self.subTest(binary=binary):
+                self.assertIn(binary, self.workflow)
+        for field in (
+            "schema",
+            "applicationId",
+            "commit",
+            "channel",
+            "sequence",
+            "version",
+        ):
+            with self.subTest(field=field):
+                self.assertRegex(
+                    self.workflow,
+                    rf"(?:buildInfo|data).{field}|{field}.+(?:buildInfo|data)",
+                )
+        self.assertIn("flatpak-build-info.json", self.workflow)
+        flatpak_upload = self.workflow[
+            self.workflow.index("- name: Upload Flatpak Development Artifacts") :
+        ]
+        self.assertIn("flatpak-build-info.json", flatpak_upload)
+
+    def test_compile_sanity_runs_updater_suite_on_linux_and_macos(self):
+        compile_sanity = self.workflow[
+            self.workflow.index("  compile-sanity:") :
+            self.workflow.index("\n  build-windows-x64-portable:")
+        ]
+        self.assertIn("matrix:", compile_sanity)
+        self.assertIn("os: [macos-latest, ubuntu-22.04]", compile_sanity)
+        self.assertIn("qmake6 ../../tests/autoupdate/autoupdate.pro", compile_sanity)
+        self.assertIn("QT_QPA_PLATFORM=offscreen ./tst_autoupdate", compile_sanity)
+        self.assertRegex(
+            compile_sanity,
+            r"sudo apt-get install[\s\S]*libdbus-1-dev",
         )
 
 

@@ -14,6 +14,10 @@ REFRESH_RATE_TEST = (
 )
 WORKFLOW = Path(__file__).parents[3] / ".github" / "workflows" / "dev-build.yml"
 CODEC_PROBE = Path(__file__).parents[1] / "artemis-codec-probe.cpp"
+TRACKED_MANIFEST = (
+    Path(__file__).parents[1] / "com.artemisdesktop.ArtemisDesktopDev.json"
+)
+PREPARE_CI_MANIFEST = Path(__file__).parents[1] / "prepare-ci-manifest.py"
 
 
 def valid_manifest():
@@ -70,6 +74,7 @@ def valid_manifest():
             },
             {
                 "name": "artemis",
+                "buildsystem": "qmake",
                 "config-opts": ["CONFIG+=build_tests"],
                 "sources": [{"type": "dir", "path": "../.."}],
             },
@@ -103,11 +108,195 @@ class ManifestValidatorTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0, result.stdout)
         self.assertIn(message, result.stderr)
 
+    def run_manifest_preparer(
+        self,
+        manifest,
+        *,
+        commit="a" * 40,
+        channel="rolling",
+        sequence="1234",
+        application_id="com.artemisdesktop.ArtemisDesktopDev",
+        output_outside_flatpak=False,
+    ):
+        temporary_directory = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary_directory.cleanup)
+        root = Path(temporary_directory.name)
+        flatpak_directory = root / "packaging" / "flatpak"
+        flatpak_directory.mkdir(parents=True)
+        input_path = (
+            flatpak_directory / "com.artemisdesktop.ArtemisDesktopDev.json"
+        )
+        output_path = (
+            root / "outside.json"
+            if output_outside_flatpak
+            else flatpak_directory
+            / "com.artemisdesktop.ArtemisDesktopDev.ci.json"
+        )
+        input_bytes = json.dumps(manifest, indent=4).encode("utf-8")
+        input_path.write_bytes(input_bytes)
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(PREPARE_CI_MANIFEST),
+                "--input",
+                str(input_path),
+                "--output",
+                str(output_path),
+                "--commit",
+                commit,
+                "--channel",
+                channel,
+                "--sequence",
+                sequence,
+                "--application-id",
+                application_id,
+            ],
+            capture_output=True,
+            check=False,
+            text=True,
+        )
+        return result, input_path, output_path, input_bytes
+
     def test_accepts_manifest_that_satisfies_contract(self):
         result = self.run_validator(valid_manifest())
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("manifest contract satisfied", result.stdout)
+
+    def test_tracked_manifest_adds_only_downloads_filesystem_write_access(self):
+        manifest = json.loads(TRACKED_MANIFEST.read_text(encoding="utf-8"))
+        filesystem_permissions = {
+            argument
+            for argument in manifest["finish-args"]
+            if argument.startswith("--filesystem=")
+        }
+
+        self.assertEqual(
+            filesystem_permissions,
+            {
+                "--filesystem=host-os:ro",
+                "--filesystem=xdg-download",
+                "--filesystem=xdg-run/gamescope-0",
+            },
+        )
+        for forbidden in (
+            "--filesystem=home",
+            "--filesystem=host",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, manifest["finish-args"])
+        serialized = json.dumps(manifest)
+        for forbidden in ("flatpak-spawn", "org.freedesktop.Flatpak"):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, serialized)
+
+    def test_ci_manifest_preparer_is_deterministic_and_preserves_input(self):
+        manifest = json.loads(TRACKED_MANIFEST.read_text(encoding="utf-8"))
+        result, input_path, output_path, input_bytes = self.run_manifest_preparer(
+            manifest
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(input_path.read_bytes(), input_bytes)
+        self.assertEqual(output_path.parent, input_path.parent)
+        prepared = json.loads(output_path.read_text(encoding="utf-8"))
+        artemis = [
+            module
+            for module in prepared["modules"]
+            if module.get("name") == "artemis"
+        ]
+        self.assertEqual(len(artemis), 1)
+        self.assertEqual(
+            artemis[0]["config-opts"][-4:],
+            [
+                f"VIBERTEMIS_BUILD_COMMIT={'a' * 40}",
+                "VIBERTEMIS_UPDATE_CHANNEL=rolling",
+                "VIBERTEMIS_BUILD_SEQUENCE=1234",
+                "VIBERTEMIS_APPLICATION_ID="
+                "com.artemisdesktop.ArtemisDesktopDev",
+            ],
+        )
+
+    def test_ci_manifest_preparer_enforces_identity_policy(self):
+        invalid_identities = (
+            ("uppercase SHA", "A" * 40, "rolling", "1",
+             "com.artemisdesktop.ArtemisDesktopDev"),
+            ("short SHA", "a" * 39, "rolling", "1",
+             "com.artemisdesktop.ArtemisDesktopDev"),
+            ("unsafe SHA", "a" * 39 + ";", "rolling", "1",
+             "com.artemisdesktop.ArtemisDesktopDev"),
+            ("invalid channel", "a" * 40, "nightly", "1",
+             "com.artemisdesktop.ArtemisDesktopDev"),
+            ("unsafe sequence", "a" * 40, "rolling", "1;touch",
+             "com.artemisdesktop.ArtemisDesktopDev"),
+            ("leading-zero sequence", "a" * 40, "rolling", "01",
+             "com.artemisdesktop.ArtemisDesktopDev"),
+            ("wrong app ID", "a" * 40, "rolling", "1",
+             "com.artemis_desktop.Artemis"),
+            ("rolling zero", "a" * 40, "rolling", "0",
+             "com.artemisdesktop.ArtemisDesktopDev"),
+            ("stable nonzero", "a" * 40, "stable", "1",
+             "com.artemisdesktop.ArtemisDesktopDev"),
+            ("none nonzero", "a" * 40, "none", "1",
+             "com.artemisdesktop.ArtemisDesktopDev"),
+        )
+        for name, commit, channel, sequence, application_id in invalid_identities:
+            with self.subTest(name=name):
+                result, _, output_path, _ = self.run_manifest_preparer(
+                    valid_manifest(),
+                    commit=commit,
+                    channel=channel,
+                    sequence=sequence,
+                    application_id=application_id,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse(output_path.exists())
+
+        for channel, sequence in (("rolling", "1"), ("stable", "0"), ("none", "0")):
+            with self.subTest(valid_channel=channel):
+                result, _, output_path, _ = self.run_manifest_preparer(
+                    valid_manifest(), channel=channel, sequence=sequence
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertTrue(output_path.exists())
+
+    def test_ci_manifest_preparer_rejects_ambiguous_or_unsafe_manifest(self):
+        duplicate_module = valid_manifest()
+        duplicate_module["modules"].append(
+            {
+                "name": "artemis",
+                "buildsystem": "qmake",
+                "config-opts": [],
+                "sources": [{"type": "dir", "path": "../.."}],
+            }
+        )
+        duplicate_option = valid_manifest()
+        duplicate_option["modules"][2]["config-opts"].append(
+            "VIBERTEMIS_UPDATE_CHANNEL=none"
+        )
+        nested_duplicate_option = valid_manifest()
+        nested_duplicate_option["modules"][2]["build-options"] = {
+            "config-opts": [" VIBERTEMIS_BUILD_SEQUENCE=0"]
+        }
+        wrong_buildsystem = valid_manifest()
+        wrong_buildsystem["modules"][2]["buildsystem"] = "simple"
+
+        for name, manifest in (
+            ("duplicate module", duplicate_module),
+            ("duplicate option", duplicate_option),
+            ("nested duplicate option", nested_duplicate_option),
+            ("non-qmake module", wrong_buildsystem),
+        ):
+            with self.subTest(name=name):
+                result, _, output_path, _ = self.run_manifest_preparer(manifest)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse(output_path.exists())
+
+        result, _, output_path, _ = self.run_manifest_preparer(
+            valid_manifest(), output_outside_flatpak=True
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(output_path.exists())
 
     def test_requires_application_id_and_kde_610_runtime(self):
         manifest = valid_manifest()
@@ -339,7 +528,7 @@ class ManifestValidatorTests(unittest.TestCase):
         builder_command = (
             "flatpak-builder --force-clean --install-deps-from=flathub "
             "--repo=flatpak-repo flatpak-build "
-            "packaging/flatpak/com.artemisdesktop.ArtemisDesktopDev.json"
+            "packaging/flatpak/com.artemisdesktop.ArtemisDesktopDev.ci.json"
         )
         test_command = (
             "flatpak build flatpak-build env QT_QPA_PLATFORM=offscreen "
@@ -367,7 +556,7 @@ class ManifestValidatorTests(unittest.TestCase):
         builder_command = (
             "flatpak-builder --force-clean --install-deps-from=flathub "
             "--repo=flatpak-repo flatpak-build "
-            "packaging/flatpak/com.artemisdesktop.ArtemisDesktopDev.json"
+            "packaging/flatpak/com.artemisdesktop.ArtemisDesktopDev.ci.json"
         )
 
         self.assertIn(mirror_configuration, workflow)

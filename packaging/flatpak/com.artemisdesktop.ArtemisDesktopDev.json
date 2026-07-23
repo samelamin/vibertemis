@@ -19,6 +19,7 @@
         "--env=LIBVA_DRIVERS_PATH=",
         "--unset-env=LIBVA_DRIVERS_PATH",
         "--filesystem=xdg-run/gamescope-0",
+        "--filesystem=xdg-download",
         "--filesystem=host-os:ro"
     ],
     "cleanup": [
