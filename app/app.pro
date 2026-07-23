@@ -2,6 +2,11 @@ QT += core quick network quickcontrols2 svg
 CONFIG += c++11
 
 unix:!macx {
+    QT += dbus
+    DEFINES += VIBERTEMIS_HAS_DESKTOP_PORTAL
+}
+
+unix:!macx {
     TARGET = artemis
 } else {
     # On macOS, this is the name displayed in the global menu bar
@@ -208,6 +213,7 @@ SOURCES += \
     streaming/streamutils.cpp \
     backend/autoupdatechecker.cpp \
     backend/buildinfo.cpp \
+    backend/desktopinstallerportal.cpp \
     backend/pendingupdate.cpp \
     backend/releaseversionselector.cpp \
     backend/rollingupdateparser.cpp \
@@ -258,6 +264,7 @@ HEADERS += \
     streaming/streamutils.h \
     backend/autoupdatechecker.h \
     backend/buildinfo.h \
+    backend/desktopinstallerportal.h \
     backend/pendingupdate.h \
     backend/releaseversionselector.h \
     backend/updateresult.h \

@@ -19,6 +19,9 @@ public:
         DownloadFailed,
         VerificationFailed,
         RestoreFailed,
+        BeginHandOff,
+        HandOffAccepted,
+        HandOffFailed,
         Retry,
         Cancel
     };

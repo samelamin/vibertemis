@@ -14,6 +14,7 @@
 
 class QNetworkReply;
 class QCryptographicHash;
+class InstallerPortal;
 
 class UpdateCheckPolicy
 {
@@ -47,6 +48,9 @@ public:
         Verifying,
         ReadyForDesktop,
         ReadyToHandOff,
+        HandingOff,
+        HandOffRequested,
+        HandOffError,
         CheckError,
         DownloadError,
         VerificationError,
@@ -59,6 +63,11 @@ public:
     AutoUpdateChecker(QNetworkAccessManager *network,
                       UpdateFileStore *files,
                       SessionModeProvider *session,
+                      QObject *parent = nullptr);
+    AutoUpdateChecker(QNetworkAccessManager *network,
+                      UpdateFileStore *files,
+                      SessionModeProvider *session,
+                      InstallerPortal *portal,
                       QObject *parent = nullptr);
     AutoUpdateChecker(QNetworkAccessManager *network,
                       UpdateFileStore *files,
@@ -88,6 +97,7 @@ public:
     Q_INVOKABLE void cancel();
     Q_INVOKABLE void retry();
     Q_INVOKABLE void discardPendingUpdate();
+    Q_INVOKABLE void openInstaller();
     Q_INVOKABLE void openReleasePage();
 
 signals:
@@ -121,7 +131,21 @@ private:
         RevalidateTagReference,
         RevalidateTagObjectRequest
     };
-    enum RetryOrigin { NoRetry, CheckRetry, DownloadRetry, VerificationRetry, RestoreRetry };
+    enum RetryOrigin {
+        NoRetry,
+        CheckRetry,
+        DownloadRetry,
+        VerificationRetry,
+        RestoreRetry,
+        HandOffRetry
+    };
+
+    AutoUpdateChecker(QNetworkAccessManager *network,
+                      UpdateFileStore *files,
+                      SessionModeProvider *session,
+                      InstallerPortal *portal,
+                      UpdateCheckPolicy *policy,
+                      QObject *parent);
 
     void initialize();
     bool applyTransition(int event);
@@ -168,9 +192,11 @@ private:
     QNetworkAccessManager *m_Nam;
     UpdateFileStore *m_Files;
     SessionModeProvider *m_Session;
+    InstallerPortal *m_Portal;
     UpdateCheckPolicy *m_Policy;
     QScopedPointer<UpdateFileStore> m_OwnedFiles;
     QScopedPointer<SessionModeProvider> m_OwnedSession;
+    QScopedPointer<InstallerPortal> m_OwnedPortal;
     QScopedPointer<UpdateCheckPolicy> m_OwnedPolicy;
     QNetworkReply *m_Reply;
     RequestStage m_RequestStage;
@@ -191,6 +217,7 @@ private:
     PendingUpdateRecord m_RestoreRecord;
     bool m_Restoring;
     bool m_ReloadPendingRecord;
+    bool m_HandOffRetry;
 
     QSharedPointer<QTemporaryFile> m_Temporary;
     QSharedPointer<QFile> m_VerifiedFile;

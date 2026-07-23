@@ -64,10 +64,26 @@ UpdateResult<AutoUpdateChecker::State> UpdateStateMachine::reduce(
         if (event == E::Cancel) return transition(S::Cancelled);
         break;
     case S::ReadyForDesktop:
-    case S::ReadyToHandOff:
         if (event == E::Retry) return transition(S::Verifying);
         if (event == E::BeginCheck) return transition(S::Checking);
         if (event == E::Cancel) return transition(S::Cancelled);
+        break;
+    case S::ReadyToHandOff:
+        if (event == E::BeginHandOff) return transition(S::HandingOff);
+        if (event == E::Retry) return transition(S::Verifying);
+        if (event == E::BeginCheck) return transition(S::Checking);
+        if (event == E::Cancel) return transition(S::Cancelled);
+        break;
+    case S::HandingOff:
+        if (event == E::HandOffAccepted) return transition(S::HandOffRequested);
+        if (event == E::HandOffFailed) return transition(S::HandOffError);
+        break;
+    case S::HandOffRequested:
+        if (event == E::BeginCheck) return transition(S::Checking);
+        if (event == E::Retry) return transition(S::Verifying);
+        break;
+    case S::HandOffError:
+        if (event == E::Retry) return transition(S::Verifying);
         break;
     case S::CheckError:
         if (event == E::Retry || event == E::BeginCheck) return transition(S::Checking);

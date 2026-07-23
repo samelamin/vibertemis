@@ -1,6 +1,7 @@
 #include "autoupdatechecker.h"
 
 #include "buildinfo.h"
+#include "desktopinstallerportal.h"
 #include "releaseversionselector.h"
 #include "updatestatemachine.h"
 
@@ -66,6 +67,7 @@ AutoUpdateChecker::AutoUpdateChecker(QObject *parent) :
     m_Nam(new QNetworkAccessManager(this)),
     m_Files(nullptr),
     m_Session(nullptr),
+    m_Portal(nullptr),
     m_Policy(nullptr),
     m_Reply(nullptr),
     m_RequestStage(NoRequest),
@@ -73,13 +75,16 @@ AutoUpdateChecker::AutoUpdateChecker(QObject *parent) :
     m_Redirects(0),
     m_Restoring(false),
     m_ReloadPendingRecord(false),
+    m_HandOffRetry(false),
     m_BytesReceived(0),
     m_BytesTotal(0)
 {
     m_OwnedFiles.reset(new PendingUpdateStore);
     m_OwnedSession.reset(new EnvironmentSessionModeProvider);
+    m_OwnedPortal.reset(new DesktopInstallerPortal);
     m_Files = m_OwnedFiles.data();
     m_Session = m_OwnedSession.data();
+    m_Portal = m_OwnedPortal.data();
     initialize();
 }
 
@@ -87,13 +92,33 @@ AutoUpdateChecker::AutoUpdateChecker(QNetworkAccessManager *network,
                                      UpdateFileStore *files,
                                      SessionModeProvider *session,
                                      QObject *parent) :
-    AutoUpdateChecker(network, files, session, nullptr, parent)
+    AutoUpdateChecker(network, files, session,
+                      static_cast<InstallerPortal *>(nullptr), parent)
 {
 }
 
 AutoUpdateChecker::AutoUpdateChecker(QNetworkAccessManager *network,
                                      UpdateFileStore *files,
                                      SessionModeProvider *session,
+                                     InstallerPortal *portal,
+                                     QObject *parent) :
+    AutoUpdateChecker(network, files, session, portal, nullptr, parent)
+{
+}
+
+AutoUpdateChecker::AutoUpdateChecker(QNetworkAccessManager *network,
+                                     UpdateFileStore *files,
+                                     SessionModeProvider *session,
+                                     UpdateCheckPolicy *policy,
+                                     QObject *parent) :
+    AutoUpdateChecker(network, files, session, nullptr, policy, parent)
+{
+}
+
+AutoUpdateChecker::AutoUpdateChecker(QNetworkAccessManager *network,
+                                     UpdateFileStore *files,
+                                     SessionModeProvider *session,
+                                     InstallerPortal *portal,
                                      UpdateCheckPolicy *policy,
                                      QObject *parent) :
     QObject(parent),
@@ -103,6 +128,7 @@ AutoUpdateChecker::AutoUpdateChecker(QNetworkAccessManager *network,
     m_Nam(network),
     m_Files(files),
     m_Session(session),
+    m_Portal(portal),
     m_Policy(policy),
     m_Reply(nullptr),
     m_RequestStage(NoRequest),
@@ -110,12 +136,17 @@ AutoUpdateChecker::AutoUpdateChecker(QNetworkAccessManager *network,
     m_Redirects(0),
     m_Restoring(false),
     m_ReloadPendingRecord(false),
+    m_HandOffRetry(false),
     m_BytesReceived(0),
     m_BytesTotal(0)
 {
     Q_ASSERT(m_Nam);
     Q_ASSERT(m_Files);
     Q_ASSERT(m_Session);
+    if (!m_Portal) {
+        m_OwnedPortal.reset(new DesktopInstallerPortal);
+        m_Portal = m_OwnedPortal.data();
+    }
     initialize();
 }
 
@@ -150,6 +181,23 @@ void AutoUpdateChecker::initialize()
             this, &AutoUpdateChecker::handleIdleTimeout);
     connect(&m_OverallTimer, &QTimer::timeout,
             this, &AutoUpdateChecker::handleOverallTimeout);
+    connect(m_Portal, &InstallerPortal::response,
+            this, [this](bool accepted, const QString &message) {
+        if (m_State != HandingOff) {
+            return;
+        }
+        if (accepted) {
+            clearError();
+            applyTransition(UpdateStateMachine::HandOffAccepted);
+        } else {
+            applyTransition(UpdateStateMachine::HandOffFailed);
+            setError(UpdateError::PortalFailure,
+                     message.isEmpty()
+                        ? QStringLiteral("The installer request failed.")
+                        : message,
+                     HandOffRetry);
+        }
+    });
 
     QString currentVersion(VERSION_STR);
     parseStringToVersionQuad(currentVersion, m_CurrentVersionQuad);
@@ -281,6 +329,7 @@ void AutoUpdateChecker::invalidatePendingAndCheck(
     m_ExpectedCandidate = RollingUpdateCandidate();
     m_Restoring = false;
     m_ReloadPendingRecord = false;
+    m_HandOffRetry = false;
     if (!m_DownloadedPath.isEmpty()) {
         m_DownloadedPath.clear();
         emit downloadedPathChanged();
@@ -353,6 +402,7 @@ void AutoUpdateChecker::checkNow()
     clearError();
     m_Restoring = false;
     m_ReloadPendingRecord = false;
+    m_HandOffRetry = false;
     clearCandidate();
     if (rollingInstallSupported()) {
         beginRollingCheck();
@@ -504,6 +554,15 @@ void AutoUpdateChecker::retry()
         beginRevalidation(true);
         return;
     }
+    if (m_State == HandOffError || m_State == HandOffRequested) {
+        if (!applyTransition(UpdateStateMachine::Retry)) {
+            return;
+        }
+        clearError();
+        m_HandOffRetry = true;
+        beginRevalidation(false);
+        return;
+    }
     if (m_State == ReadyForDesktop || m_State == ReadyToHandOff) {
         if (!applyTransition(UpdateStateMachine::Retry)) {
             return;
@@ -522,6 +581,39 @@ void AutoUpdateChecker::discardPendingUpdate()
         cancel();
         return;
     }
+    if (m_State == HandOffRequested || m_State == HandOffError) {
+        m_Files->clear(true);
+        m_VerifiedFile.reset();
+        m_RestoreRecord = PendingUpdateRecord();
+        m_ExpectedCandidate = RollingUpdateCandidate();
+        if (!m_DownloadedPath.isEmpty()) {
+            m_DownloadedPath.clear();
+            emit downloadedPathChanged();
+        }
+    }
+}
+
+void AutoUpdateChecker::openInstaller()
+{
+    if (m_State != ReadyToHandOff
+            || m_Session->mode() != SteamDeckSession::Desktop) {
+        return;
+    }
+    if (!applyTransition(UpdateStateMachine::BeginHandOff)) {
+        return;
+    }
+    clearError();
+    if (!m_VerifiedFile || !m_VerifiedFile->isOpen()
+            || !(m_VerifiedFile->openMode() & QIODevice::ReadOnly)
+            || (m_VerifiedFile->openMode() & QIODevice::WriteOnly)
+            || m_VerifiedFile->handle() < 0) {
+        applyTransition(UpdateStateMachine::HandOffFailed);
+        setError(UpdateError::PortalFailure,
+                 QStringLiteral("The verified update file is unavailable."),
+                 HandOffRetry);
+        return;
+    }
+    m_Portal->openFlatpak(m_VerifiedFile);
 }
 
 void AutoUpdateChecker::openReleasePage()
@@ -1118,7 +1210,7 @@ void AutoUpdateChecker::beginRevalidation(bool restoring)
 
 void AutoUpdateChecker::finishRevalidation()
 {
-    if (m_Restoring) {
+    if (m_Restoring || m_HandOffRetry) {
         const UpdateResult<UpdateFileStore::OpenVerifiedFile> reopened =
             m_Files->reopenAndVerify(m_RestoreRecord, m_ExpectedCandidate);
         if (!reopened.ok) {
@@ -1136,6 +1228,7 @@ void AutoUpdateChecker::finishRevalidation()
         m_VerifiedFile = reopened.value.file;
         m_DownloadedPath = reopened.value.canonicalPath;
         emit downloadedPathChanged();
+        m_HandOffRetry = false;
     } else {
         saveVerifiedPending();
         if (m_State != Verifying) {
@@ -1165,7 +1258,9 @@ void AutoUpdateChecker::saveVerifiedPending()
     if (!m_Files->save(record)) {
         failForActiveOperation(UpdateError::IoFailure,
                                QStringLiteral("The pending update could not be saved."));
+        return;
     }
+    m_RestoreRecord = record;
 }
 
 QString AutoUpdateChecker::rateLimitMessage(QNetworkReply *reply) const

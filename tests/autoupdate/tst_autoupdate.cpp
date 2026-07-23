@@ -18,6 +18,7 @@
 
 #include "backend/autoupdatechecker.h"
 #include "backend/buildinfo.h"
+#include "backend/desktopinstallerportal.h"
 #include "backend/pendingupdate.h"
 #include "backend/releaseversionselector.h"
 #include "backend/rollingupdateparser.h"
@@ -211,6 +212,39 @@ public:
     bool stableCheckSupported() const override { return stable; }
 };
 
+class FakeInstallerPortal : public InstallerPortal
+{
+public:
+    explicit FakeInstallerPortal(QObject *parent = nullptr) :
+        InstallerPortal(parent)
+    {
+    }
+
+    void openFlatpak(const QSharedPointer<QFile> &verifiedFile) override
+    {
+        ++calls;
+        file = verifiedFile;
+    }
+
+    void accept()
+    {
+        emit response(true, QStringLiteral("accepted"));
+    }
+
+    void rejectResponse()
+    {
+        emit response(false, QStringLiteral("portal response rejected"));
+    }
+
+    void failMethod()
+    {
+        emit response(false, QStringLiteral("portal method failed"));
+    }
+
+    int calls = 0;
+    QSharedPointer<QFile> file;
+};
+
 class FakeUpdateFileStore : public UpdateFileStore
 {
 public:
@@ -389,6 +423,7 @@ private slots:
     void rollingParser();
     void steamDeckSession();
     void stateMachine();
+    void desktopPortal();
     void boundedNetwork();
 };
 
@@ -2018,6 +2053,12 @@ void AutoUpdateTest::stateMachine()
         {S::ReadyToHandOff, E::Retry, S::Verifying},
         {S::ReadyToHandOff, E::BeginCheck, S::Checking},
         {S::ReadyToHandOff, E::Cancel, S::Cancelled},
+        {S::ReadyToHandOff, E::BeginHandOff, S::HandingOff},
+        {S::HandingOff, E::HandOffAccepted, S::HandOffRequested},
+        {S::HandingOff, E::HandOffFailed, S::HandOffError},
+        {S::HandOffRequested, E::BeginCheck, S::Checking},
+        {S::HandOffRequested, E::Retry, S::Verifying},
+        {S::HandOffError, E::Retry, S::Verifying},
         {S::CheckError, E::Retry, S::Checking},
         {S::CheckError, E::BeginCheck, S::Checking},
         {S::DownloadError, E::Retry, S::Available},
@@ -2041,6 +2082,10 @@ void AutoUpdateTest::stateMachine()
     QVERIFY(!UpdateStateMachine::reduce(S::Idle, E::BeginDownload).ok);
     QVERIFY(!UpdateStateMachine::reduce(S::ReadyForDesktop,
                                         E::VerificationPassedDesktop).ok);
+    QVERIFY(!UpdateStateMachine::reduce(S::ReadyToHandOff,
+                                        E::HandOffAccepted).ok);
+    QVERIFY(!UpdateStateMachine::reduce(S::HandOffError,
+                                        E::BeginHandOff).ok);
 
     const QMetaObject &meta = AutoUpdateChecker::staticMetaObject;
     QVERIFY(meta.indexOfEnumerator("State") >= 0);
@@ -2054,6 +2099,156 @@ void AutoUpdateTest::stateMachine()
     QVERIFY(meta.indexOfProperty("errorMessage") >= 0);
     QVERIFY(meta.indexOfProperty("rollingInstallSupported") >= 0);
 
+}
+
+void AutoUpdateTest::desktopPortal()
+{
+    QCOMPARE(DesktopInstallerPortal::serviceName(),
+             QStringLiteral("org.freedesktop.portal.Desktop"));
+    QCOMPARE(DesktopInstallerPortal::desktopObjectPath(),
+             QStringLiteral("/org/freedesktop/portal/desktop"));
+    QCOMPARE(DesktopInstallerPortal::openUriInterface(),
+             QStringLiteral("org.freedesktop.portal.OpenURI"));
+    QCOMPARE(DesktopInstallerPortal::openFileMethod(),
+             QStringLiteral("OpenFile"));
+    const QVariantMap options = DesktopInstallerPortal::openFileOptions();
+    QCOMPARE(options.value(QStringLiteral("writable")).toBool(), false);
+    QCOMPARE(options.value(QStringLiteral("ask")).toBool(), true);
+    QCOMPARE(options.size(), 2);
+
+    const QByteArray payload = rollingPayload();
+    const QByteArray manifest = manifestForPayload(payload);
+    const RollingUpdateCandidate candidate =
+        boundCandidateForPayload(payload);
+
+    const auto pendingRecord =
+        [&](FakeUpdateFileStore *files) -> PendingUpdateRecord {
+        const QString path =
+            files->root.path() + QStringLiteral("/pending.flatpak");
+        QFile payloadFile(path);
+        if (!payloadFile.open(QIODevice::WriteOnly)
+                || payloadFile.write(payload) != payload.size()) {
+            return PendingUpdateRecord();
+        }
+        payloadFile.close();
+        PendingUpdateRecord record;
+        record.canonicalPath = path;
+        record.candidate = candidate;
+        record.verifiedSize = candidate.flatpak.size;
+        record.verifiedSha256 = candidate.flatpak.sha256;
+        files->loadResult.ok = true;
+        files->loadResult.value = record;
+        return record;
+    };
+
+    FakeNetworkAccessManager acceptedNetwork;
+    FakeUpdateFileStore acceptedFiles;
+    const PendingUpdateRecord acceptedRecord = pendingRecord(&acceptedFiles);
+    QVERIFY(!acceptedRecord.canonicalPath.isEmpty());
+    FakeSessionModeProvider desktop;
+    FakeInstallerPortal acceptedPortal;
+    enqueueUnchangedRefetch(&acceptedNetwork, manifest);
+    AutoUpdateChecker acceptedChecker(
+        &acceptedNetwork, &acceptedFiles, &desktop, &acceptedPortal);
+    acceptedChecker.start();
+    QTRY_COMPARE(acceptedChecker.state(),
+                 AutoUpdateChecker::ReadyToHandOff);
+    acceptedChecker.openInstaller();
+    QCOMPARE(acceptedChecker.state(), AutoUpdateChecker::HandingOff);
+    QCOMPARE(acceptedPortal.calls, 1);
+    QVERIFY(acceptedPortal.file);
+    QVERIFY(acceptedPortal.file->isOpen());
+    QCOMPARE(acceptedPortal.file->openMode(), QIODevice::ReadOnly);
+    QVERIFY(acceptedPortal.file->handle() >= 0);
+    QCOMPARE(acceptedPortal.file->fileName(), acceptedRecord.canonicalPath);
+    acceptedPortal.accept();
+    QCOMPARE(acceptedChecker.state(), AutoUpdateChecker::HandOffRequested);
+    QCOMPARE(acceptedFiles.clearCalls, 0);
+    QVERIFY(QFileInfo::exists(acceptedRecord.canonicalPath));
+    acceptedChecker.discardPendingUpdate();
+    QCOMPARE(acceptedFiles.clearCalls, 1);
+    QVERIFY(acceptedFiles.lastClearRemovedPayload);
+
+    FakeNetworkAccessManager deniedNetwork;
+    FakeUpdateFileStore deniedFiles;
+    pendingRecord(&deniedFiles);
+    FakeInstallerPortal deniedPortal;
+    enqueueUnchangedRefetch(&deniedNetwork, manifest);
+    AutoUpdateChecker deniedChecker(
+        &deniedNetwork, &deniedFiles, &desktop, &deniedPortal);
+    deniedChecker.start();
+    QTRY_COMPARE(deniedChecker.state(),
+                 AutoUpdateChecker::ReadyToHandOff);
+    deniedChecker.openInstaller();
+    deniedPortal.rejectResponse();
+    QCOMPARE(deniedChecker.state(), AutoUpdateChecker::HandOffError);
+    QVERIFY(deniedChecker.errorMessage().contains(
+        QStringLiteral("response rejected")));
+
+    const int reopenBeforeRetry = deniedFiles.reopenCalls;
+    enqueueUnchangedRefetch(&deniedNetwork, manifest);
+    deniedChecker.retry();
+    QCOMPARE(deniedChecker.state(), AutoUpdateChecker::Verifying);
+    QTRY_COMPARE(deniedChecker.state(),
+                 AutoUpdateChecker::ReadyToHandOff);
+    QCOMPARE(deniedFiles.reopenCalls, reopenBeforeRetry + 1);
+    deniedChecker.openInstaller();
+    QCOMPARE(deniedPortal.calls, 2);
+
+    FakeNetworkAccessManager failedNetwork;
+    FakeUpdateFileStore failedFiles;
+    pendingRecord(&failedFiles);
+    FakeInstallerPortal failedPortal;
+    enqueueUnchangedRefetch(&failedNetwork, manifest);
+    AutoUpdateChecker failedChecker(
+        &failedNetwork, &failedFiles, &desktop, &failedPortal);
+    failedChecker.start();
+    QTRY_COMPARE(failedChecker.state(),
+                 AutoUpdateChecker::ReadyToHandOff);
+    failedChecker.openInstaller();
+    failedPortal.failMethod();
+    QCOMPARE(failedChecker.state(), AutoUpdateChecker::HandOffError);
+    QVERIFY(failedChecker.errorMessage().contains(
+        QStringLiteral("method failed")));
+
+    for (SteamDeckSession::Mode mode :
+         {SteamDeckSession::Gaming, SteamDeckSession::Unknown}) {
+        FakeNetworkAccessManager guardedNetwork;
+        FakeUpdateFileStore guardedFiles;
+        pendingRecord(&guardedFiles);
+        FakeSessionModeProvider guardedSession;
+        guardedSession.value = mode;
+        FakeInstallerPortal guardedPortal;
+        enqueueUnchangedRefetch(&guardedNetwork, manifest);
+        AutoUpdateChecker guardedChecker(
+            &guardedNetwork, &guardedFiles, &guardedSession,
+            &guardedPortal);
+        guardedChecker.start();
+        QTRY_COMPARE(guardedChecker.state(),
+                     AutoUpdateChecker::ReadyForDesktop);
+        guardedChecker.openInstaller();
+        QCOMPARE(guardedPortal.calls, 0);
+        QCOMPARE(guardedChecker.state(),
+                 AutoUpdateChecker::ReadyForDesktop);
+    }
+
+    FakeNetworkAccessManager changedSessionNetwork;
+    FakeUpdateFileStore changedSessionFiles;
+    pendingRecord(&changedSessionFiles);
+    FakeSessionModeProvider changedSession;
+    FakeInstallerPortal changedSessionPortal;
+    enqueueUnchangedRefetch(&changedSessionNetwork, manifest);
+    AutoUpdateChecker changedSessionChecker(
+        &changedSessionNetwork, &changedSessionFiles, &changedSession,
+        &changedSessionPortal);
+    changedSessionChecker.start();
+    QTRY_COMPARE(changedSessionChecker.state(),
+                 AutoUpdateChecker::ReadyToHandOff);
+    changedSession.value = SteamDeckSession::Gaming;
+    changedSessionChecker.openInstaller();
+    QCOMPARE(changedSessionPortal.calls, 0);
+    QCOMPARE(changedSessionChecker.state(),
+             AutoUpdateChecker::ReadyToHandOff);
 }
 
 void AutoUpdateTest::boundedNetwork()
