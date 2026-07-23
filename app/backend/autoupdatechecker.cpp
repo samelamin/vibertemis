@@ -29,6 +29,8 @@ const int ConnectTimeoutMs = 10000;
 const int IdleTimeoutMs = 15000;
 const int JsonOverallTimeoutMs = 30000;
 const int DownloadOverallTimeoutMs = 30 * 60 * 1000;
+const qint64 NetworkReadBufferSize = 64 * 1024;
+const qint64 NetworkReadChunkSize = 16 * 1024;
 
 QString shortCommit(const QString &commit)
 {
@@ -567,6 +569,9 @@ void AutoUpdateChecker::issueRequest(const QUrl &url, RequestStage stage,
     request.setAttribute(QNetworkRequest::HTTP2AllowedAttribute, true);
 #endif
     m_Reply = m_Nam->get(request);
+    m_Reply->setReadBufferSize(NetworkReadBufferSize);
+    connect(m_Reply, &QNetworkReply::metaDataChanged,
+            this, &AutoUpdateChecker::handleReplyMetadataChanged);
     connect(m_Reply, &QIODevice::readyRead,
             this, &AutoUpdateChecker::handleReplyReadyRead);
     connect(m_Reply, &QNetworkReply::finished,
@@ -575,6 +580,36 @@ void AutoUpdateChecker::issueRequest(const QUrl &url, RequestStage stage,
     m_IdleTimer.start(IdleTimeoutMs);
     m_OverallTimer.start(stage == FlatpakAsset
                          ? DownloadOverallTimeoutMs : JsonOverallTimeoutMs);
+    handleReplyMetadataChanged();
+}
+
+void AutoUpdateChecker::handleReplyMetadataChanged()
+{
+    rejectOversizedDeclaredBody();
+}
+
+bool AutoUpdateChecker::rejectOversizedDeclaredBody()
+{
+    if (!m_Reply) {
+        return false;
+    }
+    const QByteArray contentLength =
+        m_Reply->rawHeader(QByteArrayLiteral("Content-Length")).trimmed();
+    if (contentLength.isEmpty()) {
+        return false;
+    }
+    bool ok = false;
+    const qulonglong declared = contentLength.toULongLong(&ok, 10);
+    if (ok && declared <= static_cast<qulonglong>(m_ResponseLimit)) {
+        return false;
+    }
+    const bool flatpak = m_RequestStage == FlatpakAsset;
+    handleRequestFailure(
+        flatpak ? UpdateError::SizeMismatch : UpdateError::ResponseTooLarge,
+        flatpak
+            ? QStringLiteral("The update download is larger than the published size.")
+            : QStringLiteral("The update server response is too large."));
+    return true;
 }
 
 void AutoUpdateChecker::handleReplyReadyRead()
@@ -594,35 +629,54 @@ void AutoUpdateChecker::consumeReplyBody()
     }
     const int status =
         m_Reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
-    if (m_Reply->attribute(
+    const bool discard =
+        m_Reply->attribute(
             QNetworkRequest::RedirectionTargetAttribute).isValid()
-            || (status != 0 && (status < 200 || status > 299))) {
-        // Redirect/error bodies are not part of the requested resource.
-        // This is especially important for Flatpak redirects: writing a 302
-        // HTML body would corrupt the streamed payload before the CDN hop.
-        m_Reply->readAll();
-        return;
-    }
-    const QByteArray chunk = m_Reply->readAll();
-    if (chunk.isEmpty()) {
-        return;
-    }
-    if (m_RequestStage == FlatpakAsset) {
-        if (!m_Temporary
-                || m_BytesReceived > m_ResponseLimit - chunk.size()
-                || m_Temporary->write(chunk) != chunk.size()) {
-            handleRequestFailure(
-                m_BytesReceived > m_ResponseLimit - chunk.size()
-                    ? UpdateError::SizeMismatch : UpdateError::IoFailure,
-                m_BytesReceived > m_ResponseLimit - chunk.size()
-                    ? QStringLiteral("The update download is larger than the published size.")
-                    : QStringLiteral("The update could not be written to Downloads."));
+        || (status != 0 && (status < 200 || status > 299))
+        || m_Reply->error() != QNetworkReply::NoError;
+    while (m_Reply && m_Reply->bytesAvailable() > 0) {
+        if (discard) {
+            char buffer[NetworkReadChunkSize];
+            const qint64 count = m_Reply->read(
+                buffer, qMin(NetworkReadChunkSize,
+                             m_Reply->bytesAvailable()));
+            if (count <= 0) {
+                return;
+            }
+            continue;
+        }
+
+        const qint64 consumed = m_RequestStage == FlatpakAsset
+            ? m_BytesReceived : m_ResponseBody.size();
+        const qint64 remaining = m_ResponseLimit - consumed;
+        const qint64 requested = qMin(
+            NetworkReadChunkSize,
+            qMin(m_Reply->bytesAvailable(), remaining + 1));
+        const QByteArray chunk = m_Reply->read(requested);
+        if (chunk.isEmpty()) {
             return;
         }
-        if (!m_DownloadHash) {
+        if (chunk.size() > remaining) {
+            handleRequestFailure(
+                m_RequestStage == FlatpakAsset
+                    ? UpdateError::SizeMismatch
+                    : UpdateError::ResponseTooLarge,
+                m_RequestStage == FlatpakAsset
+                    ? QStringLiteral("The update download is larger than the published size.")
+                    : QStringLiteral("The update server response is too large."));
+            return;
+        }
+        if (m_RequestStage != FlatpakAsset) {
+            m_ResponseBody += chunk;
+            continue;
+        }
+        if (!m_Temporary || !m_DownloadHash
+                || m_Temporary->write(chunk) != chunk.size()) {
             handleRequestFailure(
                 UpdateError::IoFailure,
-                QStringLiteral("The update checksum state is unavailable."));
+                !m_DownloadHash
+                    ? QStringLiteral("The update checksum state is unavailable.")
+                    : QStringLiteral("The update could not be written to Downloads."));
             return;
         }
 #if QT_VERSION >= QT_VERSION_CHECK(6, 4, 0)
@@ -632,14 +686,7 @@ void AutoUpdateChecker::consumeReplyBody()
 #endif
         m_BytesReceived += chunk.size();
         emit progressChanged();
-        return;
     }
-    if (m_ResponseBody.size() > m_ResponseLimit - chunk.size()) {
-        handleRequestFailure(UpdateError::ResponseTooLarge,
-                             QStringLiteral("The update server response is too large."));
-        return;
-    }
-    m_ResponseBody += chunk;
 }
 
 void AutoUpdateChecker::handleReplyFinished()
@@ -718,7 +765,8 @@ void AutoUpdateChecker::handleRequestSuccess(RequestStage stage,
                 return;
             }
             issueRequest(m_ExpectedCandidate.manifest.apiUrl,
-                         RevalidateManifest, ManifestLimit);
+                         RevalidateManifest, ManifestLimit,
+                         QByteArrayLiteral("application/octet-stream"));
     } else if (stage == FlatpakAsset) {
         finishFlatpakDownload();
     } else if (stage == RollingCompare) {
@@ -848,7 +896,8 @@ void AutoUpdateChecker::finishRollingRelease(const QByteArray &body)
         return;
     }
     m_Release = parsed.value;
-    issueRequest(m_Release.manifest.apiUrl, RollingManifest, ManifestLimit);
+    issueRequest(m_Release.manifest.apiUrl, RollingManifest, ManifestLimit,
+                 QByteArrayLiteral("application/octet-stream"));
 }
 
 void AutoUpdateChecker::finishRollingManifest(const QByteArray &body)

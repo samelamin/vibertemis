@@ -99,6 +99,7 @@ signals:
     void errorChanged();
 
 private slots:
+    void handleReplyMetadataChanged();
     void handleReplyReadyRead();
     void handleReplyFinished();
     void handleConnectTimeout();
@@ -140,6 +141,7 @@ private:
     void issueRequest(const QUrl &url, RequestStage stage, qint64 limit,
                       const QByteArray &accept = QByteArrayLiteral("application/vnd.github+json"),
                       int redirects = 0);
+    bool rejectOversizedDeclaredBody();
     void consumeReplyBody();
     void handleRequestSuccess(RequestStage stage, const QByteArray &body);
     void handleRequestFailure(UpdateError error, const QString &message);

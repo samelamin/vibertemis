@@ -40,7 +40,9 @@ class ScriptedNetworkReply : public QNetworkReply
 public:
     ScriptedNetworkReply(const QNetworkRequest &request,
                          QNetworkAccessManager::Operation operation,
-        const NetworkScript &script,
+                         const NetworkScript &script,
+                         QList<qint64> *observedReadBuffers,
+                         QList<qint64> *observedMaximumReads,
                          QObject *parent) :
         QNetworkReply(parent),
         aborted(false),
@@ -48,7 +50,11 @@ public:
         m_Offset(0),
         m_Available(script.chunkSize > 0 ? 0 : script.body.size()),
         m_Stall(script.stall),
-        m_ChunkSize(script.chunkSize)
+        m_ChunkSize(script.chunkSize),
+        m_MaximumReadRequest(0),
+        m_Observed(false),
+        m_ObservedReadBuffers(observedReadBuffers),
+        m_ObservedMaximumReads(observedMaximumReads)
     {
         setRequest(request);
         setUrl(request.url());
@@ -80,6 +86,7 @@ public:
             setFinished(true);
             emit finished();
         }
+        recordObservations();
     }
 
     qint64 bytesAvailable() const override
@@ -92,6 +99,7 @@ public:
 protected:
     qint64 readData(char *data, qint64 maxSize) override
     {
+        m_MaximumReadRequest = qMax(m_MaximumReadRequest, maxSize);
         if (m_Offset >= m_Available) {
             return m_Available >= m_Body.size() ? -1 : 0;
         }
@@ -103,6 +111,16 @@ protected:
     }
 
 private:
+    void recordObservations()
+    {
+        if (m_Observed) {
+            return;
+        }
+        m_Observed = true;
+        m_ObservedReadBuffers->append(readBufferSize());
+        m_ObservedMaximumReads->append(m_MaximumReadRequest);
+    }
+
     void releaseNextChunk()
     {
         if (isFinished()) {
@@ -119,6 +137,7 @@ private:
         }
         setFinished(true);
         emit finished();
+        recordObservations();
     }
 
     QByteArray m_Body;
@@ -126,6 +145,10 @@ private:
     qint64 m_Available;
     bool m_Stall;
     int m_ChunkSize;
+    qint64 m_MaximumReadRequest;
+    bool m_Observed;
+    QList<qint64> *m_ObservedReadBuffers;
+    QList<qint64> *m_ObservedMaximumReads;
 };
 
 class FakeNetworkAccessManager : public QNetworkAccessManager
@@ -143,6 +166,8 @@ public:
 
     QList<QNetworkRequest> requests;
     QList<QPointer<ScriptedNetworkReply>> replies;
+    QList<qint64> observedReadBuffers;
+    QList<qint64> observedMaximumReads;
     QQueue<NetworkScript> scripts;
 
 protected:
@@ -161,7 +186,9 @@ protected:
             script.errorText = QByteArrayLiteral("unexpected request");
         }
         ScriptedNetworkReply *reply =
-            new ScriptedNetworkReply(request, operation, script, this);
+            new ScriptedNetworkReply(
+                request, operation, script, &observedReadBuffers,
+                &observedMaximumReads, this);
         replies.append(reply);
         return reply;
     }
@@ -2069,6 +2096,17 @@ void AutoUpdateTest::boundedNetwork()
     QCOMPARE(files.cleanupCalls, 1);
     QCOMPARE(files.loadCalls, 1);
     QCOMPARE(files.clearCalls, 1);
+    const QByteArray vendorJson("application/vnd.github+json");
+    const QByteArray binaryAsset("application/octet-stream");
+    QCOMPARE(network.requests.at(0).rawHeader("Accept"), vendorJson);
+    QCOMPARE(network.requests.at(1).rawHeader("Accept"), binaryAsset);
+    QCOMPARE(network.requests.at(2).rawHeader("Accept"), vendorJson);
+    QCOMPARE(network.requests.at(3).rawHeader("Accept"), vendorJson);
+    QCOMPARE(network.observedReadBuffers.size(), 4);
+    for (qint64 size : network.observedReadBuffers) {
+        QVERIFY(size > 0);
+        QVERIFY(size <= 64 * 1024);
+    }
     for (const QNetworkRequest &request : network.requests) {
         QVERIFY(request.url().scheme() == QStringLiteral("https"));
         QVERIFY(request.rawHeader(QByteArrayLiteral("Authorization")).isEmpty());
@@ -2076,13 +2114,22 @@ void AutoUpdateTest::boundedNetwork()
     }
 
     NetworkScript assetRedirect =
-        networkScript(QByteArrayLiteral("redirect body must be ignored"), 302);
+        networkScript(QByteArray(payload.size() * 2, 'r'), 302);
     assetRedirect.redirect = QUrl(
         QStringLiteral("https://release-assets.githubusercontent.com/file"
                        "?sp=r&sig=expiring-signature"));
     network.enqueue(assetRedirect);
     network.enqueue(networkScript(payload));
-    enqueueUnchangedRefetch(&network, manifest);
+    network.enqueue(networkScript(validGitHubReleaseJson()));
+    NetworkScript manifestRedirect =
+        networkScript(QByteArray(
+            AutoUpdateChecker::manifestResponseLimit() * 2, 'r'), 302);
+    manifestRedirect.redirect = QUrl(
+        QStringLiteral("https://release-assets.githubusercontent.com/manifest"
+                       "?sp=r&sig=manifest-signature"));
+    network.enqueue(manifestRedirect);
+    network.enqueue(networkScript(manifest));
+    network.enqueue(networkScript(lightweightTagJson()));
     checker.downloadUpdate();
     QTRY_COMPARE(checker.state(), AutoUpdateChecker::ReadyToHandOff);
     QCOMPARE(checker.bytesReceived(), qint64(payload.size()));
@@ -2095,6 +2142,20 @@ void AutoUpdateTest::boundedNetwork()
              QCryptographicHash::hash(payload, QCryptographicHash::Sha256).toHex());
     QVERIFY(!checker.downloadedPath().isEmpty());
     QCOMPARE(network.scripts.size(), 0);
+    QCOMPARE(network.requests.size(), 10);
+    QCOMPARE(network.requests.at(4).rawHeader("Accept"), binaryAsset);
+    QCOMPARE(network.requests.at(5).rawHeader("Accept"), binaryAsset);
+    QCOMPARE(network.requests.at(6).rawHeader("Accept"), vendorJson);
+    QCOMPARE(network.requests.at(7).rawHeader("Accept"), binaryAsset);
+    QCOMPARE(network.requests.at(8).rawHeader("Accept"), binaryAsset);
+    QCOMPARE(network.requests.at(9).rawHeader("Accept"), vendorJson);
+    for (qint64 size : network.observedReadBuffers) {
+        QVERIFY(size > 0);
+        QVERIFY(size <= 64 * 1024);
+    }
+    for (qint64 size : network.observedMaximumReads) {
+        QVERIFY(size <= 64 * 1024);
+    }
     NetworkScript recheckStall = networkScript(QByteArray());
     recheckStall.stall = true;
     network.enqueue(recheckStall);
@@ -2142,14 +2203,50 @@ void AutoUpdateTest::boundedNetwork()
                                                  Qt::CaseInsensitive));
     QVERIFY(!rateChecker.errorMessage().contains(QStringLiteral("secret")));
 
+    FakeNetworkAccessManager networkErrorNetwork;
+    FakeUpdateFileStore networkErrorFiles;
+    networkErrorFiles.loadResult.error = UpdateError::InvalidMetadata;
+    NetworkScript networkError = networkScript(
+        QByteArray(AutoUpdateChecker::jsonResponseLimit() + 1, 'n'));
+    networkError.error = QNetworkReply::ConnectionRefusedError;
+    networkErrorNetwork.enqueue(networkError);
+    AutoUpdateChecker networkErrorChecker(
+        &networkErrorNetwork, &networkErrorFiles, &desktop);
+    networkErrorChecker.start();
+    QTRY_COMPARE(networkErrorChecker.state(), AutoUpdateChecker::CheckError);
+    QVERIFY(networkErrorChecker.errorMessage().contains(
+        QStringLiteral("network error")));
+    QVERIFY(networkErrorNetwork.observedMaximumReads.constLast()
+            <= 64 * 1024);
+
     FakeNetworkAccessManager statusNetwork;
     FakeUpdateFileStore statusFiles;
     statusFiles.loadResult.error = UpdateError::InvalidMetadata;
-    statusNetwork.enqueue(networkScript(QByteArrayLiteral("{}"), 304));
+    statusNetwork.enqueue(networkScript(
+        QByteArray(AutoUpdateChecker::jsonResponseLimit() + 1, 'e'), 304));
     AutoUpdateChecker statusChecker(&statusNetwork, &statusFiles, &desktop);
     statusChecker.start();
     QTRY_COMPARE(statusChecker.state(), AutoUpdateChecker::CheckError);
     QVERIFY(statusChecker.errorMessage().contains(QStringLiteral("HTTP 304")));
+    QVERIFY(statusNetwork.observedMaximumReads.constLast() <= 64 * 1024);
+
+    FakeNetworkAccessManager declaredNetwork;
+    FakeUpdateFileStore declaredFiles;
+    declaredFiles.loadResult.error = UpdateError::InvalidMetadata;
+    NetworkScript declared = networkScript(QByteArray());
+    declared.stall = true;
+    declared.headers.append(qMakePair(
+        QByteArrayLiteral("Content-Length"),
+        QByteArray::number(AutoUpdateChecker::jsonResponseLimit() + 1)));
+    declaredNetwork.enqueue(declared);
+    AutoUpdateChecker declaredChecker(
+        &declaredNetwork, &declaredFiles, &desktop);
+    declaredChecker.start();
+    QTRY_COMPARE(declaredChecker.state(), AutoUpdateChecker::CheckError);
+    QVERIFY(declaredChecker.errorMessage().contains(
+        QStringLiteral("too large")));
+    QVERIFY(declaredNetwork.replies.constLast()->aborted);
+    QVERIFY(declaredNetwork.observedReadBuffers.constLast() > 0);
 
     // JSON is capped before parsing.
     FakeNetworkAccessManager cappedNetwork;
@@ -2161,6 +2258,8 @@ void AutoUpdateTest::boundedNetwork()
     cappedChecker.start();
     QTRY_COMPARE(cappedChecker.state(), AutoUpdateChecker::CheckError);
     QVERIFY(cappedChecker.errorMessage().contains(QStringLiteral("too large")));
+    QVERIFY(cappedNetwork.observedReadBuffers.constLast() > 0);
+    QVERIFY(cappedNetwork.observedMaximumReads.constLast() <= 64 * 1024);
 
     FakeNetworkAccessManager manifestCapNetwork;
     FakeUpdateFileStore manifestCapFiles;
@@ -2336,6 +2435,26 @@ void AutoUpdateTest::boundedNetwork()
 
     // More or fewer bytes than the manifest binds never reaches hashing or
     // handoff.
+    FakeNetworkAccessManager declaredAssetNetwork;
+    FakeUpdateFileStore declaredAssetFiles;
+    declaredAssetFiles.loadResult.error = UpdateError::InvalidMetadata;
+    enqueueAvailableCheck(&declaredAssetNetwork, manifest);
+    AutoUpdateChecker declaredAssetChecker(
+        &declaredAssetNetwork, &declaredAssetFiles, &desktop);
+    declaredAssetChecker.start();
+    QTRY_COMPARE(declaredAssetChecker.state(), AutoUpdateChecker::Available);
+    NetworkScript declaredAsset = networkScript(QByteArray());
+    declaredAsset.stall = true;
+    declaredAsset.headers.append(qMakePair(
+        QByteArrayLiteral("Content-Length"),
+        QByteArray::number(payload.size() + 1)));
+    declaredAssetNetwork.enqueue(declaredAsset);
+    declaredAssetChecker.downloadUpdate();
+    QTRY_COMPARE(declaredAssetChecker.state(),
+                 AutoUpdateChecker::DownloadError);
+    QCOMPARE(declaredAssetChecker.bytesReceived(), qint64(0));
+    QCOMPARE(declaredAssetFiles.finalizeCalls, 0);
+
     FakeNetworkAccessManager sizeNetwork;
     FakeUpdateFileStore sizeFiles;
     sizeFiles.loadResult.error = UpdateError::InvalidMetadata;
