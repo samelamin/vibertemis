@@ -642,7 +642,10 @@ jobs:
         if (-not $msiFile) {
           throw "$env:TARGET_ARCH MSI not found in $installerDirectory"
         }
-        Copy-Item $msiFile.FullName "$handoffDirectory\Artemis.msi" -Force
+        $handoffMsi = Join-Path $handoffDirectory "Artemis.msi"
+        if (-not (Test-Path $handoffMsi)) {
+          Copy-Item $msiFile.FullName $handoffMsi -Force
+        }
 
     - name: Upload verified MSI component
       uses: actions/upload-artifact@v4

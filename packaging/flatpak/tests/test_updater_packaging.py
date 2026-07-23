@@ -710,6 +710,18 @@ class UpdaterQmlContractTests(unittest.TestCase):
             "${{ needs.setup-version.outputs.version }}",
             components_job,
         )
+        self.assertIn(
+            '$handoffMsi = Join-Path $handoffDirectory "Artemis.msi"',
+            components_job,
+        )
+        self.assertIn(
+            "if (-not (Test-Path $handoffMsi)) {",
+            components_job,
+        )
+        self.assertIn(
+            "Copy-Item $msiFile.FullName $handoffMsi -Force",
+            components_job,
+        )
 
         self.assertIn(
             "needs: [setup-version, build-windows-msi-components]",
