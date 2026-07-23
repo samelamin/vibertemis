@@ -17,6 +17,7 @@ public:
     virtual ~StorageProbe() {}
     virtual quint64 bytesAvailable(const QString &directory) const = 0;
     virtual QDateTime nowUtc() const = 0;
+    virtual void verificationFileOpened(const QString &) const {}
 };
 
 struct PendingUpdateRecord {

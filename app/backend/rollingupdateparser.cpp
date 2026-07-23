@@ -547,3 +547,52 @@ UpdateResult<bool> RollingUpdateParser::isInstallable(const QString &runningComm
     result.value = true;
     return result;
 }
+
+UpdateResult<bool> RollingUpdateParser::validateCandidate(
+    const RollingUpdateCandidate &candidate)
+{
+    const QString expectedReleasePage =
+        QStringLiteral("/") + QString::fromLatin1(Repository)
+        + QStringLiteral("/releases/tag/") + QString::fromLatin1(RollingTag);
+    if (candidate.releaseId == 0
+            || candidate.releaseLabel != QString::fromLatin1(RollingTag)
+            || !candidate.releaseUpdatedAt.isValid()
+            || !candidate.publishedAt.isValid()
+            || candidate.releasePage.path() != expectedReleasePage
+            || !isApprovedUrl(candidate.releasePage)
+            || !fullLowerHex(candidate.sourceCommit, 40)
+            || candidate.sequence == 0
+            || !fullLowerHex(candidate.tagRefObjectId, 40)
+            || (!candidate.tagObjectId.isEmpty()
+                && !fullLowerHex(candidate.tagObjectId, 40))
+            || candidate.manifestSchema != 1
+            || candidate.manifest.name != QString::fromLatin1(ManifestName)
+            || candidate.flatpak.name != QString::fromLatin1(FlatpakName)
+            || candidate.manifest.id == 0
+            || candidate.manifest.size == 0
+            || !candidate.manifest.updatedAt.isValid()
+            || !approvedApiAssetUrl(candidate.manifest.apiUrl,
+                                   candidate.manifest.id)
+            || !approvedReleaseDownloadUrl(candidate.manifest.downloadUrl,
+                                          candidate.manifest.name)
+            || (!candidate.manifest.sha256.isEmpty()
+                && !fullLowerHex(
+                    QString::fromLatin1(candidate.manifest.sha256), 64))
+            || candidate.flatpak.id == 0
+            || candidate.flatpak.size == 0
+            || !candidate.flatpak.updatedAt.isValid()
+            || !approvedApiAssetUrl(candidate.flatpak.apiUrl,
+                                   candidate.flatpak.id)
+            || !approvedReleaseDownloadUrl(candidate.flatpak.downloadUrl,
+                                          candidate.flatpak.name)
+            || !fullLowerHex(
+                QString::fromLatin1(candidate.flatpak.sha256), 64)) {
+        return failure<bool>(UpdateError::InvalidMetadata,
+                             QStringLiteral("Rolling update candidate is invalid."));
+    }
+
+    UpdateResult<bool> result;
+    result.ok = true;
+    result.value = true;
+    return result;
+}

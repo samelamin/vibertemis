@@ -93,59 +93,9 @@ bool parseTimestamp(const QJsonValue &value, QDateTime *result)
     return true;
 }
 
-bool isSafeHttpsUrl(const QUrl &url)
-{
-    return url.isValid()
-        && url.scheme() == QStringLiteral("https")
-        && !url.host().isEmpty()
-        && url.userInfo().isEmpty()
-        && url.query().isEmpty()
-        && url.fragment().isEmpty()
-        && url.port() == -1;
-}
-
-bool assetUrlBindingIsValid(const RollingAssetIdentity &asset)
-{
-    if (asset.id == 0 || asset.name.isEmpty() || asset.size == 0
-            || !asset.updatedAt.isValid()
-            || !isSafeHttpsUrl(asset.apiUrl)
-            || !isSafeHttpsUrl(asset.downloadUrl)) {
-        return false;
-    }
-    const QString expectedApiPath =
-        QStringLiteral("/repos/samelamin/vibertemis/releases/assets/%1").arg(asset.id);
-    if (asset.apiUrl.host() != QStringLiteral("api.github.com")
-            || asset.apiUrl.path() != expectedApiPath) {
-        return false;
-    }
-    const QString host = asset.downloadUrl.host().toLower();
-    return host == QStringLiteral("github.com")
-        || host == QStringLiteral("github-releases.githubusercontent.com")
-        || host == QStringLiteral("objects.githubusercontent.com");
-}
-
 bool candidateIsValid(const RollingUpdateCandidate &candidate)
 {
-    const QString expectedReleasePath =
-        QStringLiteral("/samelamin/vibertemis/releases/tag/steam-deck-latest");
-    return candidate.releaseId != 0
-        && !candidate.releaseLabel.isEmpty()
-        && isSafeHttpsUrl(candidate.releasePage)
-        && candidate.releasePage.host() == QStringLiteral("github.com")
-        && candidate.releasePage.path() == expectedReleasePath
-        && candidate.releaseUpdatedAt.isValid()
-        && isLowerHex(candidate.sourceCommit, 40)
-        && candidate.sequence != 0
-        && isLowerHex(candidate.tagRefObjectId, 40)
-        && (candidate.tagObjectId.isEmpty()
-            || isLowerHex(candidate.tagObjectId, 40))
-        && candidate.manifestSchema == 1
-        && candidate.publishedAt.isValid()
-        && assetUrlBindingIsValid(candidate.manifest)
-        && assetUrlBindingIsValid(candidate.flatpak)
-        && (candidate.manifest.sha256.isEmpty()
-            || isLowerHex(QString::fromLatin1(candidate.manifest.sha256), 64))
-        && isLowerHex(QString::fromLatin1(candidate.flatpak.sha256), 64);
+    return RollingUpdateParser::validateCandidate(candidate).ok;
 }
 
 QJsonObject serializeAsset(const RollingAssetIdentity &asset)
@@ -188,7 +138,7 @@ bool parseAsset(const QJsonValue &value, RollingAssetIdentity *asset)
     asset->downloadUrl = QUrl(object.value(QStringLiteral("download_url")).toString());
     asset->sha256 =
         object.value(QStringLiteral("sha256")).toString().toLatin1();
-    return assetUrlBindingIsValid(*asset);
+    return asset->id != 0 && asset->size != 0 && !asset->name.isEmpty();
 }
 
 QJsonObject serializeCandidate(const RollingUpdateCandidate &candidate)
@@ -709,6 +659,7 @@ UpdateResult<UpdateFileStore::OpenVerifiedFile> PendingUpdateStore::openAndVerif
     }
 #endif
 
+    m_Probe->verificationFileOpened(path);
     QCryptographicHash hash(QCryptographicHash::Sha256);
     quint64 total = 0;
     char buffer[64 * 1024];

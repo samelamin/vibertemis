@@ -96,6 +96,8 @@ private slots:
     void steamDeckSessionClassifiesEnvironment();
     void secureUpdateFiles();
     void pendingUpdateRecord();
+    void pendingUpdateRejectsHostileCandidate_data();
+    void pendingUpdateRejectsHostileCandidate();
     void rollingParser();
     void steamDeckSession();
 };
@@ -111,6 +113,11 @@ public:
     quint64 available = 0;
     QDateTime now = QDateTime::fromString(
         QStringLiteral("2026-07-23T12:00:00Z"), Qt::ISODate);
+#ifdef Q_OS_UNIX
+    mutable bool swapPathAfterOpen = false;
+    mutable bool swapSucceeded = false;
+    mutable QString openedInodePath;
+#endif
 
     quint64 bytesAvailable(const QString &) const override
     {
@@ -121,13 +128,34 @@ public:
     {
         return now;
     }
+
+#ifdef Q_OS_UNIX
+    void verificationFileOpened(const QString &path) const override
+    {
+        if (!swapPathAfterOpen) {
+            return;
+        }
+        swapPathAfterOpen = false;
+        openedInodePath = path + QStringLiteral(".opened-inode");
+        if (!QFile::rename(path, openedInodePath)) {
+            return;
+        }
+        QFile replacement(path);
+        if (!replacement.open(QIODevice::WriteOnly)
+                || replacement.write("replacement") != 11) {
+            return;
+        }
+        replacement.close();
+        swapSucceeded = true;
+    }
+#endif
 };
 
 static RollingUpdateCandidate storageCandidate(const QByteArray &payload)
 {
     RollingUpdateCandidate candidate;
     candidate.releaseId = 24680;
-    candidate.releaseLabel = QStringLiteral("Steam Deck rolling");
+    candidate.releaseLabel = QStringLiteral("steam-deck-latest");
     candidate.releasePage =
         QUrl(QStringLiteral("https://github.com/samelamin/vibertemis/releases/tag/steam-deck-latest"));
     candidate.releaseUpdatedAt = QDateTime::fromString(
@@ -841,17 +869,25 @@ void AutoUpdateTest::secureUpdateFiles()
     QVERIFY(!QFileInfo::exists(temporaryPath));
 
 #ifdef Q_OS_UNIX
-    const QString movedPath = finalized.value.canonicalPath + QStringLiteral(".moved");
-    QVERIFY(QFile::rename(finalized.value.canonicalPath, movedPath));
-    QFile replacement(finalized.value.canonicalPath);
-    QVERIFY(replacement.open(QIODevice::WriteOnly));
-    QCOMPARE(replacement.write("replacement"), qint64(11));
-    replacement.close();
-    QVERIFY(finalized.value.file->seek(0));
-    QCOMPARE(finalized.value.file->readAll(), payload);
     finalized.value.file->close();
+    const UpdateResult<QSharedPointer<QTemporaryFile>> racePart =
+        store.createDownload(candidate.flatpak.size);
+    QVERIFY(racePart.ok);
+    QCOMPARE(racePart.value->write(payload), qint64(payload.size()));
+    probe.swapPathAfterOpen = true;
+    const UpdateResult<UpdateFileStore::OpenVerifiedFile> raced =
+        store.finalizeAndVerify(racePart.value, candidate);
+    QVERIFY2(raced.ok, qPrintable(raced.message));
+    QVERIFY(probe.swapSucceeded);
+    QVERIFY(raced.value.file->seek(0));
+    QCOMPARE(raced.value.file->readAll(), payload);
+    raced.value.file->close();
+    QFile replacement(finalized.value.canonicalPath);
+    QVERIFY(replacement.open(QIODevice::ReadOnly));
+    QCOMPARE(replacement.readAll(), QByteArray("replacement"));
+    replacement.close();
     QVERIFY(QFile::remove(finalized.value.canonicalPath));
-    QVERIFY(QFile::rename(movedPath, finalized.value.canonicalPath));
+    QVERIFY(QFile::rename(probe.openedInodePath, finalized.value.canonicalPath));
 #endif
 
     auto verifyRejectedPayload = [&](const QByteArray &contents,
@@ -1146,6 +1182,125 @@ void AutoUpdateTest::pendingUpdateRecord()
     QVERIFY(!QFileInfo::exists(recordPath));
     QVERIFY(!QFileInfo::exists(record.canonicalPath));
     QVERIFY(QFileInfo::exists(unrelated.fileName()));
+}
+
+void AutoUpdateTest::pendingUpdateRejectsHostileCandidate_data()
+{
+    QTest::addColumn<QString>("objectName");
+    QTest::addColumn<QString>("fieldName");
+    QTest::addColumn<QString>("replacement");
+    QTest::addColumn<bool>("accepted");
+
+    QTest::newRow("release label")
+        << QString() << QStringLiteral("release_label")
+        << QStringLiteral("not-the-rolling-tag") << false;
+    QTest::newRow("release page path")
+        << QString() << QStringLiteral("release_page")
+        << QStringLiteral("https://github.com/samelamin/vibertemis/releases/other")
+        << false;
+    QTest::newRow("manifest name")
+        << QStringLiteral("manifest") << QStringLiteral("name")
+        << QStringLiteral("replacement.json") << false;
+    QTest::newRow("manifest API path")
+        << QStringLiteral("manifest") << QStringLiteral("api_url")
+        << QStringLiteral("https://api.github.com/repos/samelamin/vibertemis/releases/assets/999")
+        << false;
+    QTest::newRow("manifest GitHub download path")
+        << QStringLiteral("manifest") << QStringLiteral("download_url")
+        << QStringLiteral("https://github.com/samelamin/vibertemis/releases/other.json")
+        << false;
+    QTest::newRow("manifest unapproved CDN")
+        << QStringLiteral("manifest") << QStringLiteral("download_url")
+        << QStringLiteral("https://downloads.example.com/update.json") << false;
+    QTest::newRow("Flatpak name")
+        << QStringLiteral("flatpak") << QStringLiteral("name")
+        << QStringLiteral("replacement.flatpak") << false;
+    QTest::newRow("Flatpak API path")
+        << QStringLiteral("flatpak") << QStringLiteral("api_url")
+        << QStringLiteral("https://api.github.com/repos/samelamin/vibertemis/releases/assets/999")
+        << false;
+    QTest::newRow("Flatpak GitHub download path")
+        << QStringLiteral("flatpak") << QStringLiteral("download_url")
+        << QStringLiteral("https://github.com/samelamin/vibertemis/releases/not-an-asset")
+        << false;
+    QTest::newRow("Flatpak deceptive CDN")
+        << QStringLiteral("flatpak") << QStringLiteral("download_url")
+        << QStringLiteral("https://release-assets.githubusercontent.com.evil.example/asset")
+        << false;
+    QTest::newRow("approved release-assets subdomain")
+        << QStringLiteral("flatpak") << QStringLiteral("download_url")
+        << QStringLiteral("https://production.release-assets.githubusercontent.com/asset/flatpak")
+        << true;
+}
+
+void AutoUpdateTest::pendingUpdateRejectsHostileCandidate()
+{
+    QFETCH(QString, objectName);
+    QFETCH(QString, fieldName);
+    QFETCH(QString, replacement);
+    QFETCH(bool, accepted);
+
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const QString downloads = root.path() + QStringLiteral("/Downloads");
+    const QString privateData = root.path() + QStringLiteral("/private");
+    QVERIFY(QDir().mkpath(downloads));
+    QVERIFY(QDir().mkpath(privateData));
+
+    const QByteArray payload("candidate policy payload");
+    const RollingUpdateCandidate candidate = storageCandidate(payload);
+    FakeStorageProbe probe;
+    probe.available = candidate.flatpak.size
+        + PendingUpdateStore::safetyMarginBytes();
+    PendingUpdateStore store(downloads, privateData, &probe);
+    const UpdateResult<QSharedPointer<QTemporaryFile>> part =
+        store.createDownload(candidate.flatpak.size);
+    QVERIFY(part.ok);
+    QCOMPARE(part.value->write(payload), qint64(payload.size()));
+    const UpdateResult<UpdateFileStore::OpenVerifiedFile> verified =
+        store.finalizeAndVerify(part.value, candidate);
+    QVERIFY(verified.ok);
+
+    PendingUpdateRecord record;
+    record.canonicalPath = verified.value.canonicalPath;
+    record.candidate = candidate;
+    record.verifiedSize = verified.value.size;
+    record.verifiedSha256 = verified.value.sha256;
+    verified.value.file->close();
+    QVERIFY(store.save(record));
+
+    const QString unrelatedPath = downloads + QStringLiteral("/unrelated.flatpak");
+    QFile unrelated(unrelatedPath);
+    QVERIFY(unrelated.open(QIODevice::WriteOnly));
+    QCOMPARE(unrelated.write("unrelated"), qint64(9));
+    unrelated.close();
+
+    const QString recordPath = privateData + QStringLiteral("/pending-update.json");
+    QFile recordFile(recordPath);
+    QVERIFY(recordFile.open(QIODevice::ReadOnly));
+    QJsonObject rootObject =
+        QJsonDocument::fromJson(recordFile.readAll()).object();
+    recordFile.close();
+    QJsonObject candidateObject =
+        rootObject.value(QStringLiteral("candidate")).toObject();
+    if (objectName.isEmpty()) {
+        candidateObject.insert(fieldName, replacement);
+    } else {
+        QJsonObject child = candidateObject.value(objectName).toObject();
+        child.insert(fieldName, replacement);
+        candidateObject.insert(objectName, child);
+    }
+    rootObject.insert(QStringLiteral("candidate"), candidateObject);
+    QVERIFY(recordFile.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    const QByteArray mutated =
+        QJsonDocument(rootObject).toJson(QJsonDocument::Compact);
+    QCOMPARE(recordFile.write(mutated), qint64(mutated.size()));
+    recordFile.close();
+
+    const UpdateResult<PendingUpdateRecord> loaded = store.load();
+    QCOMPARE(loaded.ok, accepted);
+    QVERIFY(QFileInfo::exists(unrelatedPath));
+    QVERIFY(QFileInfo::exists(record.canonicalPath));
 }
 
 void AutoUpdateTest::rollingParser()

@@ -72,6 +72,8 @@ public:
                                             quint64 runningSequence,
                                             const RollingUpdateCandidate &candidate,
                                             CommitRelation relation);
+    static UpdateResult<bool> validateCandidate(
+        const RollingUpdateCandidate &candidate);
 
     static bool isApprovedUrl(const QUrl &url);
 };
