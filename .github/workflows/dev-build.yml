@@ -242,7 +242,7 @@ jobs:
     needs: setup-version
     runs-on: windows-latest
     if: needs.setup-version.outputs.should_build == 'true'
-    
+
     steps:
     - name: Checkout
       uses: actions/checkout@v4
@@ -294,10 +294,10 @@ jobs:
       run: |
         # Add Qt to PATH for the build script
         $env:PATH = "$env:Qt6_DIR\bin;$env:PATH"
-        
+
         # Build the executable first so its stamped identity can be verified.
         cmd /c "scripts\build-artemis-arch.bat release build-only"
-        
+
         if ($LASTEXITCODE -ne 0) {
           echo "Build failed with exit code $LASTEXITCODE"
           exit $LASTEXITCODE
@@ -642,7 +642,7 @@ jobs:
     needs: [setup-version, build-windows-msi-components]
     runs-on: windows-latest
     if: needs.setup-version.outputs.should_build == 'true'
-    
+
     steps:
     - name: Checkout
       uses: actions/checkout@v4
@@ -666,17 +666,17 @@ jobs:
       run: |
         # Install .NET SDK first (required for WiX v5)
         choco install dotnet-sdk -y
-        
+
         # Install WiX Toolset v5 as a .NET tool (recommended approach for v5)
         dotnet tool install --global wix --version 5.0.1
         
         # Verify installation
         wix --version
-        
+
         # Also install Visual Studio Build Tools (includes MSBuild) for compatibility
         choco install visualstudio2022buildtools --package-parameters "--includeRecommended --includeOptional --quiet --wait" -y
-    
-    - name: Generate Universal Bundle  
+
+    - name: Generate Universal Bundle
       env:
         SEMANTIC_VERSION: ${{ needs.setup-version.outputs.version }}
         NUMERIC_VERSION: ${{ needs.setup-version.outputs.numeric_version }}
@@ -1303,7 +1303,8 @@ jobs:
         make -j$(nproc)
 
         app/artemis --build-info > native-build-info.json
-        export EXPECTED_VERSION="$(tr -d '\r\n' < app/version.txt)"
+        EXPECTED_VERSION="$(tr -d '\r\n' < app/version.txt)"
+        export EXPECTED_VERSION
         python3 - <<'PY'
         import json
         import os
@@ -1506,7 +1507,8 @@ jobs:
       run: |
         flatpak build flatpak-build env QT_QPA_PLATFORM=offscreen \
           /app/bin/artemis --build-info > flatpak-build-info.json
-        export EXPECTED_VERSION="$(tr -d '\r\n' < app/version.txt)"
+        EXPECTED_VERSION="$(tr -d '\r\n' < app/version.txt)"
+        export EXPECTED_VERSION
         python3 - <<'PY'
         import json
         import os
