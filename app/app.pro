@@ -212,6 +212,7 @@ SOURCES += \
     backend/releaseversionselector.cpp \
     backend/rollingupdateparser.cpp \
     backend/steamdecksession.cpp \
+    backend/updatestatemachine.cpp \
     path.cpp \
     settings/mappingmanager.cpp \
     gui/sdlgamepadkeynavigation.cpp \
@@ -262,6 +263,7 @@ HEADERS += \
     backend/updateresult.h \
     backend/rollingupdateparser.h \
     backend/steamdecksession.h \
+    backend/updatestatemachine.h \
     path.h \
     settings/mappingmanager.h \
     gui/sdlgamepadkeynavigation.h \

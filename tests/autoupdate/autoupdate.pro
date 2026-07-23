@@ -20,7 +20,8 @@ SOURCES += \
     $$PWD/../../app/backend/buildinfo.cpp \
     $$PWD/../../app/backend/pendingupdate.cpp \
     $$PWD/../../app/backend/rollingupdateparser.cpp \
-    $$PWD/../../app/backend/steamdecksession.cpp
+    $$PWD/../../app/backend/steamdecksession.cpp \
+    $$PWD/../../app/backend/updatestatemachine.cpp
 
 HEADERS += \
     $$PWD/../../app/backend/autoupdatechecker.h \
@@ -29,7 +30,8 @@ HEADERS += \
     $$PWD/../../app/backend/pendingupdate.h \
     $$PWD/../../app/backend/updateresult.h \
     $$PWD/../../app/backend/rollingupdateparser.h \
-    $$PWD/../../app/backend/steamdecksession.h
+    $$PWD/../../app/backend/steamdecksession.h \
+    $$PWD/../../app/backend/updatestatemachine.h
 
 target.path = /app/libexec
 INSTALLS += target
