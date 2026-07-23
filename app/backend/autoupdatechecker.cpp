@@ -4,6 +4,7 @@
 #include "releaseversionselector.h"
 #include "updatestatemachine.h"
 
+#include <QCryptographicHash>
 #include <QDesktopServices>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -92,6 +93,16 @@ AutoUpdateChecker::~AutoUpdateChecker()
 void AutoUpdateChecker::initialize()
 {
     m_Nam->setStrictTransportSecurityEnabled(true);
+#if QT_VERSION >= QT_VERSION_CHECK(5, 14, 0) \
+        && QT_VERSION < QT_VERSION_CHECK(5, 15, 1) \
+        && !defined(QT_NO_BEARERMANAGEMENT)
+    // QTBUG-80947: network accessibility could remain incorrectly disabled
+    // after startup on Qt 5.14.0 through 5.15.0.
+    QT_WARNING_PUSH
+    QT_WARNING_DISABLE_DEPRECATED
+    m_Nam->setNetworkAccessible(QNetworkAccessManager::Accessible);
+    QT_WARNING_POP
+#endif
     m_ConnectTimer.setSingleShot(true);
     m_IdleTimer.setSingleShot(true);
     m_OverallTimer.setSingleShot(true);
@@ -114,7 +125,8 @@ QString AutoUpdateChecker::currentBuild() const
 }
 QString AutoUpdateChecker::availableBuild() const
 {
-    return shortCommit(m_Candidate.sourceCommit);
+    return m_Candidate.sourceCommit.isEmpty()
+        ? m_Candidate.releaseLabel : shortCommit(m_Candidate.sourceCommit);
 }
 QString AutoUpdateChecker::releaseUrl() const
 {
@@ -203,6 +215,45 @@ void AutoUpdateChecker::setError(UpdateError error, const QString &message,
     emit errorChanged();
 }
 
+void AutoUpdateChecker::setCandidate(
+    const RollingUpdateCandidate &candidate)
+{
+    const QString oldBuild = availableBuild();
+    const QString oldReleaseUrl = releaseUrl();
+    m_Candidate = candidate;
+    if (availableBuild() != oldBuild || releaseUrl() != oldReleaseUrl) {
+        emit candidateChanged();
+    }
+}
+
+void AutoUpdateChecker::clearCandidate()
+{
+    setCandidate(RollingUpdateCandidate());
+}
+
+void AutoUpdateChecker::invalidatePendingAndCheck(
+    const QString &diagnostic)
+{
+    Q_UNUSED(diagnostic)
+    stopRequest();
+    m_Files->clear(true);
+    m_Temporary.reset();
+    m_VerifiedFile.reset();
+    m_DownloadHash.reset();
+    m_RestoreRecord = PendingUpdateRecord();
+    m_ExpectedCandidate = RollingUpdateCandidate();
+    m_Restoring = false;
+    if (!m_DownloadedPath.isEmpty()) {
+        m_DownloadedPath.clear();
+        emit downloadedPathChanged();
+    }
+    clearCandidate();
+    clearError();
+    if (applyTransition(UpdateStateMachine::BeginCheck)) {
+        beginRollingCheck();
+    }
+}
+
 void AutoUpdateChecker::start()
 {
     if (m_State != Idle) {
@@ -216,6 +267,24 @@ void AutoUpdateChecker::start()
     m_Files->cleanStaleParts();
     const UpdateResult<PendingUpdateRecord> loaded = m_Files->load();
     if (!loaded.ok) {
+        if (loaded.error == UpdateError::IoFailure
+                && RollingUpdateParser::validateCandidate(
+                    loaded.value.candidate).ok) {
+            if (!applyTransition(UpdateStateMachine::BeginRestore)) {
+                return;
+            }
+            m_Restoring = true;
+            m_RestoreRecord = loaded.value;
+            m_ExpectedCandidate = loaded.value.candidate;
+            setCandidate(loaded.value.candidate);
+            applyTransition(UpdateStateMachine::RestoreFailed);
+            setError(loaded.error,
+                     loaded.message.isEmpty()
+                        ? QStringLiteral("The pending update could not be read.")
+                        : loaded.message,
+                     RestoreRetry);
+            return;
+        }
         m_Files->clear(false);
         checkNow();
         return;
@@ -242,6 +311,7 @@ void AutoUpdateChecker::checkNow()
     }
     clearError();
     m_Restoring = false;
+    clearCandidate();
     if (rollingInstallSupported()) {
         beginRollingCheck();
     } else if (supportsStableCheck()) {
@@ -261,7 +331,6 @@ void AutoUpdateChecker::beginStableCheck()
 void AutoUpdateChecker::beginRollingCheck()
 {
     m_Release = RollingUpdateCandidate();
-    m_Candidate = RollingUpdateCandidate();
     m_TagObjects.clear();
     issueRequest(QUrl(QString::fromLatin1(RollingReleaseUrl)),
                  RollingRelease, JsonLimit);
@@ -272,8 +341,7 @@ void AutoUpdateChecker::beginRestoration(const PendingUpdateRecord &record)
     m_Restoring = true;
     m_RestoreRecord = record;
     m_ExpectedCandidate = record.candidate;
-    m_Candidate = record.candidate;
-    emit candidateChanged();
+    setCandidate(record.candidate);
     beginRevalidation(true);
 }
 
@@ -294,6 +362,8 @@ void AutoUpdateChecker::downloadUpdate()
         return;
     }
     m_Temporary = created.value;
+    m_DownloadHash.reset(
+        new QCryptographicHash(QCryptographicHash::Sha256));
     m_BytesReceived = 0;
     m_BytesTotal = static_cast<qint64>(m_Candidate.flatpak.size);
     emit progressChanged();
@@ -314,6 +384,7 @@ void AutoUpdateChecker::cancel()
     stopRequest();
     m_Temporary.reset();
     m_VerifiedFile.reset();
+    m_DownloadHash.reset();
     if (previous == ReadyForDesktop || previous == ReadyToHandOff
             || previous == RestoringPending || previous == RestoreError) {
         m_Files->clear(true);
@@ -475,6 +546,17 @@ void AutoUpdateChecker::consumeReplyBody()
                     : QStringLiteral("The update could not be written to Downloads."));
             return;
         }
+        if (!m_DownloadHash) {
+            handleRequestFailure(
+                UpdateError::IoFailure,
+                QStringLiteral("The update checksum state is unavailable."));
+            return;
+        }
+#if QT_VERSION >= QT_VERSION_CHECK(6, 4, 0)
+        m_DownloadHash->addData(QByteArrayView(chunk));
+#else
+        m_DownloadHash->addData(chunk);
+#endif
         m_BytesReceived += chunk.size();
         emit progressChanged();
         return;
@@ -601,15 +683,21 @@ void AutoUpdateChecker::failForActiveOperation(UpdateError error,
 {
     if (m_State == Downloading) {
         m_Temporary.reset();
+        m_DownloadHash.reset();
         applyTransition(UpdateStateMachine::DownloadFailed);
         setError(error, message, DownloadRetry);
     } else if (m_State == Verifying) {
         applyTransition(UpdateStateMachine::VerificationFailed);
         setError(error, message, VerificationRetry);
     } else if (m_State == RestoringPending) {
+        if (error == UpdateError::PublisherChanged) {
+            invalidatePendingAndCheck(message);
+            return;
+        }
         applyTransition(UpdateStateMachine::RestoreFailed);
         setError(error, message, RestoreRetry);
     } else if (m_State == Checking) {
+        clearCandidate();
         applyTransition(UpdateStateMachine::CheckFailed);
         setError(error, message, CheckRetry);
     }
@@ -658,6 +746,7 @@ void AutoUpdateChecker::finishStableResponse(const QByteArray &body)
     const ReleaseVersionSelection release =
         ReleaseVersionSelector::select(json.array());
     if (!release.valid) {
+        clearCandidate();
         applyTransition(UpdateStateMachine::CandidateCurrent);
         return;
     }
@@ -666,11 +755,13 @@ void AutoUpdateChecker::finishStableResponse(const QByteArray &body)
     parseStringToVersionQuad(version, latest);
     if (compareVersion(m_CurrentVersionQuad, latest) < 0) {
         emit onUpdateAvailable(release.version, release.url);
-        m_Candidate.releaseLabel = release.version;
-        m_Candidate.releasePage = QUrl(release.url);
-        emit candidateChanged();
+        RollingUpdateCandidate candidate;
+        candidate.releaseLabel = release.version;
+        candidate.releasePage = QUrl(release.url);
+        setCandidate(candidate);
         applyTransition(UpdateStateMachine::CandidateAvailable);
     } else {
+        clearCandidate();
         applyTransition(UpdateStateMachine::CandidateCurrent);
     }
 }
@@ -695,7 +786,7 @@ void AutoUpdateChecker::finishRollingManifest(const QByteArray &body)
         failForActiveOperation(parsed.error, parsed.message);
         return;
     }
-    m_Candidate = parsed.value;
+    setCandidate(parsed.value);
     beginTagResolution(false);
 }
 
@@ -749,7 +840,7 @@ void AutoUpdateChecker::finishTagReference(const QByteArray &body,
                 failForActiveOperation(bound.error, bound.message);
                 return;
             }
-            m_Candidate = bound.value;
+            setCandidate(bound.value);
             const QUrl compare(QString::fromLatin1(ComparePrefix)
                 + BuildInfo::commit() + QStringLiteral("...")
                 + m_Candidate.sourceCommit);
@@ -821,7 +912,7 @@ void AutoUpdateChecker::finishTagObject(const QByteArray &body,
             failForActiveOperation(bound.error, bound.message);
             return;
         }
-        m_Candidate = bound.value;
+        setCandidate(bound.value);
         issueRequest(QUrl(QString::fromLatin1(ComparePrefix)
                           + BuildInfo::commit() + QStringLiteral("...")
                           + m_Candidate.sourceCommit),
@@ -831,15 +922,23 @@ void AutoUpdateChecker::finishTagObject(const QByteArray &body,
 
 void AutoUpdateChecker::finishCompare(const QByteArray &body)
 {
+    const CommitRelation relation =
+        RollingUpdateParser::parseCommitRelation(body);
+    if (relation == CommitRelation::Unknown) {
+        failForActiveOperation(
+            UpdateError::InvalidMetadata,
+            QStringLiteral("Unable to prove update ancestry from the GitHub comparison response."));
+        return;
+    }
     const UpdateResult<bool> installable =
         RollingUpdateParser::isInstallable(
             BuildInfo::commit(), BuildInfo::sequence(), m_Candidate,
-            RollingUpdateParser::parseCommitRelation(body));
+            relation);
     if (!installable.ok) {
+        clearCandidate();
         applyTransition(UpdateStateMachine::CandidateCurrent);
         return;
     }
-    emit candidateChanged();
     applyTransition(UpdateStateMachine::CandidateAvailable);
 }
 
@@ -847,11 +946,30 @@ void AutoUpdateChecker::finishFlatpakDownload()
 {
     if (m_BytesReceived != m_BytesTotal) {
         m_Temporary.reset();
+        m_DownloadHash.reset();
         failForActiveOperation(UpdateError::SizeMismatch,
                                QStringLiteral("The update download size does not match."));
         return;
     }
     if (!applyTransition(UpdateStateMachine::DownloadComplete)) {
+        m_DownloadHash.reset();
+        return;
+    }
+    if (!m_DownloadHash) {
+        m_Temporary.reset();
+        failForActiveOperation(
+            UpdateError::IoFailure,
+            QStringLiteral("The update checksum state is unavailable."));
+        return;
+    }
+    const QByteArray streamedDigest =
+        m_DownloadHash->result().toHex();
+    m_DownloadHash.reset();
+    if (streamedDigest != m_Candidate.flatpak.sha256) {
+        m_Temporary.reset();
+        failForActiveOperation(
+            UpdateError::DigestMismatch,
+            QStringLiteral("The downloaded update checksum does not match."));
         return;
     }
     const UpdateResult<UpdateFileStore::OpenVerifiedFile> verified =
@@ -882,6 +1000,14 @@ void AutoUpdateChecker::finishRevalidation()
         const UpdateResult<UpdateFileStore::OpenVerifiedFile> reopened =
             m_Files->reopenAndVerify(m_RestoreRecord, m_ExpectedCandidate);
         if (!reopened.ok) {
+            if (reopened.error == UpdateError::InvalidMetadata
+                    || reopened.error == UpdateError::UnsafePath
+                    || reopened.error == UpdateError::SizeMismatch
+                    || reopened.error == UpdateError::DigestMismatch
+                    || reopened.error == UpdateError::PublisherChanged) {
+                invalidatePendingAndCheck(reopened.message);
+                return;
+            }
             failForActiveOperation(reopened.error, reopened.message);
             return;
         }

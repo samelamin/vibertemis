@@ -518,7 +518,9 @@ UpdateResult<UpdateFileStore::OpenVerifiedFile> PendingUpdateStore::reopenAndVer
         openAndVerify(record.canonicalPath, record.verifiedSize,
                       record.verifiedSha256);
     if (!verified.ok) {
-        clear(true);
+        if (verified.error != UpdateError::IoFailure) {
+            clear(true);
+        }
     }
     return verified;
 }
@@ -579,10 +581,15 @@ UpdateResult<PendingUpdateRecord> PendingUpdateStore::load()
         openAndVerify(record.canonicalPath, record.verifiedSize,
                       record.verifiedSha256);
     if (!verified.ok) {
-        removeOwnedPayload(record);
-        QFile::remove(recordPath());
+        if (verified.error != UpdateError::IoFailure) {
+            removeOwnedPayload(record);
+            QFile::remove(recordPath());
+        }
         result.error = verified.error;
         result.message = verified.message;
+        if (verified.error == UpdateError::IoFailure) {
+            result.value = record;
+        }
         return result;
     }
     verified.value.file->close();
@@ -627,9 +634,12 @@ void PendingUpdateStore::cleanStaleParts()
 UpdateResult<UpdateFileStore::OpenVerifiedFile> PendingUpdateStore::openAndVerify(
     const QString &path, quint64 expectedSize, const QByteArray &expectedSha256) const
 {
+    const QFileInfo pathInfo(path);
     if (!isSafeDirectChild(m_DownloadsRoot, path)
-            || QFileInfo(path).fileName().isEmpty()
-            || QFileInfo(path).isSymLink()) {
+            || pathInfo.fileName().isEmpty()
+            || !pathInfo.exists()
+            || !pathInfo.isFile()
+            || pathInfo.isSymLink()) {
         return failure(UpdateError::UnsafePath, QStringLiteral("Unsafe update path"));
     }
 

@@ -13,6 +13,7 @@
 #include "steamdecksession.h"
 
 class QNetworkReply;
+class QCryptographicHash;
 
 class AutoUpdateChecker : public QObject
 {
@@ -114,6 +115,9 @@ private:
     void setStateDirect(State state);
     void setError(UpdateError error, const QString &message, RetryOrigin origin);
     void clearError();
+    void setCandidate(const RollingUpdateCandidate &candidate);
+    void clearCandidate();
+    void invalidatePendingAndCheck(const QString &diagnostic);
     void beginStableCheck();
     void beginRollingCheck();
     void beginRestoration(const PendingUpdateRecord &record);
@@ -173,6 +177,7 @@ private:
 
     QSharedPointer<QTemporaryFile> m_Temporary;
     QSharedPointer<QFile> m_VerifiedFile;
+    QScopedPointer<QCryptographicHash> m_DownloadHash;
     QString m_DownloadedPath;
     qint64 m_BytesReceived;
     qint64 m_BytesTotal;

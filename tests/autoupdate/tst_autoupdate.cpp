@@ -72,6 +72,7 @@ struct NetworkScript {
     QByteArray errorText;
     QList<QPair<QByteArray, QByteArray>> headers;
     bool stall = false;
+    int chunkSize = 0;
 };
 
 class ScriptedNetworkReply : public QNetworkReply
@@ -85,7 +86,9 @@ public:
         aborted(false),
         m_Body(script.body),
         m_Offset(0),
-        m_Stall(script.stall)
+        m_Available(script.chunkSize > 0 ? 0 : script.body.size()),
+        m_Stall(script.stall),
+        m_ChunkSize(script.chunkSize)
     {
         setRequest(request);
         setUrl(request.url());
@@ -104,14 +107,7 @@ public:
                     : QString::fromUtf8(script.errorText));
         open(QIODevice::ReadOnly | QIODevice::Unbuffered);
         if (!m_Stall) {
-            QTimer::singleShot(0, this, [this]() {
-                if (isFinished()) {
-                    return;
-                }
-                emit readyRead();
-                setFinished(true);
-                emit finished();
-            });
+            QTimer::singleShot(0, this, [this]() { releaseNextChunk(); });
         }
     }
 
@@ -128,7 +124,7 @@ public:
 
     qint64 bytesAvailable() const override
     {
-        return m_Body.size() - m_Offset + QIODevice::bytesAvailable();
+        return m_Available - m_Offset + QIODevice::bytesAvailable();
     }
 
     bool aborted;
@@ -136,10 +132,10 @@ public:
 protected:
     qint64 readData(char *data, qint64 maxSize) override
     {
-        if (m_Offset >= m_Body.size()) {
-            return -1;
+        if (m_Offset >= m_Available) {
+            return m_Available >= m_Body.size() ? -1 : 0;
         }
-        const qint64 count = qMin(maxSize, m_Body.size() - m_Offset);
+        const qint64 count = qMin(maxSize, m_Available - m_Offset);
         memcpy(data, m_Body.constData() + m_Offset,
                static_cast<size_t>(count));
         m_Offset += count;
@@ -147,9 +143,29 @@ protected:
     }
 
 private:
+    void releaseNextChunk()
+    {
+        if (isFinished()) {
+            return;
+        }
+        if (m_ChunkSize > 0) {
+            m_Available = qMin<qint64>(
+                m_Body.size(), m_Available + m_ChunkSize);
+        }
+        emit readyRead();
+        if (m_Available < m_Body.size()) {
+            QTimer::singleShot(0, this, [this]() { releaseNextChunk(); });
+            return;
+        }
+        setFinished(true);
+        emit finished();
+    }
+
     QByteArray m_Body;
     qint64 m_Offset;
+    qint64 m_Available;
     bool m_Stall;
+    int m_ChunkSize;
 };
 
 class FakeNetworkAccessManager : public QNetworkAccessManager
@@ -372,6 +388,7 @@ private slots:
     void pendingUpdateRejectsAlternatePath();
     void pendingUpdatePreservesFractionalTimestamps();
     void pendingUpdateRejectsOversizedRecord();
+    void pendingUpdatePreservesTransientIoFailure();
     void rollingParser();
     void steamDeckSession();
     void stateMachine();
@@ -1822,6 +1839,66 @@ void AutoUpdateTest::pendingUpdateRejectsOversizedRecord()
         privateData + QStringLiteral("/pending-update.json")));
 }
 
+void AutoUpdateTest::pendingUpdatePreservesTransientIoFailure()
+{
+#ifndef Q_OS_UNIX
+    QSKIP("Unix file permissions provide the deterministic transient I/O fixture");
+#else
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const QString downloads = root.path() + QStringLiteral("/Downloads");
+    const QString privateData = root.path() + QStringLiteral("/private");
+    QVERIFY(QDir().mkpath(downloads));
+    QVERIFY(QDir().mkpath(privateData));
+
+    const QByteArray payload("temporarily unreadable pending update");
+    const RollingUpdateCandidate candidate = storageCandidate(payload);
+    FakeStorageProbe probe;
+    probe.available = candidate.flatpak.size
+        + PendingUpdateStore::safetyMarginBytes();
+    PendingUpdateStore store(downloads, privateData, &probe);
+    const UpdateResult<QSharedPointer<QTemporaryFile>> part =
+        store.createDownload(candidate.flatpak.size);
+    QVERIFY(part.ok);
+    QCOMPARE(part.value->write(payload), qint64(payload.size()));
+    const UpdateResult<UpdateFileStore::OpenVerifiedFile> verified =
+        store.finalizeAndVerify(part.value, candidate);
+    QVERIFY(verified.ok);
+
+    PendingUpdateRecord record;
+    record.canonicalPath = verified.value.canonicalPath;
+    record.candidate = candidate;
+    record.verifiedSize = verified.value.size;
+    record.verifiedSha256 = verified.value.sha256;
+    verified.value.file->close();
+    QVERIFY(store.save(record));
+    const QString recordPath =
+        privateData + QStringLiteral("/pending-update.json");
+    QVERIFY(QFile::setPermissions(record.canonicalPath, QFileDevice::Permissions()));
+
+    const UpdateResult<PendingUpdateRecord> unavailable = store.load();
+    QVERIFY(!unavailable.ok);
+    QCOMPARE(unavailable.error, UpdateError::IoFailure);
+    QVERIFY(RollingUpdateParser::matchesCandidate(
+        record.candidate, unavailable.value.candidate).ok);
+    QVERIFY(QFileInfo::exists(recordPath));
+    QVERIFY(QFileInfo::exists(record.canonicalPath));
+
+    const UpdateResult<UpdateFileStore::OpenVerifiedFile> reopened =
+        store.reopenAndVerify(record, candidate);
+    QVERIFY(!reopened.ok);
+    QCOMPARE(reopened.error, UpdateError::IoFailure);
+    QVERIFY(QFileInfo::exists(recordPath));
+    QVERIFY(QFileInfo::exists(record.canonicalPath));
+
+    QVERIFY(QFile::setPermissions(
+        record.canonicalPath,
+        QFileDevice::ReadOwner | QFileDevice::WriteOwner));
+    const UpdateResult<PendingUpdateRecord> loaded = store.load();
+    QVERIFY2(loaded.ok, qPrintable(loaded.message));
+#endif
+}
+
 void AutoUpdateTest::rollingParser()
 {
     const UpdateResult<RollingUpdateCandidate> release = RollingUpdateParser::parseRelease(validGitHubReleaseJson());
@@ -1890,8 +1967,11 @@ void AutoUpdateTest::stateMachine()
         {S::ReadyToHandOff, E::BeginCheck, S::Checking},
         {S::ReadyToHandOff, E::Cancel, S::Cancelled},
         {S::CheckError, E::Retry, S::Checking},
+        {S::CheckError, E::BeginCheck, S::Checking},
         {S::DownloadError, E::Retry, S::Available},
+        {S::DownloadError, E::BeginCheck, S::Checking},
         {S::VerificationError, E::Retry, S::Available},
+        {S::VerificationError, E::BeginCheck, S::Checking},
         {S::RestoreError, E::Retry, S::RestoringPending},
         {S::RestoreError, E::BeginCheck, S::Checking},
         {S::RestoreError, E::Cancel, S::Cancelled},
@@ -1921,6 +2001,26 @@ void AutoUpdateTest::stateMachine()
     QVERIFY(meta.indexOfProperty("bytesTotal") >= 0);
     QVERIFY(meta.indexOfProperty("errorMessage") >= 0);
     QVERIFY(meta.indexOfProperty("rollingInstallSupported") >= 0);
+
+    AutoUpdateChecker stableChecker;
+    QSignalSpy stableSignal(
+        &stableChecker, &AutoUpdateChecker::onUpdateAvailable);
+    QJsonObject stableRelease;
+    stableRelease.insert(QStringLiteral("tag_name"),
+                         QStringLiteral("0.6.8"));
+    stableRelease.insert(
+        QStringLiteral("html_url"),
+        QStringLiteral("https://github.com/samelamin/vibertemis/releases/tag/0.6.8"));
+    StaticNetworkReply *stableReply = new StaticNetworkReply(
+        QJsonDocument(QJsonArray{stableRelease}).toJson(), &stableChecker);
+    QVERIFY(QMetaObject::invokeMethod(
+        &stableChecker, "handleUpdateCheckRequestFinished",
+        Qt::DirectConnection, Q_ARG(QNetworkReply *, stableReply)));
+    QCOMPARE(stableSignal.count(), 1);
+    QCOMPARE(stableSignal.at(0).at(0).toString(),
+             QStringLiteral("0.6.8"));
+    QCOMPARE(stableSignal.at(0).at(1).toString(),
+             QStringLiteral("https://github.com/samelamin/vibertemis/releases/tag/0.6.8"));
 }
 
 void AutoUpdateTest::boundedNetwork()
@@ -1954,12 +2054,15 @@ void AutoUpdateTest::boundedNetwork()
     files.loadResult.error = UpdateError::InvalidMetadata;
     enqueueAvailableCheck(&network, manifest);
     AutoUpdateChecker checker(&network, &files, &desktop);
+    QSignalSpy candidateSignal(&checker, &AutoUpdateChecker::candidateChanged);
     checker.start();
     QTRY_COMPARE(checker.state(), AutoUpdateChecker::Available);
+    QCOMPARE(candidateSignal.count(), 1);
     QCOMPARE(network.requests.size(), 4);
     QCOMPARE(checker.availableBuild(), RollingCommit.left(12));
     QCOMPARE(files.cleanupCalls, 1);
     QCOMPARE(files.loadCalls, 1);
+    QCOMPARE(files.clearCalls, 1);
     for (const QNetworkRequest &request : network.requests) {
         QVERIFY(request.url().scheme() == QStringLiteral("https"));
         QVERIFY(request.rawHeader(QByteArrayLiteral("Authorization")).isEmpty());
@@ -1986,6 +2089,33 @@ void AutoUpdateTest::boundedNetwork()
              QCryptographicHash::hash(payload, QCryptographicHash::Sha256).toHex());
     QVERIFY(!checker.downloadedPath().isEmpty());
     QCOMPARE(network.scripts.size(), 0);
+    NetworkScript recheckStall = networkScript(QByteArray());
+    recheckStall.stall = true;
+    network.enqueue(recheckStall);
+    checker.checkNow();
+    QCOMPARE(checker.state(), AutoUpdateChecker::Checking);
+    QCOMPARE(candidateSignal.count(), 2);
+    QVERIFY(checker.availableBuild().isEmpty());
+    QVERIFY(checker.releaseUrl().isEmpty());
+    checker.cancel();
+
+    FakeNetworkAccessManager noUpdateNetwork;
+    FakeUpdateFileStore noUpdateFiles;
+    noUpdateFiles.loadResult.error = UpdateError::InvalidMetadata;
+    noUpdateNetwork.enqueue(networkScript(validGitHubReleaseJson()));
+    noUpdateNetwork.enqueue(networkScript(manifest));
+    noUpdateNetwork.enqueue(networkScript(lightweightTagJson()));
+    noUpdateNetwork.enqueue(networkScript(
+        QByteArrayLiteral("{\"status\":\"identical\"}")));
+    AutoUpdateChecker noUpdateChecker(
+        &noUpdateNetwork, &noUpdateFiles, &desktop);
+    QSignalSpy noUpdateCandidateSignal(
+        &noUpdateChecker, &AutoUpdateChecker::candidateChanged);
+    noUpdateChecker.start();
+    QTRY_COMPARE(noUpdateChecker.state(), AutoUpdateChecker::NoUpdate);
+    QCOMPARE(noUpdateCandidateSignal.count(), 2);
+    QVERIFY(noUpdateChecker.availableBuild().isEmpty());
+    QVERIFY(noUpdateChecker.releaseUrl().isEmpty());
 
     // Non-2xx and rate-limited API responses are typed check errors and
     // never reflect request credentials into the user-facing message.
@@ -2038,6 +2168,44 @@ void AutoUpdateTest::boundedNetwork()
     QTRY_COMPARE(manifestCapChecker.state(), AutoUpdateChecker::CheckError);
     QVERIFY(manifestCapChecker.errorMessage().contains(
         QStringLiteral("too large")));
+
+    // Unknown or malformed ancestry is not proof that there is no update.
+    FakeNetworkAccessManager unknownCompareNetwork;
+    FakeUpdateFileStore unknownCompareFiles;
+    unknownCompareFiles.loadResult.error = UpdateError::InvalidMetadata;
+    unknownCompareNetwork.enqueue(networkScript(validGitHubReleaseJson()));
+    unknownCompareNetwork.enqueue(networkScript(manifest));
+    unknownCompareNetwork.enqueue(networkScript(lightweightTagJson()));
+    unknownCompareNetwork.enqueue(networkScript(
+        QByteArrayLiteral("{\"status\":\"mystery\"}")));
+    AutoUpdateChecker unknownCompareChecker(
+        &unknownCompareNetwork, &unknownCompareFiles, &desktop);
+    QSignalSpy unknownCandidateSignal(
+        &unknownCompareChecker, &AutoUpdateChecker::candidateChanged);
+    unknownCompareChecker.start();
+    QTRY_COMPARE(unknownCompareChecker.state(),
+                 AutoUpdateChecker::CheckError);
+    QVERIFY(unknownCompareChecker.errorMessage().contains(
+        QStringLiteral("ancestry"), Qt::CaseInsensitive));
+    QVERIFY(unknownCompareChecker.availableBuild().isEmpty());
+    QVERIFY(unknownCompareChecker.releaseUrl().isEmpty());
+    QCOMPARE(unknownCandidateSignal.count(), 2);
+
+    FakeNetworkAccessManager malformedCompareNetwork;
+    FakeUpdateFileStore malformedCompareFiles;
+    malformedCompareFiles.loadResult.error = UpdateError::InvalidMetadata;
+    malformedCompareNetwork.enqueue(networkScript(validGitHubReleaseJson()));
+    malformedCompareNetwork.enqueue(networkScript(manifest));
+    malformedCompareNetwork.enqueue(networkScript(lightweightTagJson()));
+    malformedCompareNetwork.enqueue(networkScript(
+        QByteArrayLiteral("{not-json")));
+    AutoUpdateChecker malformedCompareChecker(
+        &malformedCompareNetwork, &malformedCompareFiles, &desktop);
+    malformedCompareChecker.start();
+    QTRY_COMPARE(malformedCompareChecker.state(),
+                 AutoUpdateChecker::CheckError);
+    QVERIFY(malformedCompareChecker.errorMessage().contains(
+        QStringLiteral("ancestry"), Qt::CaseInsensitive));
 
     // Every redirect is revalidated and the sixth hop is rejected.
     FakeNetworkAccessManager redirectNetwork;
@@ -2111,6 +2279,33 @@ void AutoUpdateTest::boundedNetwork()
         QStringLiteral("Timed out")));
     QVERIFY(timeoutNetwork.replies.constLast()->aborted);
 
+    FakeNetworkAccessManager idleNetwork;
+    FakeUpdateFileStore idleFiles;
+    idleFiles.loadResult.error = UpdateError::InvalidMetadata;
+    idleNetwork.enqueue(stalled);
+    AutoUpdateChecker idleChecker(&idleNetwork, &idleFiles, &desktop);
+    idleChecker.start();
+    QVERIFY(QMetaObject::invokeMethod(
+        &idleChecker, "handleIdleTimeout", Qt::DirectConnection));
+    QCOMPARE(idleChecker.state(), AutoUpdateChecker::CheckError);
+    QVERIFY(idleChecker.errorMessage().contains(
+        QStringLiteral("stopped responding")));
+    QVERIFY(idleNetwork.replies.constLast()->aborted);
+
+    FakeNetworkAccessManager overallNetwork;
+    FakeUpdateFileStore overallFiles;
+    overallFiles.loadResult.error = UpdateError::InvalidMetadata;
+    overallNetwork.enqueue(stalled);
+    AutoUpdateChecker overallChecker(
+        &overallNetwork, &overallFiles, &desktop);
+    overallChecker.start();
+    QVERIFY(QMetaObject::invokeMethod(
+        &overallChecker, "handleOverallTimeout", Qt::DirectConnection));
+    QCOMPARE(overallChecker.state(), AutoUpdateChecker::CheckError);
+    QVERIFY(overallChecker.errorMessage().contains(
+        QStringLiteral("timed out")));
+    QVERIFY(overallNetwork.replies.constLast()->aborted);
+
     // Cancellation aborts an in-flight download and releases the randomized
     // partial file.
     FakeNetworkAccessManager cancelNetwork;
@@ -2158,6 +2353,34 @@ void AutoUpdateTest::boundedNetwork()
     shortChecker.downloadUpdate();
     QTRY_COMPARE(shortChecker.state(), AutoUpdateChecker::DownloadError);
     QCOMPARE(shortFiles.finalizeCalls, 0);
+
+    // Digest verification is maintained incrementally by the service, before
+    // the secure file store performs its independent defensive rehash.
+    const QByteArray wrongDigestManifest = replaceOnce(
+        manifest,
+        QCryptographicHash::hash(
+            payload, QCryptographicHash::Sha256).toHex(),
+        QByteArray(64, 'f'));
+    FakeNetworkAccessManager digestNetwork;
+    FakeUpdateFileStore digestFiles;
+    digestFiles.loadResult.error = UpdateError::InvalidMetadata;
+    enqueueAvailableCheck(&digestNetwork, wrongDigestManifest);
+    AutoUpdateChecker digestChecker(
+        &digestNetwork, &digestFiles, &desktop);
+    digestChecker.start();
+    QTRY_COMPARE(digestChecker.state(), AutoUpdateChecker::Available);
+    NetworkScript chunkedPayload = networkScript(payload);
+    chunkedPayload.chunkSize = 64 * 1024;
+    digestNetwork.enqueue(chunkedPayload);
+    QSignalSpy digestProgress(
+        &digestChecker, &AutoUpdateChecker::progressChanged);
+    digestChecker.downloadUpdate();
+    QTRY_COMPARE(digestChecker.state(),
+                 AutoUpdateChecker::VerificationError);
+    QVERIFY(digestProgress.count() > 2);
+    QCOMPARE(digestFiles.finalizeCalls, 0);
+    QVERIFY(digestChecker.errorMessage().contains(
+        QStringLiteral("checksum"), Qt::CaseInsensitive));
 
     // Post-hash release mutation is publisher-in-progress, remains
     // retryable, and cannot retain a ready state.
@@ -2301,7 +2524,7 @@ void AutoUpdateTest::boundedNetwork()
     annotatedNetwork.enqueue(networkScript(manifest));
     annotatedNetwork.enqueue(networkScript(annotatedReference));
     annotatedNetwork.enqueue(networkScript(replaceOnce(
-        annotatedObject, RollingCommit.toLatin1(), QByteArray(40, 'f'))));
+        annotatedObject, TagObject.toLatin1(), QByteArray(40, 'f'))));
     annotatedChecker.downloadUpdate();
     QTRY_COMPARE(annotatedChecker.state(),
                  AutoUpdateChecker::VerificationError);
@@ -2345,19 +2568,106 @@ void AutoUpdateTest::boundedNetwork()
     QTRY_COMPARE(gamingChecker.state(),
                  AutoUpdateChecker::ReadyForDesktop);
 
-    // A replaced or missing local file is a restoration error. A pending
-    // candidate equal to the running full commit is cleared without reopen or
-    // network activity.
+    FakeNetworkAccessManager unknownSessionNetwork;
+    FakeUpdateFileStore unknownSessionFiles;
+    unknownSessionFiles.loadResult = restoreFiles.loadResult;
+    FakeSessionModeProvider unknownSession;
+    unknownSession.value = SteamDeckSession::Unknown;
+    enqueueUnchangedRefetch(&unknownSessionNetwork, manifest);
+    AutoUpdateChecker unknownSessionChecker(
+        &unknownSessionNetwork, &unknownSessionFiles, &unknownSession);
+    unknownSessionChecker.start();
+    QTRY_COMPARE(unknownSessionChecker.state(),
+                 AutoUpdateChecker::ReadyForDesktop);
+
+    // Invalid local files and stale bindings are cleared and immediately
+    // start a fresh check instead of retrying a record that no longer exists.
     FakeNetworkAccessManager missingNetwork;
     FakeUpdateFileStore missingFiles;
     missingFiles.loadResult = restoreFiles.loadResult;
     missingFiles.reopenError = UpdateError::UnsafePath;
     enqueueUnchangedRefetch(&missingNetwork, manifest);
+    enqueueAvailableCheck(&missingNetwork, manifest);
     AutoUpdateChecker missingChecker(
         &missingNetwork, &missingFiles, &desktop);
     missingChecker.start();
-    QTRY_COMPARE(missingChecker.state(), AutoUpdateChecker::RestoreError);
+    QTRY_COMPARE(missingChecker.state(), AutoUpdateChecker::Available);
     QCOMPARE(missingFiles.reopenCalls, 1);
+    QCOMPARE(missingFiles.clearCalls, 1);
+
+    FakeNetworkAccessManager replacedNetwork;
+    FakeUpdateFileStore replacedFiles;
+    replacedFiles.loadResult = restoreFiles.loadResult;
+    replacedFiles.reopenError = UpdateError::SizeMismatch;
+    enqueueUnchangedRefetch(&replacedNetwork, manifest);
+    enqueueAvailableCheck(&replacedNetwork, manifest);
+    AutoUpdateChecker replacedChecker(
+        &replacedNetwork, &replacedFiles, &desktop);
+    replacedChecker.start();
+    QTRY_COMPARE(replacedChecker.state(), AutoUpdateChecker::Available);
+    QCOMPARE(replacedFiles.clearCalls, 1);
+
+    FakeNetworkAccessManager staleRestoreNetwork;
+    FakeUpdateFileStore staleRestoreFiles;
+    staleRestoreFiles.loadResult = restoreFiles.loadResult;
+    staleRestoreNetwork.enqueue(networkScript(replaceOnce(
+        validGitHubReleaseJson(), "\"id\":24680", "\"id\":24681")));
+    enqueueAvailableCheck(&staleRestoreNetwork, manifest);
+    AutoUpdateChecker staleRestoreChecker(
+        &staleRestoreNetwork, &staleRestoreFiles, &desktop);
+    staleRestoreChecker.start();
+    QTRY_COMPARE(staleRestoreChecker.state(),
+                 AutoUpdateChecker::Available);
+    QCOMPARE(staleRestoreFiles.reopenCalls, 0);
+    QCOMPARE(staleRestoreFiles.clearCalls, 1);
+
+    // Transient network and filesystem errors preserve the pending record and
+    // retry restoration rather than entering a destructive fresh check.
+    FakeNetworkAccessManager transientFileNetwork;
+    FakeUpdateFileStore transientFileFiles;
+    transientFileFiles.loadResult = restoreFiles.loadResult;
+    transientFileFiles.reopenError = UpdateError::IoFailure;
+    enqueueUnchangedRefetch(&transientFileNetwork, manifest);
+    AutoUpdateChecker transientFileChecker(
+        &transientFileNetwork, &transientFileFiles, &desktop);
+    transientFileChecker.start();
+    QTRY_COMPARE(transientFileChecker.state(),
+                 AutoUpdateChecker::RestoreError);
+    QCOMPARE(transientFileFiles.clearCalls, 0);
+    transientFileFiles.reopenError = UpdateError::None;
+    enqueueUnchangedRefetch(&transientFileNetwork, manifest);
+    transientFileChecker.retry();
+    QTRY_COMPARE(transientFileChecker.state(),
+                 AutoUpdateChecker::ReadyToHandOff);
+
+    FakeNetworkAccessManager transientNetwork;
+    FakeUpdateFileStore transientFiles;
+    transientFiles.loadResult = restoreFiles.loadResult;
+    NetworkScript transientStall = networkScript(QByteArray());
+    transientStall.stall = true;
+    transientNetwork.enqueue(transientStall);
+    AutoUpdateChecker transientChecker(
+        &transientNetwork, &transientFiles, &desktop);
+    transientChecker.start();
+    QVERIFY(QMetaObject::invokeMethod(
+        &transientChecker, "handleOverallTimeout", Qt::DirectConnection));
+    QCOMPARE(transientChecker.state(), AutoUpdateChecker::RestoreError);
+    QCOMPARE(transientFiles.clearCalls, 0);
+    enqueueUnchangedRefetch(&transientNetwork, manifest);
+    transientChecker.retry();
+    QTRY_COMPARE(transientChecker.state(),
+                 AutoUpdateChecker::ReadyToHandOff);
+
+    FakeNetworkAccessManager loadFailureNetwork;
+    FakeUpdateFileStore loadFailureFiles;
+    loadFailureFiles.loadResult.error = UpdateError::IoFailure;
+    loadFailureFiles.loadResult.value = record;
+    AutoUpdateChecker loadFailureChecker(
+        &loadFailureNetwork, &loadFailureFiles, &desktop);
+    loadFailureChecker.start();
+    QCOMPARE(loadFailureChecker.state(), AutoUpdateChecker::RestoreError);
+    QCOMPARE(loadFailureFiles.clearCalls, 0);
+    QCOMPARE(loadFailureNetwork.requests.size(), 0);
 
     FakeNetworkAccessManager currentNetwork;
     FakeUpdateFileStore currentFiles;
