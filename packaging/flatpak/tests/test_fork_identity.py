@@ -1139,6 +1139,265 @@ class ForkIdentityTests(unittest.TestCase):
             setup_version,
         )
 
+    def test_existing_stable_tag_skips_release_aggregation(self):
+        workflow = (
+            REPOSITORY_ROOT / ".github/workflows/dev-build.yml"
+        ).read_text(encoding="utf-8")
+        setup_version = workflow_job_block(workflow, "setup-version")
+        create_release = workflow_job_block(workflow, "create-dev-release")
+
+        self.assertIn(
+            "      release_needed: "
+            "${{ steps.release-guard.outputs.release_needed }}",
+            setup_version,
+        )
+        self.assertIn(
+            "needs.setup-version.outputs.release_needed == 'true'",
+            create_release,
+        )
+
+        script = workflow_step_run_script(
+            workflow,
+            "setup-version",
+            "Check whether release tag is new",
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repository = Path(temp_dir)
+            subprocess.run(
+                ["git", "init", "--initial-branch=main"],
+                cwd=repository,
+                check=True,
+                capture_output=True,
+            )
+            subprocess.run(
+                ["git", "config", "user.name", "Vibertemis CI Test"],
+                cwd=repository,
+                check=True,
+            )
+            subprocess.run(
+                ["git", "config", "user.email", "ci@example.invalid"],
+                cwd=repository,
+                check=True,
+            )
+            (repository / "version.txt").write_text(
+                "0.6.7\n", encoding="utf-8"
+            )
+            subprocess.run(
+                ["git", "add", "version.txt"],
+                cwd=repository,
+                check=True,
+            )
+            subprocess.run(
+                ["git", "commit", "-m", "initial"],
+                cwd=repository,
+                check=True,
+                capture_output=True,
+            )
+
+            for tag_exists, expected in ((False, "true"), (True, "false")):
+                with self.subTest(tag_exists=tag_exists):
+                    if tag_exists:
+                        subprocess.run(
+                            ["git", "tag", "0.6.7"],
+                            cwd=repository,
+                            check=True,
+                        )
+
+                    output_path = repository / "github-output"
+                    output_path.unlink(missing_ok=True)
+                    environment = os.environ.copy()
+                    environment.update(
+                        {
+                            "GITHUB_OUTPUT": str(output_path),
+                            "RELEASE_VERSION": "0.6.7",
+                        }
+                    )
+                    result = subprocess.run(
+                        [
+                            "bash",
+                            "--noprofile",
+                            "--norc",
+                            "-e",
+                            "-o",
+                            "pipefail",
+                            "-c",
+                            script,
+                        ],
+                        cwd=repository,
+                        env=environment,
+                        text=True,
+                        capture_output=True,
+                    )
+
+                    self.assertEqual(
+                        0,
+                        result.returncode,
+                        result.stdout + result.stderr,
+                    )
+                    self.assertEqual(
+                        [f"release_needed={expected}"],
+                        output_path.read_text(
+                            encoding="utf-8"
+                        ).splitlines(),
+                    )
+
+    def test_late_release_tag_race_is_idempotent(self):
+        workflow = (
+            REPOSITORY_ROOT / ".github/workflows/dev-build.yml"
+        ).read_text(encoding="utf-8")
+        create_release = workflow_job_block(workflow, "create-dev-release")
+        step_name = "Create release tag if available"
+        step_marker = f"    - name: {step_name}\n"
+        self.assertIn(step_marker, create_release)
+        step_start = create_release.index(step_marker)
+        run_marker = "      run: |\n"
+        run_start = (
+            create_release.index(run_marker, step_start) + len(run_marker)
+        )
+        next_step = create_release.find("\n    - name: ", run_start)
+        script = textwrap.dedent(
+            create_release[
+                run_start:
+                next_step if next_step != -1 else len(create_release)
+            ]
+        )
+
+        self.assertIn(
+            'if git push origin "refs/tags/$RELEASE_VERSION"; then',
+            script,
+        )
+        self.assertIn(
+            'git ls-remote --exit-code --tags origin '
+            '"refs/tags/$RELEASE_VERSION"',
+            script,
+        )
+        self.assertIn("if remote_tag_exists; then", script)
+        self.assertIn(
+            "elif remote_tag_exists; then",
+            script,
+            "the release step must confirm a concurrent winner after a "
+            "rejected push",
+        )
+
+        release_gate = (
+            "steps.release-tag.outputs.release_created == 'true'"
+        )
+        gated_steps = (
+            "Generate Changelog",
+            "Download all artifacts",
+            "Check if artifacts exist (handle build skipping scenario)",
+            "Find and download previous artifacts if builds were skipped",
+            "List downloaded files for debugging",
+            "List reused artifacts for debugging",
+            "Create Development Release",
+        )
+        for gated_step in gated_steps:
+            with self.subTest(gated_step=gated_step):
+                marker = f"    - name: {gated_step}\n"
+                start = create_release.index(marker)
+                end = create_release.find("\n    - name: ", start + 1)
+                block = create_release[
+                    start:end if end != -1 else len(create_release)
+                ]
+                self.assertIn(release_gate, block)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            remote = root / "origin.git"
+            seed = root / "seed"
+            runner = root / "runner"
+            subprocess.run(
+                ["git", "init", "--bare", str(remote)],
+                check=True,
+                capture_output=True,
+            )
+            subprocess.run(
+                ["git", "init", "--initial-branch=main", str(seed)],
+                check=True,
+                capture_output=True,
+            )
+            subprocess.run(
+                ["git", "config", "user.name", "Vibertemis CI Test"],
+                cwd=seed,
+                check=True,
+            )
+            subprocess.run(
+                ["git", "config", "user.email", "ci@example.invalid"],
+                cwd=seed,
+                check=True,
+            )
+            (seed / "version.txt").write_text("0.6.7\n", encoding="utf-8")
+            subprocess.run(["git", "add", "."], cwd=seed, check=True)
+            subprocess.run(
+                ["git", "commit", "-m", "initial"],
+                cwd=seed,
+                check=True,
+                capture_output=True,
+            )
+            subprocess.run(
+                ["git", "tag", "0.6.7"], cwd=seed, check=True
+            )
+            subprocess.run(
+                ["git", "remote", "add", "origin", str(remote)],
+                cwd=seed,
+                check=True,
+            )
+            subprocess.run(
+                ["git", "push", "origin", "main", "refs/tags/0.6.7"],
+                cwd=seed,
+                check=True,
+                capture_output=True,
+            )
+            subprocess.run(
+                ["git", "clone", "--no-tags", str(remote), str(runner)],
+                check=True,
+                capture_output=True,
+            )
+
+            output_path = root / "github-output"
+            environment = os.environ.copy()
+            environment.update(
+                {
+                    "GITHUB_OUTPUT": str(output_path),
+                    "RELEASE_VERSION": "0.6.7",
+                }
+            )
+            result = subprocess.run(
+                [
+                    "bash",
+                    "--noprofile",
+                    "--norc",
+                    "-e",
+                    "-o",
+                    "pipefail",
+                    "-c",
+                    script,
+                ],
+                cwd=runner,
+                env=environment,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(
+                0, result.returncode, result.stdout + result.stderr
+            )
+            self.assertEqual(
+                ["release_created=false"],
+                output_path.read_text(encoding="utf-8").splitlines(),
+            )
+
+        for independent_job in (
+            "build-flatpak-dev",
+            "publish-steam-deck-release",
+        ):
+            with self.subTest(independent_job=independent_job):
+                self.assertNotIn(
+                    "release_needed",
+                    workflow_job_block(workflow, independent_job),
+                )
+
     def test_setup_version_handles_zero_match_counts_under_pipefail(self):
         workflow = (
             REPOSITORY_ROOT / ".github/workflows/dev-build.yml"

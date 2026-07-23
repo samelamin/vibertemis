@@ -51,6 +51,7 @@ jobs:
       numeric_version: ${{ steps.version.outputs.numeric_version }}
       is_prerelease: ${{ steps.version.outputs.is_prerelease }}
       should_build: ${{ steps.check-changes.outputs.should_build }}
+      release_needed: ${{ steps.release-guard.outputs.release_needed }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -185,6 +186,19 @@ jobs:
           echo "  Numeric Version: $NUMERIC_VERSION"
           echo "  Is Prerelease: $IS_PRERELEASE"
           echo "  Branch: $BRANCH_NAME"
+
+      - name: Check whether release tag is new
+        id: release-guard
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if git show-ref --verify --quiet "refs/tags/$RELEASE_VERSION"; then
+            echo "release_needed=false" >> "$GITHUB_OUTPUT"
+            echo "Release tag $RELEASE_VERSION already exists; keeping this run's verified build artifacts without replacing the stable release."
+          else
+            echo "release_needed=true" >> "$GITHUB_OUTPUT"
+            echo "Release tag $RELEASE_VERSION is available."
+          fi
 
   compile-sanity:
     name: Compile Sanity (macOS + Linux)
@@ -2207,7 +2221,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    if: (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') && needs.setup-version.outputs.should_build == 'true'  # Create releases for develop/main branches when builds ran
+    if: (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') && needs.setup-version.outputs.should_build == 'true' && needs.setup-version.outputs.release_needed == 'true'  # Create releases only for a new version tag
     
     steps:
     - name: Checkout
@@ -2220,15 +2234,41 @@ jobs:
         echo "Creating release with version: ${{ needs.setup-version.outputs.version }}"
         echo "Is prerelease: ${{ needs.setup-version.outputs.is_prerelease }}"
 
-    - name: Create tag for release
+    - name: Create release tag if available
+      id: release-tag
+      env:
+        RELEASE_VERSION: ${{ needs.setup-version.outputs.version }}
       run: |
+        git check-ref-format "refs/tags/$RELEASE_VERSION"
+
+        remote_tag_exists() {
+          git ls-remote --exit-code --tags origin "refs/tags/$RELEASE_VERSION" >/dev/null 2>&1
+        }
+
+        if remote_tag_exists; then
+          echo "release_created=false" >> "$GITHUB_OUTPUT"
+          echo "Release tag $RELEASE_VERSION was created by another run; skipping release aggregation."
+          exit 0
+        fi
+
         git config user.name "github-actions[bot]"
         git config user.email "github-actions[bot]@users.noreply.github.com"
-        git tag ${{ needs.setup-version.outputs.version }}
-        git push origin ${{ needs.setup-version.outputs.version }}
+        git tag "$RELEASE_VERSION"
+
+        if git push origin "refs/tags/$RELEASE_VERSION"; then
+          echo "release_created=true" >> "$GITHUB_OUTPUT"
+        elif remote_tag_exists; then
+          git tag -d "$RELEASE_VERSION"
+          echo "release_created=false" >> "$GITHUB_OUTPUT"
+          echo "Another run won the release tag race; skipping release aggregation."
+        else
+          echo "Failed to publish release tag $RELEASE_VERSION and no competing tag exists." >&2
+          exit 1
+        fi
 
     - name: Generate Changelog
       id: changelog
+      if: steps.release-tag.outputs.release_created == 'true'
       run: |
         CURRENT_VERSION="${{ needs.setup-version.outputs.version }}"
         PREV_TAG=$(git tag --sort=-creatordate | grep -v "$CURRENT_VERSION" | head -n1)
@@ -2273,12 +2313,14 @@ jobs:
         } >> $GITHUB_OUTPUT
     
     - name: Download all artifacts
+      if: steps.release-tag.outputs.release_created == 'true'
       uses: actions/download-artifact@v4
       with:
         path: artifacts
 
     - name: Check if artifacts exist (handle build skipping scenario)
       id: check-artifacts
+      if: steps.release-tag.outputs.release_created == 'true'
       run: |
         if [ -d "artifacts" ] && [ "$(ls -A artifacts)" ]; then
           echo "artifacts_exist=true" >> $GITHUB_OUTPUT
@@ -2297,7 +2339,7 @@ jobs:
     - name: Find and download previous artifacts if builds were skipped
      
       id: find-previous
-      if: steps.check-artifacts.outputs.artifacts_exist == 'false'
+      if: steps.release-tag.outputs.release_created == 'true' && steps.check-artifacts.outputs.artifacts_exist == 'false'
       run: |
         echo "Searching for previous release with commit ${{ steps.check-artifacts.outputs.commit_hash }}"
         
@@ -2336,11 +2378,11 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     - name: List downloaded files for debugging
-      if: steps.check-artifacts.outputs.artifacts_exist == 'true'
+      if: steps.release-tag.outputs.release_created == 'true' && steps.check-artifacts.outputs.artifacts_exist == 'true'
       run: ls -R artifacts
       
     - name: List reused artifacts for debugging
-      if: steps.check-artifacts.outputs.artifacts_exist == 'false'
+      if: steps.release-tag.outputs.release_created == 'true' && steps.check-artifacts.outputs.artifacts_exist == 'false'
       run: |
         if [ -d "reused-artifacts" ]; then
           echo "Reused artifacts found:"
@@ -2350,6 +2392,7 @@ jobs:
         fi
     
     - name: Create Development Release
+      if: steps.release-tag.outputs.release_created == 'true'
       uses: softprops/action-gh-release@v2
       with:
         tag_name: ${{ needs.setup-version.outputs.version }}
