@@ -76,6 +76,7 @@ AutoUpdateChecker::AutoUpdateChecker(QObject *parent) :
     m_Restoring(false),
     m_ReloadPendingRecord(false),
     m_HandOffRetry(false),
+    m_RevalidatingPersistedCandidate(false),
     m_BytesReceived(0),
     m_BytesTotal(0),
     m_ExpectedDownloadBytes(0)
@@ -138,6 +139,7 @@ AutoUpdateChecker::AutoUpdateChecker(QNetworkAccessManager *network,
     m_Restoring(false),
     m_ReloadPendingRecord(false),
     m_HandOffRetry(false),
+    m_RevalidatingPersistedCandidate(false),
     m_BytesReceived(0),
     m_BytesTotal(0),
     m_ExpectedDownloadBytes(0)
@@ -364,6 +366,7 @@ void AutoUpdateChecker::invalidatePendingAndCheck(
     m_Restoring = false;
     m_ReloadPendingRecord = false;
     m_HandOffRetry = false;
+    m_RevalidatingPersistedCandidate = false;
     if (!m_DownloadedPath.isEmpty()) {
         m_DownloadedPath.clear();
         emit downloadedPathChanged();
@@ -439,6 +442,7 @@ void AutoUpdateChecker::checkNow()
     m_Restoring = false;
     m_ReloadPendingRecord = false;
     m_HandOffRetry = false;
+    m_RevalidatingPersistedCandidate = false;
     clearCandidate();
     if (rollingInstallSupported()) {
         beginRollingCheck();
@@ -601,6 +605,7 @@ void AutoUpdateChecker::retry()
         }
         clearError();
         m_HandOffRetry = true;
+        m_RevalidatingPersistedCandidate = true;
         beginRevalidation(false);
         return;
     }
@@ -609,6 +614,7 @@ void AutoUpdateChecker::retry()
             return;
         }
         clearError();
+        m_RevalidatingPersistedCandidate = true;
         beginRevalidation(false);
     }
 }
@@ -634,6 +640,7 @@ void AutoUpdateChecker::discardPendingUpdate()
         clearCandidate();
         clearError();
         m_HandOffRetry = false;
+        m_RevalidatingPersistedCandidate = false;
         applyTransition(UpdateStateMachine::DiscardPending);
     }
 }
@@ -945,11 +952,14 @@ void AutoUpdateChecker::failForActiveOperation(UpdateError error,
         applyTransition(UpdateStateMachine::DownloadFailed);
         setError(error, message, DownloadRetry);
     } else if (m_State == Verifying) {
+        const bool persistedCandidate =
+            m_RevalidatingPersistedCandidate || m_HandOffRetry;
         applyTransition(UpdateStateMachine::VerificationFailed);
         setError(error, message, VerificationRetry);
-        if (m_HandOffRetry
+        if (persistedCandidate
                 && error == UpdateError::PublisherChanged) {
             m_HandOffRetry = false;
+            m_RevalidatingPersistedCandidate = false;
             invalidatePendingAndCheck(message);
         }
     } else if (m_State == RestoringPending) {
@@ -1262,18 +1272,20 @@ void AutoUpdateChecker::beginRevalidation(bool restoring)
 
 void AutoUpdateChecker::finishRevalidation()
 {
-    if (m_Restoring || m_HandOffRetry) {
-        const bool handOffRetry = m_HandOffRetry;
+    const bool persistedCandidate =
+        m_RevalidatingPersistedCandidate || m_HandOffRetry;
+    if (m_Restoring || persistedCandidate) {
         const UpdateResult<UpdateFileStore::OpenVerifiedFile> reopened =
             m_Files->reopenAndVerify(m_RestoreRecord, m_ExpectedCandidate);
         if (!reopened.ok) {
-            if (handOffRetry
+            if (persistedCandidate
                     && (reopened.error == UpdateError::InvalidMetadata
                         || reopened.error == UpdateError::UnsafePath
                         || reopened.error == UpdateError::SizeMismatch
                         || reopened.error == UpdateError::DigestMismatch
                         || reopened.error == UpdateError::PublisherChanged)) {
                 m_HandOffRetry = false;
+                m_RevalidatingPersistedCandidate = false;
                 applyTransition(UpdateStateMachine::VerificationFailed);
                 setError(reopened.error, reopened.message,
                          VerificationRetry);
@@ -1295,6 +1307,7 @@ void AutoUpdateChecker::finishRevalidation()
         m_DownloadedPath = reopened.value.canonicalPath;
         emit downloadedPathChanged();
         m_HandOffRetry = false;
+        m_RevalidatingPersistedCandidate = false;
     } else {
         saveVerifiedPending();
         if (m_State != Verifying) {

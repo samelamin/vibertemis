@@ -1,11 +1,17 @@
 #pragma once
 
 #include <QFile>
+#include <QHash>
 #include <QObject>
 #include <QScopedPointer>
 #include <QSharedPointer>
 #include <QString>
+#include <QTimer>
 #include <QVariantMap>
+
+#ifdef VIBERTEMIS_HAS_DESKTOP_PORTAL
+class QDBusMessage;
+#endif
 
 class InstallerPortal : public QObject
 {
@@ -31,6 +37,8 @@ public:
     ~DesktopPortalTransport() override;
 
     virtual QString callerUniqueName() const = 0;
+    virtual bool subscribeAllResponses() = 0;
+    virtual void unsubscribeAllResponses() = 0;
     virtual bool subscribeResponse(const QString &requestPath) = 0;
     virtual void unsubscribeResponse(const QString &requestPath) = 0;
     virtual void openFile(int descriptor,
@@ -47,6 +55,10 @@ protected:
 
 private slots:
     void forwardResponse(uint responseCode, const QVariantMap &results);
+#ifdef VIBERTEMIS_HAS_DESKTOP_PORTAL
+    void forwardBroadResponse(uint responseCode, const QVariantMap &results,
+                              const QDBusMessage &message);
+#endif
 
 private:
     QString m_SubscribedResponsePath;
@@ -60,6 +72,9 @@ public:
     explicit DesktopInstallerPortal(QObject *parent = nullptr);
     explicit DesktopInstallerPortal(DesktopPortalTransport *transport,
                                     QObject *parent = nullptr);
+    DesktopInstallerPortal(DesktopPortalTransport *transport,
+                           int responseTimeoutMs,
+                           QObject *parent = nullptr);
     ~DesktopInstallerPortal() override;
 
     static QString serviceName();
@@ -75,6 +90,11 @@ public:
         const QSharedPointer<QFile> &verifiedFile) override;
 
 private:
+    struct CachedResponse {
+        uint responseCode = 0;
+        QVariantMap results;
+    };
+
     void initialize();
     void handleMethodFinished(bool succeeded, const QString &requestPath,
                               const QString &message);
@@ -92,9 +112,9 @@ private:
     QString m_CallerUniqueName;
     QString m_PredictedRequestPath;
     QString m_ActiveRequestPath;
-    QString m_CachedResponsePath;
-    QVariantMap m_CachedResponseResults;
-    uint m_CachedResponseCode;
+    QHash<QString, CachedResponse> m_CachedResponses;
+    QTimer m_ResponseTimer;
+    int m_ResponseTimeoutMs;
+    bool m_BroadResponseSubscription;
     bool m_MethodValidated;
-    bool m_HasCachedResponse;
 };

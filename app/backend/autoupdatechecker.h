@@ -225,6 +225,7 @@ private:
     bool m_Restoring;
     bool m_ReloadPendingRecord;
     bool m_HandOffRetry;
+    bool m_RevalidatingPersistedCandidate;
 
     QSharedPointer<QTemporaryFile> m_Temporary;
     QSharedPointer<QFile> m_VerifiedFile;

@@ -25,6 +25,7 @@ const char RequestSignal[] = "Response";
 #endif
 const char RequestPrefix[] =
     "/org/freedesktop/portal/desktop/request/";
+const int PortalResponseTimeoutMs = 30000;
 
 #ifdef VIBERTEMIS_HAS_DESKTOP_PORTAL
 class QtDesktopPortalTransport final : public DesktopPortalTransport
@@ -37,6 +38,9 @@ public:
 
     ~QtDesktopPortalTransport() override
     {
+        if (m_AllResponsesSubscribed) {
+            unsubscribeAllResponses();
+        }
         if (!m_RequestPath.isEmpty()) {
             unsubscribeResponse(m_RequestPath);
         }
@@ -45,6 +49,35 @@ public:
     QString callerUniqueName() const override
     {
         return QDBusConnection::sessionBus().baseService();
+    }
+
+    bool subscribeAllResponses() override
+    {
+        if (m_AllResponsesSubscribed) {
+            return false;
+        }
+        if (!QDBusConnection::sessionBus().connect(
+                QString::fromLatin1(PortalService), QString(),
+                QString::fromLatin1(RequestInterface),
+                QString::fromLatin1(RequestSignal), this,
+                SLOT(forwardBroadResponse(uint,QVariantMap,QDBusMessage)))) {
+            return false;
+        }
+        m_AllResponsesSubscribed = true;
+        return true;
+    }
+
+    void unsubscribeAllResponses() override
+    {
+        if (!m_AllResponsesSubscribed) {
+            return;
+        }
+        QDBusConnection::sessionBus().disconnect(
+            QString::fromLatin1(PortalService), QString(),
+            QString::fromLatin1(RequestInterface),
+            QString::fromLatin1(RequestSignal), this,
+            SLOT(forwardBroadResponse(uint,QVariantMap,QDBusMessage)));
+        m_AllResponsesSubscribed = false;
     }
 
     bool subscribeResponse(const QString &requestPath) override
@@ -136,6 +169,7 @@ public:
 
 private:
     QString m_RequestPath;
+    bool m_AllResponsesSubscribed = false;
 };
 #else
 class QtDesktopPortalTransport final : public DesktopPortalTransport
@@ -149,6 +183,15 @@ public:
     QString callerUniqueName() const override
     {
         return QStringLiteral(":0.0");
+    }
+
+    bool subscribeAllResponses() override
+    {
+        return true;
+    }
+
+    void unsubscribeAllResponses() override
+    {
     }
 
     bool subscribeResponse(const QString &requestPath) override
@@ -215,12 +258,21 @@ void DesktopPortalTransport::forwardResponse(
                          responseCode, results);
 }
 
+#ifdef VIBERTEMIS_HAS_DESKTOP_PORTAL
+void DesktopPortalTransport::forwardBroadResponse(
+    uint responseCode, const QVariantMap &results,
+    const QDBusMessage &message)
+{
+    emit requestResponse(message.path(), responseCode, results);
+}
+#endif
+
 DesktopInstallerPortal::DesktopInstallerPortal(QObject *parent) :
     InstallerPortal(parent),
     m_Transport(nullptr),
-    m_CachedResponseCode(0),
-    m_MethodValidated(false),
-    m_HasCachedResponse(false)
+    m_ResponseTimeoutMs(PortalResponseTimeoutMs),
+    m_BroadResponseSubscription(false),
+    m_MethodValidated(false)
 {
     m_OwnedTransport.reset(new QtDesktopPortalTransport);
     m_Transport = m_OwnedTransport.data();
@@ -229,11 +281,19 @@ DesktopInstallerPortal::DesktopInstallerPortal(QObject *parent) :
 
 DesktopInstallerPortal::DesktopInstallerPortal(
     DesktopPortalTransport *transport, QObject *parent) :
+    DesktopInstallerPortal(transport, PortalResponseTimeoutMs, parent)
+{
+}
+
+DesktopInstallerPortal::DesktopInstallerPortal(
+    DesktopPortalTransport *transport, int responseTimeoutMs,
+    QObject *parent) :
     InstallerPortal(parent),
     m_Transport(transport),
-    m_CachedResponseCode(0),
-    m_MethodValidated(false),
-    m_HasCachedResponse(false)
+    m_ResponseTimeoutMs(responseTimeoutMs > 0
+        ? responseTimeoutMs : PortalResponseTimeoutMs),
+    m_BroadResponseSubscription(false),
+    m_MethodValidated(false)
 {
     Q_ASSERT(m_Transport);
     initialize();
@@ -241,6 +301,10 @@ DesktopInstallerPortal::DesktopInstallerPortal(
 
 DesktopInstallerPortal::~DesktopInstallerPortal()
 {
+    m_ResponseTimer.stop();
+    if (m_Transport && m_BroadResponseSubscription) {
+        m_Transport->unsubscribeAllResponses();
+    }
     if (m_Transport && !m_ActiveRequestPath.isEmpty()) {
         m_Transport->unsubscribeResponse(m_ActiveRequestPath);
     }
@@ -248,6 +312,16 @@ DesktopInstallerPortal::~DesktopInstallerPortal()
 
 void DesktopInstallerPortal::initialize()
 {
+    m_ResponseTimer.setSingleShot(true);
+    connect(&m_ResponseTimer, &QTimer::timeout,
+            this, [this]() {
+        if (!m_VerifiedFile) {
+            return;
+        }
+        finish(false,
+               QStringLiteral(
+                   "The desktop portal response timed out; retry the installer."));
+    });
     connect(m_Transport, &DesktopPortalTransport::methodFinished,
             this, &DesktopInstallerPortal::handleMethodFinished);
     connect(m_Transport, &DesktopPortalTransport::requestResponse,
@@ -347,7 +421,7 @@ void DesktopInstallerPortal::openFlatpak(
 
     m_VerifiedFile = verifiedFile;
     m_ActiveRequestPath = m_PredictedRequestPath;
-    if (!m_Transport->subscribeResponse(m_ActiveRequestPath)) {
+    if (!m_Transport->subscribeAllResponses()) {
         QTimer::singleShot(0, this, [this]() {
             finish(false,
                    QStringLiteral(
@@ -355,9 +429,11 @@ void DesktopInstallerPortal::openFlatpak(
         });
         return;
     }
+    m_BroadResponseSubscription = true;
 
     QVariantMap options = openFileOptions();
     options.insert(QStringLiteral("handle_token"), handleToken);
+    m_ResponseTimer.start(m_ResponseTimeoutMs);
     m_Transport->openFile(verifiedFile->handle(), options);
 }
 
@@ -381,24 +457,25 @@ void DesktopInstallerPortal::handleMethodFinished(
         return;
     }
 
-    if (returnedPath != m_ActiveRequestPath) {
-        m_Transport->unsubscribeResponse(m_ActiveRequestPath);
-        m_ActiveRequestPath = returnedPath;
-        m_HasCachedResponse = false;
-        m_CachedResponsePath.clear();
-        m_CachedResponseResults.clear();
-        if (!m_Transport->subscribeResponse(m_ActiveRequestPath)) {
-            finish(false,
-                   QStringLiteral(
-                       "The desktop portal response could not be monitored."));
-            return;
-        }
-    }
+    m_ActiveRequestPath = returnedPath;
     m_MethodValidated = true;
-    if (m_HasCachedResponse
-            && m_CachedResponsePath == m_ActiveRequestPath) {
-        processResponse(m_CachedResponseCode,
-                        m_CachedResponseResults);
+    const auto cached = m_CachedResponses.constFind(m_ActiveRequestPath);
+    if (cached != m_CachedResponses.constEnd()) {
+        const CachedResponse response = cached.value();
+        m_CachedResponses.clear();
+        processResponse(response.responseCode, response.results);
+        return;
+    }
+    m_CachedResponses.clear();
+    if (!m_Transport->subscribeResponse(m_ActiveRequestPath)) {
+        finish(false,
+               QStringLiteral(
+                   "The desktop portal response could not be monitored."));
+        return;
+    }
+    if (m_BroadResponseSubscription) {
+        m_Transport->unsubscribeAllResponses();
+        m_BroadResponseSubscription = false;
     }
 }
 
@@ -406,14 +483,22 @@ void DesktopInstallerPortal::handleRequestResponse(
     const QString &requestPath, uint responseCode,
     const QVariantMap &results)
 {
-    if (!m_VerifiedFile || requestPath != m_ActiveRequestPath) {
+    if (!m_VerifiedFile) {
         return;
     }
     if (!m_MethodValidated) {
-        m_CachedResponsePath = requestPath;
-        m_CachedResponseCode = responseCode;
-        m_CachedResponseResults = results;
-        m_HasCachedResponse = true;
+        if (!isValidReturnedPath(requestPath)
+                || m_CachedResponses.contains(requestPath)
+                || m_CachedResponses.size() >= 8) {
+            return;
+        }
+        CachedResponse response;
+        response.responseCode = responseCode;
+        response.results = results;
+        m_CachedResponses.insert(requestPath, response);
+        return;
+    }
+    if (requestPath != m_ActiveRequestPath) {
         return;
     }
     processResponse(responseCode, results);
@@ -451,17 +536,19 @@ void DesktopInstallerPortal::processResponse(
 void DesktopInstallerPortal::finish(bool accepted,
                                     const QString &message)
 {
+    m_ResponseTimer.stop();
+    if (m_Transport && m_BroadResponseSubscription) {
+        m_Transport->unsubscribeAllResponses();
+        m_BroadResponseSubscription = false;
+    }
     if (m_Transport && !m_ActiveRequestPath.isEmpty()) {
         m_Transport->unsubscribeResponse(m_ActiveRequestPath);
     }
     m_ActiveRequestPath.clear();
     m_PredictedRequestPath.clear();
     m_CallerUniqueName.clear();
-    m_CachedResponsePath.clear();
-    m_CachedResponseResults.clear();
-    m_CachedResponseCode = 0;
+    m_CachedResponses.clear();
     m_MethodValidated = false;
-    m_HasCachedResponse = false;
     m_VerifiedFile.reset();
     emit response(accepted, message);
 }

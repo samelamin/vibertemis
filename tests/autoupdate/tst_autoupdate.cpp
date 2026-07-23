@@ -258,6 +258,24 @@ public:
         return uniqueName;
     }
 
+    bool subscribeAllResponses() override
+    {
+        ++broadSubscribeCalls;
+        if (!broadSubscribeSucceeds) {
+            return false;
+        }
+        broadActive = true;
+        return true;
+    }
+
+    void unsubscribeAllResponses() override
+    {
+        if (broadActive) {
+            ++broadUnsubscribeCalls;
+            broadActive = false;
+        }
+    }
+
     bool subscribeResponse(const QString &requestPath) override
     {
         subscribed.append(requestPath);
@@ -278,18 +296,33 @@ public:
         ++calls;
         observedDescriptor = descriptor;
         observedOptions = options;
-        subscribedBeforeCall = !activePath.isEmpty();
+        subscribedBeforeCall = broadActive || !activePath.isEmpty();
         const QString token =
             options.value(QStringLiteral("handle_token")).toString();
         const QString predicted =
             DesktopInstallerPortal::requestPath(uniqueName, token);
-        if (sendImmediateResponse) {
-            emit requestResponse(predicted, immediateResponseCode,
-                                 QVariantMap());
+        if (!immediateResponsePaths.isEmpty()) {
+            for (const QString &path : immediateResponsePaths) {
+                emit requestResponse(path, immediateResponseCode,
+                                     QVariantMap());
+            }
+        } else if (sendImmediateResponse) {
+            emit requestResponse(
+                immediateResponsePath.isEmpty()
+                    ? predicted : immediateResponsePath,
+                immediateResponseCode, QVariantMap());
         }
+        predictedPath = predicted;
+        if (finishMethodImmediately) {
+            finishMethod();
+        }
+    }
+
+    void finishMethod()
+    {
         emit methodFinished(
             methodSucceeds,
-            returnedPath.isEmpty() ? predicted : returnedPath,
+            returnedPath.isEmpty() ? predictedPath : returnedPath,
             methodSucceeds ? QString() : QStringLiteral("method failed"));
     }
 
@@ -307,17 +340,25 @@ public:
 
     QString uniqueName = QStringLiteral(":1.42");
     QString returnedPath;
+    QString immediateResponsePath;
+    QStringList immediateResponsePaths;
+    QString predictedPath;
     QString activePath;
     QStringList subscribed;
     QStringList unsubscribed;
     QVariantMap observedOptions;
     int observedDescriptor = -1;
     int calls = 0;
+    int broadSubscribeCalls = 0;
+    int broadUnsubscribeCalls = 0;
     uint immediateResponseCode = 0;
     bool sendImmediateResponse = false;
     bool methodSucceeds = true;
+    bool finishMethodImmediately = true;
+    bool broadSubscribeSucceeds = true;
     bool subscribeSucceeds = true;
     bool subscribedBeforeCall = false;
+    bool broadActive = false;
 };
 
 class FakeUpdateFileStore : public UpdateFileStore
@@ -432,6 +473,11 @@ public:
     {
         ++clearCalls;
         lastClearRemovedPayload = removeOwnedPayload;
+        if (removeOwnedPayload) {
+            ++removePayloadCalls;
+            clearedCanonicalPath = loadResult.value.canonicalPath.isEmpty()
+                ? saved.canonicalPath : loadResult.value.canonicalPath;
+        }
     }
 
     void cleanStaleParts() override { ++cleanupCalls; }
@@ -449,8 +495,10 @@ public:
     int saveCalls = 0;
     int loadCalls = 0;
     int clearCalls = 0;
+    int removePayloadCalls = 0;
     int cleanupCalls = 0;
     bool lastClearRemovedPayload = false;
+    QString clearedCanonicalPath;
 };
 
 class AutoUpdateTest : public QObject
@@ -501,7 +549,9 @@ private slots:
     void steamDeckSession();
     void stateMachine();
     void desktopPortal();
+    void persistedReadyPublisherChange();
     void desktopPortalResponseRace();
+    void desktopPortalTimeoutAndCleanup();
     void boundedNetwork();
 };
 
@@ -2497,6 +2547,70 @@ void AutoUpdateTest::desktopPortal()
     QCOMPARE(changedBindingFiles.clearCalls, 1);
 }
 
+void AutoUpdateTest::persistedReadyPublisherChange()
+{
+    const QByteArray payload = rollingPayload();
+    const QByteArray manifest = manifestForPayload(payload);
+    const RollingUpdateCandidate candidate =
+        boundCandidateForPayload(payload);
+
+    for (SteamDeckSession::Mode mode :
+         {SteamDeckSession::Desktop, SteamDeckSession::Gaming}) {
+        FakeNetworkAccessManager network;
+        FakeUpdateFileStore files;
+        FakeSessionModeProvider session;
+        session.value = mode;
+
+        const QString path =
+            files.root.path() + QStringLiteral("/pending.flatpak");
+        QFile payloadFile(path);
+        QVERIFY(payloadFile.open(QIODevice::WriteOnly));
+        QCOMPARE(payloadFile.write(payload), qint64(payload.size()));
+        payloadFile.close();
+
+        PendingUpdateRecord record;
+        record.canonicalPath = path;
+        record.candidate = candidate;
+        record.verifiedSize = candidate.flatpak.size;
+        record.verifiedSha256 = candidate.flatpak.sha256;
+        files.loadResult.ok = true;
+        files.loadResult.value = record;
+
+        enqueueUnchangedRefetch(&network, manifest);
+        AutoUpdateChecker checker(&network, &files, &session);
+        checker.start();
+        const AutoUpdateChecker::State readyState =
+            mode == SteamDeckSession::Desktop
+            ? AutoUpdateChecker::ReadyToHandOff
+            : AutoUpdateChecker::ReadyForDesktop;
+        QTRY_COMPARE(checker.state(), readyState);
+        QCOMPARE(files.reopenCalls, 1);
+        QCOMPARE(files.clearCalls, 0);
+
+        QList<AutoUpdateChecker::State> states;
+        connect(&checker, &AutoUpdateChecker::stateChanged,
+                &checker, [&]() {
+            states.append(checker.state());
+        });
+        network.enqueue(networkScript(replaceOnce(
+            validGitHubReleaseJson(),
+            "\"id\":24680", "\"id\":24681")));
+        enqueueAvailableCheck(&network, manifest);
+        checker.retry();
+
+        QTRY_COMPARE(checker.state(), AutoUpdateChecker::Available);
+        QVERIFY(states.contains(AutoUpdateChecker::VerificationError));
+        QVERIFY(states.contains(AutoUpdateChecker::Checking));
+        QCOMPARE(files.clearCalls, 1);
+        QCOMPARE(files.removePayloadCalls, 1);
+        QCOMPARE(files.clearedCanonicalPath, record.canonicalPath);
+        QVERIFY(files.lastClearRemovedPayload);
+        QCOMPARE(files.reopenCalls, 1);
+        QVERIFY(checker.downloadedPath().isEmpty());
+        QCOMPARE(checker.availableBuild(), RollingCommit.left(12));
+    }
+}
+
 void AutoUpdateTest::desktopPortalResponseRace()
 {
     QTemporaryDir root;
@@ -2528,9 +2642,9 @@ void AutoUpdateTest::desktopPortalResponseRace()
         QString::fromUtf8("\xc3\xa9")));
     QVERIFY(!DesktopInstallerPortal::isValidHandleToken(
         QStringLiteral("invalid-token")));
-    QCOMPARE(immediateTransport.subscribed.constFirst(),
-             DesktopInstallerPortal::requestPath(
-                 immediateTransport.uniqueName, token));
+    QCOMPARE(immediateTransport.broadSubscribeCalls, 1);
+    QCOMPARE(immediateTransport.broadUnsubscribeCalls, 1);
+    QVERIFY(immediateTransport.subscribed.isEmpty());
     QCOMPARE(immediateResponse.count(), 1);
     QCOMPARE(immediateResponse.constFirst().at(0).toBool(), true);
 
@@ -2538,22 +2652,46 @@ void AutoUpdateTest::desktopPortalResponseRace()
     reboundTransport.sendImmediateResponse = true;
     reboundTransport.returnedPath = QStringLiteral(
         "/org/freedesktop/portal/desktop/request/1_42/different");
+    reboundTransport.immediateResponsePaths = {
+        QStringLiteral("/not/a/portal/request"),
+        QStringLiteral(
+            "/org/freedesktop/portal/desktop/request/1_42/unrelated"),
+        reboundTransport.returnedPath,
+        reboundTransport.returnedPath
+    };
     DesktopInstallerPortal reboundPortal(&reboundTransport);
     QSignalSpy reboundResponse(
         &reboundPortal, &InstallerPortal::response);
     reboundPortal.openFlatpak(verified);
-    QCOMPARE(reboundResponse.count(), 0);
-    QCOMPARE(reboundTransport.subscribed.size(), 2);
-    QCOMPARE(reboundTransport.subscribed.constLast(),
-             reboundTransport.returnedPath);
-    QVERIFY(reboundTransport.unsubscribed.contains(
-        reboundTransport.subscribed.constFirst()));
-    reboundTransport.sendRawResponse(
-        reboundTransport.subscribed.constFirst(), 0);
-    QCOMPARE(reboundResponse.count(), 0);
-    reboundTransport.sendResponse(reboundTransport.returnedPath, 0);
     QCOMPARE(reboundResponse.count(), 1);
     QCOMPARE(reboundResponse.constFirst().at(0).toBool(), true);
+    QCOMPARE(reboundTransport.broadSubscribeCalls, 1);
+    QCOMPARE(reboundTransport.broadUnsubscribeCalls, 1);
+    QVERIFY(reboundTransport.subscribed.isEmpty());
+    QCOMPARE(reboundResponse.count(), 1);
+    reboundTransport.sendRawResponse(
+        DesktopInstallerPortal::requestPath(
+            reboundTransport.uniqueName, token), 0);
+    reboundTransport.sendRawResponse(reboundTransport.returnedPath, 0);
+    QCOMPARE(reboundResponse.count(), 1);
+
+    FakeDesktopPortalTransport lateReboundTransport;
+    lateReboundTransport.returnedPath = QStringLiteral(
+        "/org/freedesktop/portal/desktop/request/1_42/late_different");
+    DesktopInstallerPortal lateReboundPortal(&lateReboundTransport);
+    QSignalSpy lateReboundResponse(
+        &lateReboundPortal, &InstallerPortal::response);
+    lateReboundPortal.openFlatpak(verified);
+    QCOMPARE(lateReboundResponse.count(), 0);
+    QCOMPARE(lateReboundTransport.broadSubscribeCalls, 1);
+    QCOMPARE(lateReboundTransport.broadUnsubscribeCalls, 1);
+    QCOMPARE(lateReboundTransport.subscribed.size(), 1);
+    QCOMPARE(lateReboundTransport.subscribed.constFirst(),
+             lateReboundTransport.returnedPath);
+    lateReboundTransport.sendResponse(
+        lateReboundTransport.returnedPath, 0);
+    QCOMPARE(lateReboundResponse.count(), 1);
+    QCOMPARE(lateReboundResponse.constFirst().at(0).toBool(), true);
 
     FakeDesktopPortalTransport invalidTransport;
     invalidTransport.returnedPath = QStringLiteral("/not/a/portal/request");
@@ -2565,6 +2703,111 @@ void AutoUpdateTest::desktopPortalResponseRace()
     QCOMPARE(invalidResponse.constFirst().at(0).toBool(), false);
     QVERIFY(invalidResponse.constFirst().at(1).toString().contains(
         QStringLiteral("invalid"), Qt::CaseInsensitive));
+}
+
+void AutoUpdateTest::desktopPortalTimeoutAndCleanup()
+{
+    const QByteArray payload = rollingPayload();
+    const QByteArray manifest = manifestForPayload(payload);
+    const RollingUpdateCandidate candidate =
+        boundCandidateForPayload(payload);
+    FakeNetworkAccessManager network;
+    FakeUpdateFileStore files;
+    FakeSessionModeProvider desktop;
+    const QString path =
+        files.root.path() + QStringLiteral("/pending.flatpak");
+    QFile payloadFile(path);
+    QVERIFY(payloadFile.open(QIODevice::WriteOnly));
+    QCOMPARE(payloadFile.write(payload), qint64(payload.size()));
+    payloadFile.close();
+    PendingUpdateRecord record;
+    record.canonicalPath = path;
+    record.candidate = candidate;
+    record.verifiedSize = candidate.flatpak.size;
+    record.verifiedSha256 = candidate.flatpak.sha256;
+    files.loadResult.ok = true;
+    files.loadResult.value = record;
+
+    FakeDesktopPortalTransport timeoutTransport;
+    DesktopInstallerPortal timeoutPortal(&timeoutTransport, 25);
+    QSignalSpy timeoutResponse(
+        &timeoutPortal, &InstallerPortal::response);
+    enqueueUnchangedRefetch(&network, manifest);
+    AutoUpdateChecker checker(
+        &network, &files, &desktop, &timeoutPortal);
+    checker.start();
+    QTRY_COMPARE(checker.state(), AutoUpdateChecker::ReadyToHandOff);
+    checker.openInstaller();
+    QCOMPARE(checker.state(), AutoUpdateChecker::HandingOff);
+    QCOMPARE(timeoutTransport.subscribed.size(), 1);
+    const QString activePath = timeoutTransport.activePath;
+    QVERIFY(!activePath.isEmpty());
+
+    timeoutTransport.sendRawResponse(
+        QStringLiteral("/not/a/portal/request"), 0);
+    timeoutTransport.sendRawResponse(
+        QStringLiteral(
+            "/org/freedesktop/portal/desktop/request/1_42/unrelated"), 0);
+    QCOMPARE(checker.state(), AutoUpdateChecker::HandingOff);
+    QCOMPARE(timeoutResponse.count(), 0);
+
+    QTRY_COMPARE(checker.state(), AutoUpdateChecker::HandOffError);
+    QCOMPARE(timeoutResponse.count(), 1);
+    QCOMPARE(timeoutResponse.constFirst().at(0).toBool(), false);
+    QVERIFY(timeoutResponse.constFirst().at(1).toString().contains(
+        QStringLiteral("timed out"), Qt::CaseInsensitive));
+    QVERIFY(timeoutTransport.activePath.isEmpty());
+    QVERIFY(!timeoutTransport.broadActive);
+    QCOMPARE(timeoutTransport.broadSubscribeCalls, 1);
+    QCOMPARE(timeoutTransport.broadUnsubscribeCalls, 1);
+    QCOMPARE(timeoutTransport.unsubscribed.count(activePath), 1);
+
+    timeoutTransport.sendRawResponse(activePath, 0);
+    QCOMPARE(timeoutResponse.count(), 1);
+    QCOMPARE(checker.state(), AutoUpdateChecker::HandOffError);
+
+    const int reopenBeforeRetry = files.reopenCalls;
+    enqueueUnchangedRefetch(&network, manifest);
+    checker.retry();
+    QTRY_COMPARE(checker.state(), AutoUpdateChecker::ReadyToHandOff);
+    QCOMPARE(files.reopenCalls, reopenBeforeRetry + 1);
+    QCOMPARE(files.clearCalls, 0);
+
+    FakeDesktopPortalTransport exactCleanupTransport;
+    QWeakPointer<QFile> exactWeak;
+    {
+        QSharedPointer<QFile> exactFile(new QFile(path));
+        QVERIFY(exactFile->open(QIODevice::ReadOnly));
+        exactWeak = exactFile;
+        DesktopInstallerPortal exactCleanupPortal(
+            &exactCleanupTransport, 10000);
+        exactCleanupPortal.openFlatpak(exactFile);
+        exactFile.clear();
+        QVERIFY(!exactWeak.isNull());
+    }
+    QVERIFY(exactWeak.isNull());
+    QCOMPARE(exactCleanupTransport.broadUnsubscribeCalls, 1);
+    QCOMPARE(exactCleanupTransport.unsubscribed.size(), 1);
+    QVERIFY(exactCleanupTransport.activePath.isEmpty());
+
+    FakeDesktopPortalTransport broadCleanupTransport;
+    broadCleanupTransport.finishMethodImmediately = false;
+    QWeakPointer<QFile> broadWeak;
+    {
+        QSharedPointer<QFile> broadFile(new QFile(path));
+        QVERIFY(broadFile->open(QIODevice::ReadOnly));
+        broadWeak = broadFile;
+        DesktopInstallerPortal broadCleanupPortal(
+            &broadCleanupTransport, 10000);
+        broadCleanupPortal.openFlatpak(broadFile);
+        broadFile.clear();
+        QVERIFY(!broadWeak.isNull());
+        QVERIFY(broadCleanupTransport.broadActive);
+    }
+    QVERIFY(broadWeak.isNull());
+    QCOMPARE(broadCleanupTransport.broadUnsubscribeCalls, 1);
+    QVERIFY(!broadCleanupTransport.broadActive);
+    QVERIFY(broadCleanupTransport.activePath.isEmpty());
 }
 
 void AutoUpdateTest::boundedNetwork()
