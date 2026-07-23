@@ -1,4 +1,6 @@
 #include <QGuiApplication>
+#include <QCoreApplication>
+#include <QJsonDocument>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QIcon>
@@ -42,6 +44,7 @@
 #include "gui/computermodel.h"
 #include "gui/appmodel.h"
 #include "backend/autoupdatechecker.h"
+#include "backend/buildinfo.h"
 #include "backend/computermanager.h"
 #include "backend/systemproperties.h"
 #include "streaming/session.h"
@@ -54,6 +57,34 @@
 
 #if defined(Q_OS_WIN32)
 #define IS_UNSPECIFIED_HANDLE(x) ((x) == INVALID_HANDLE_VALUE || (x) == NULL)
+
+struct ConsoleHandles {
+    HANDLE output;
+    HANDLE error;
+};
+
+static ConsoleHandles attachParentConsole()
+{
+    ConsoleHandles oldHandles = {
+        GetStdHandle(STD_OUTPUT_HANDLE),
+        GetStdHandle(STD_ERROR_HANDLE)
+    };
+
+    // Do not replace redirected standard handles. A GUI-subsystem binary has no
+    // inherited console handles, so attach to the parent console in that case.
+    if (AttachConsole(ATTACH_PARENT_PROCESS)) {
+        if (IS_UNSPECIFIED_HANDLE(oldHandles.output)) {
+            freopen("CONOUT$", "w", stdout);
+            setvbuf(stdout, NULL, _IONBF, 0);
+        }
+        if (IS_UNSPECIFIED_HANDLE(oldHandles.error)) {
+            freopen("CONOUT$", "w", stderr);
+            setvbuf(stderr, NULL, _IONBF, 0);
+        }
+    }
+
+    return oldHandles;
+}
 
 // Log to file or console dynamically for Windows builds
 #define LOG_TO_FILE
@@ -310,8 +341,6 @@ LONG WINAPI UnhandledExceptionHandler(struct _EXCEPTION_POINTERS *ExceptionInfo)
 
 int main(int argc, char *argv[])
 {
-    SDL_SetMainReady();
-
     // Set the app version for the QCommandLineParser's showVersion() command
     QCoreApplication::setApplicationVersion(VERSION_STR);
 
@@ -321,6 +350,18 @@ int main(int argc, char *argv[])
     QCoreApplication::setOrganizationName("Artemis Desktop Project");
     QCoreApplication::setOrganizationDomain("artemisdesktop.com");
     QCoreApplication::setApplicationName("Artemis");
+
+#ifdef Q_OS_WIN32
+    const ConsoleHandles oldConsoleHandles = attachParentConsole();
+#endif
+
+    if (argc == 2 && QString::fromLocal8Bit(argv[1]) == QStringLiteral("--build-info")) {
+        QCoreApplication application(argc, argv);
+        QTextStream(stdout) << QJsonDocument(BuildInfo::toJson()).toJson(QJsonDocument::Compact) << Qt::endl;
+        return 0;
+    }
+
+    SDL_SetMainReady();
 
     if (QFile(QDir::currentPath() + "/portable.dat").exists()) {
         QSettings::setDefaultFormat(QSettings::IniFormat);
@@ -340,18 +381,12 @@ int main(int argc, char *argv[])
         qputenv("QML_DISK_CACHE_PATH", Path::getQmlCacheDir().toUtf8());
     }
 
-#ifdef Q_OS_WIN32
-    // Grab the original std handles before we potentially redirect them later
-    HANDLE oldConOut = GetStdHandle(STD_OUTPUT_HANDLE);
-    HANDLE oldConErr = GetStdHandle(STD_ERROR_HANDLE);
-#endif
-
 #ifdef LOG_TO_FILE
     QDir tempDir(Path::getLogDir());
 
 #ifdef Q_OS_WIN32
     // Only log to a file if the user didn't redirect stderr somewhere else
-    if (IS_UNSPECIFIED_HANDLE(oldConErr))
+    if (IS_UNSPECIFIED_HANDLE(oldConsoleHandles.error))
 #endif
     {
         s_LoggerFile = new QFile(tempDir.filePath(QString("Artemis-%1.log").arg(QDateTime::currentSecsSinceEpoch())));
@@ -591,26 +626,6 @@ int main(int argc, char *argv[])
 
     QGuiApplication app(argc, argv);
     QGuiApplication::setApplicationDisplayName("Vibertemis");
-
-#ifdef Q_OS_WIN32
-    // If we don't have stdout or stderr handles (which will normally be the case
-    // since we're a /SUBSYSTEM:WINDOWS app), attach to our parent console and use
-    // that for stdout and stderr.
-    //
-    // If we do have stdout or stderr handles, that means the user has used standard
-    // handle redirection. In that case, we don't want to override those handles.
-    if (AttachConsole(ATTACH_PARENT_PROCESS)) {
-        // If we didn't have an old stdout/stderr handle, use the new CONOUT$ handle
-        if (IS_UNSPECIFIED_HANDLE(oldConOut)) {
-            freopen("CONOUT$", "w", stdout);
-            setvbuf(stdout, NULL, _IONBF, 0);
-        }
-        if (IS_UNSPECIFIED_HANDLE(oldConErr)) {
-            freopen("CONOUT$", "w", stderr);
-            setvbuf(stderr, NULL, _IONBF, 0);
-        }
-    }
-#endif
 
     GlobalCommandLineParser parser;
     GlobalCommandLineParser::ParseResult commandLineParserResult = parser.parse(app.arguments());

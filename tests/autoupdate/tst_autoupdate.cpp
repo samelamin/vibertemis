@@ -8,6 +8,7 @@
 #include <QNetworkReply>
 
 #include "backend/autoupdatechecker.h"
+#include "backend/buildinfo.h"
 #include "backend/releaseversionselector.h"
 
 class StaticNetworkReply : public QNetworkReply
@@ -65,6 +66,9 @@ private slots:
     void optionalLeadingVIsNormalized();
     void updateDecisionUsesSemverNumericCore_data();
     void updateDecisionUsesSemverNumericCore();
+    void buildIdentity();
+    void buildIdentityValidation_data();
+    void buildIdentityValidation();
 };
 
 static QJsonArray releases(const QByteArray &json)
@@ -206,6 +210,63 @@ void AutoUpdateTest::updateDecisionUsesSemverNumericCore()
         QCOMPARE(updateSpy.at(0).at(0).toString(), releaseVersion);
         QCOMPARE(updateSpy.at(0).at(1).toString(), QStringLiteral("https://example.invalid/release"));
     }
+}
+
+void AutoUpdateTest::buildIdentity()
+{
+    QCOMPARE(BuildInfo::commit(), QString(40, QLatin1Char('a')));
+    QCOMPARE(BuildInfo::channel(), BuildInfo::RollingChannel);
+    QCOMPARE(BuildInfo::sequence(), quint64(1234));
+    QVERIFY(BuildInfo::isInternallyConsistent());
+
+    const QJsonObject json = BuildInfo::toJson();
+    QCOMPARE(json.value(QStringLiteral("schema")).toInt(), 1);
+    QCOMPARE(json.value(QStringLiteral("applicationId")).toString(),
+             QStringLiteral("com.artemisdesktop.ArtemisDesktopDev"));
+    QCOMPARE(json.value(QStringLiteral("commit")).toString(), QString(40, QLatin1Char('a')));
+    QCOMPARE(json.value(QStringLiteral("channel")).toString(), QStringLiteral("rolling"));
+    QCOMPARE(json.value(QStringLiteral("sequence")).toString(), QStringLiteral("1234"));
+}
+
+void AutoUpdateTest::buildIdentityValidation_data()
+{
+    QTest::addColumn<BuildInfo::Identity>("identity");
+    QTest::addColumn<bool>("valid");
+
+    const QString commit(40, QLatin1Char('a'));
+    const QString applicationId = QStringLiteral("com.artemisdesktop.ArtemisDesktopDev");
+    QTest::newRow("none unknown zero")
+        << BuildInfo::Identity{QStringLiteral("unknown"), BuildInfo::NoChannel, 0, applicationId, QStringLiteral("0.6.7")}
+        << true;
+    QTest::newRow("none clean commit zero")
+        << BuildInfo::Identity{commit, BuildInfo::NoChannel, 0, applicationId, QStringLiteral("0.6.7")}
+        << true;
+    QTest::newRow("malformed short commit")
+        << BuildInfo::Identity{QStringLiteral("abcdef"), BuildInfo::NoChannel, 0, applicationId, QStringLiteral("0.6.7")}
+        << false;
+    QTest::newRow("malformed uppercase commit")
+        << BuildInfo::Identity{QString(40, QLatin1Char('A')), BuildInfo::StableChannel, 0, applicationId, QStringLiteral("0.6.7")}
+        << false;
+    QTest::newRow("rolling zero sequence")
+        << BuildInfo::Identity{commit, BuildInfo::RollingChannel, 0, applicationId, QStringLiteral("0.6.7")}
+        << false;
+    QTest::newRow("stable nonzero sequence")
+        << BuildInfo::Identity{commit, BuildInfo::StableChannel, 1, applicationId, QStringLiteral("0.6.7")}
+        << false;
+    QTest::newRow("none nonzero sequence")
+        << BuildInfo::Identity{QStringLiteral("unknown"), BuildInfo::NoChannel, 1, applicationId, QStringLiteral("0.6.7")}
+        << false;
+    QTest::newRow("mismatched application id")
+        << BuildInfo::Identity{commit, BuildInfo::RollingChannel, 1234, QStringLiteral("com.example.Artemis"), QStringLiteral("0.6.7")}
+        << false;
+}
+
+void AutoUpdateTest::buildIdentityValidation()
+{
+    QFETCH(BuildInfo::Identity, identity);
+    QFETCH(bool, valid);
+
+    QCOMPARE(BuildInfo::validate(identity), valid);
 }
 
 QTEST_MAIN(AutoUpdateTest)

@@ -207,6 +207,7 @@ SOURCES += \
     gui/appmodel.cpp \
     streaming/streamutils.cpp \
     backend/autoupdatechecker.cpp \
+    backend/buildinfo.cpp \
     backend/releaseversionselector.cpp \
     path.cpp \
     settings/mappingmanager.cpp \
@@ -252,6 +253,7 @@ HEADERS += \
     streaming/video/decoder.h \
     streaming/streamutils.h \
     backend/autoupdatechecker.h \
+    backend/buildinfo.h \
     backend/releaseversionselector.h \
     path.h \
     settings/mappingmanager.h \
@@ -607,3 +609,24 @@ macx {
 
 VERSION = "$$cat(version.txt)"
 DEFINES += VERSION_STR=\\\"$$cat(version.txt)\\\"
+
+isEmpty(VIBERTEMIS_BUILD_COMMIT): VIBERTEMIS_BUILD_COMMIT = $$(VIBERTEMIS_BUILD_COMMIT)
+isEmpty(VIBERTEMIS_BUILD_COMMIT): VIBERTEMIS_BUILD_COMMIT = unknown
+isEmpty(VIBERTEMIS_UPDATE_CHANNEL): VIBERTEMIS_UPDATE_CHANNEL = $$(VIBERTEMIS_UPDATE_CHANNEL)
+isEmpty(VIBERTEMIS_UPDATE_CHANNEL): VIBERTEMIS_UPDATE_CHANNEL = none
+!equals(VIBERTEMIS_UPDATE_CHANNEL, none) {
+    !equals(VIBERTEMIS_UPDATE_CHANNEL, stable) {
+        !equals(VIBERTEMIS_UPDATE_CHANNEL, rolling) {
+            error("VIBERTEMIS_UPDATE_CHANNEL must be none, stable, or rolling")
+        }
+    }
+}
+isEmpty(VIBERTEMIS_BUILD_SEQUENCE): VIBERTEMIS_BUILD_SEQUENCE = $$(VIBERTEMIS_BUILD_SEQUENCE)
+isEmpty(VIBERTEMIS_BUILD_SEQUENCE): VIBERTEMIS_BUILD_SEQUENCE = 0
+isEmpty(VIBERTEMIS_APPLICATION_ID): VIBERTEMIS_APPLICATION_ID = $$(VIBERTEMIS_APPLICATION_ID)
+isEmpty(VIBERTEMIS_APPLICATION_ID): VIBERTEMIS_APPLICATION_ID = com.artemis_desktop.Artemis
+
+DEFINES += VIBERTEMIS_BUILD_COMMIT=\\\"$$VIBERTEMIS_BUILD_COMMIT\\\"
+DEFINES += VIBERTEMIS_UPDATE_CHANNEL=\\\"$$VIBERTEMIS_UPDATE_CHANNEL\\\"
+DEFINES += VIBERTEMIS_BUILD_SEQUENCE=$$VIBERTEMIS_BUILD_SEQUENCE
+DEFINES += VIBERTEMIS_APPLICATION_ID=\\\"$$VIBERTEMIS_APPLICATION_ID\\\"
