@@ -1,8 +1,11 @@
 from pathlib import Path
+import io
 import json
 import re
+import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import unittest
 
@@ -20,6 +23,27 @@ WINDOWS_BUILD_SCRIPT = REPOSITORY_ROOT / "scripts" / "build-artemis-arch.bat"
 MACOS_DMG_SCRIPT = REPOSITORY_ROOT / "scripts" / "generate-dmg.sh"
 MACOS_VERIFY_SCRIPT = REPOSITORY_ROOT / "scripts" / "verify-macos-bundle.sh"
 WINDOWS_WIX_PRODUCT = REPOSITORY_ROOT / "wix" / "Artemis" / "Product.wxs"
+README = REPOSITORY_ROOT / "README.md"
+STEAM_DECK_QUICK_START = (
+    REPOSITORY_ROOT / "docs" / "STEAM_DECK_QUICK_START.md"
+)
+STEAM_DECK_ADVANCED = REPOSITORY_ROOT / "docs" / "STEAM_DECK.md"
+
+
+def first_install_script(document):
+    section = re.search(
+        r"(?ms)^## First install: one safe copy/paste block\s*$"
+        r"(?P<body>.*?)(?=^## |\Z)",
+        document,
+    )
+    if section is None:
+        return ""
+    code = re.search(r"(?ms)^```bash\n(?P<script>.*?)^```$", section["body"])
+    return "" if code is None else code["script"]
+
+
+def bash_blocks(document):
+    return re.findall(r"(?ms)^```bash\n(.*?)^```$", document)
 
 
 class UpdaterQmlContractTests(unittest.TestCase):
@@ -760,6 +784,246 @@ class UpdaterQmlContractTests(unittest.TestCase):
             'verify_app "$MOUNT_DIR/Vibertemis.app"',
             self.macos_verify_script,
         )
+
+    def test_readme_prominently_routes_steam_deck_users_to_quick_start(self):
+        readme = README.read_text(encoding="utf-8")
+        callout = "## Installing on Steam Deck? Start here"
+        link = "[Steam Deck quick start](docs/STEAM_DECK_QUICK_START.md)"
+
+        self.assertIn(callout, readme)
+        self.assertIn(link, readme)
+        self.assertLess(readme.index(callout), readme.index("## Steam Deck port"))
+        self.assertNotRegex(
+            readme,
+            r"(?s)```bash.*?artemis-steam-deck\.flatpak.*?"
+            r"flatpak install --user --or-update.*?```",
+        )
+
+    def test_quick_start_and_advanced_guide_link_to_each_other(self):
+        self.assertTrue(STEAM_DECK_QUICK_START.is_file())
+        quick_start = (
+            STEAM_DECK_QUICK_START.read_text(encoding="utf-8")
+            if STEAM_DECK_QUICK_START.exists()
+            else ""
+        )
+        advanced = STEAM_DECK_ADVANCED.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "[advanced Steam Deck streaming and validation guide](STEAM_DECK.md)",
+            quick_start,
+        )
+        self.assertIn(
+            "[Steam Deck quick start](STEAM_DECK_QUICK_START.md)",
+            advanced,
+        )
+
+    def test_first_install_uses_atomic_archive_and_verifies_before_flatpak(self):
+        self.assertTrue(STEAM_DECK_QUICK_START.is_file())
+        quick_start = (
+            STEAM_DECK_QUICK_START.read_text(encoding="utf-8")
+            if STEAM_DECK_QUICK_START.exists()
+            else ""
+        )
+        script = first_install_script(quick_start)
+        required_in_order = (
+            "set -euo pipefail",
+            'VIBERTEMIS_INSTALL_DIR="$(mktemp -d '
+            '"$HOME/Downloads/vibertemis-install.XXXXXX")"',
+            'cd "$VIBERTEMIS_INSTALL_DIR"',
+            "https://github.com/samelamin/vibertemis/releases/download/"
+            "steam-deck-latest/artemis-steam-deck-bundle.tar.gz",
+            "tar --extract --gzip --file artemis-steam-deck-bundle.tar.gz",
+            "sha256sum --check artemis-steam-deck.flatpak.sha256",
+            "flatpak remote-add --user --if-not-exists flathub",
+            "https://flathub.org/repo/flathub.flatpakrepo",
+            "flatpak install --user --or-update artemis-steam-deck.flatpak",
+            "flatpak info --user com.artemisdesktop.ArtemisDesktopDev",
+        )
+
+        position = -1
+        for token in required_in_order:
+            with self.subTest(token=token):
+                next_position = script.find(token, position + 1)
+                self.assertGreater(next_position, position)
+                position = next_position
+        self.assertNotIn("rm ", script)
+
+    def test_corrupted_first_install_stops_before_flatpak_is_called(self):
+        self.assertTrue(STEAM_DECK_QUICK_START.is_file())
+        quick_start = (
+            STEAM_DECK_QUICK_START.read_text(encoding="utf-8")
+            if STEAM_DECK_QUICK_START.exists()
+            else ""
+        )
+        script = first_install_script(quick_start)
+        self.assertTrue(script)
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            home = root / "home"
+            downloads = home / "Downloads"
+            fake_bin = root / "bin"
+            downloads.mkdir(parents=True)
+            fake_bin.mkdir()
+            archive = root / "corrupt.tar.gz"
+            marker = root / "flatpak-was-called"
+
+            flatpak_bytes = b"deliberately corrupted Flatpak\n"
+            checksum_bytes = (
+                ("0" * 64) + "  artemis-steam-deck.flatpak\n"
+            ).encode("ascii")
+            with tarfile.open(archive, "w:gz") as bundle:
+                for name, contents in (
+                    ("artemis-steam-deck.flatpak", flatpak_bytes),
+                    ("artemis-steam-deck.flatpak.sha256", checksum_bytes),
+                ):
+                    info = tarfile.TarInfo(name)
+                    info.size = len(contents)
+                    bundle.addfile(info, io.BytesIO(contents))
+
+            fake_curl = fake_bin / "curl"
+            fake_curl.write_text(
+                "#!/usr/bin/env bash\n"
+                "set -euo pipefail\n"
+                "output=''\n"
+                "while [ \"$#\" -gt 0 ]; do\n"
+                "  case \"$1\" in\n"
+                "    --output) output=\"$2\"; shift 2 ;;\n"
+                "    *) shift ;;\n"
+                "  esac\n"
+                "done\n"
+                "test -n \"$output\"\n"
+                "cp \"$FIXTURE_ARCHIVE\" \"$output\"\n",
+                encoding="utf-8",
+            )
+            fake_curl.chmod(0o755)
+            checksum_program = shutil.which("sha256sum") or shutil.which("shasum")
+            self.assertIsNotNone(checksum_program)
+            fake_sha256sum = fake_bin / "sha256sum"
+            checksum_arguments = (
+                '"$@"'
+                if Path(checksum_program).name == "sha256sum"
+                else '-a 256 "$@"'
+            )
+            fake_sha256sum.write_text(
+                "#!/usr/bin/env bash\n"
+                f'exec "{checksum_program}" {checksum_arguments}\n',
+                encoding="utf-8",
+            )
+            fake_sha256sum.chmod(0o755)
+            fake_flatpak = fake_bin / "flatpak"
+            fake_flatpak.write_text(
+                "#!/usr/bin/env bash\n"
+                "printf 'called\\n' > \"$FLATPAK_MARKER\"\n"
+                "exit 97\n",
+                encoding="utf-8",
+            )
+            fake_flatpak.chmod(0o755)
+
+            environment = {
+                "HOME": str(home),
+                "PATH": f"{fake_bin}:/usr/bin:/bin",
+                "FIXTURE_ARCHIVE": str(archive),
+                "FLATPAK_MARKER": str(marker),
+            }
+            result = subprocess.run(
+                ["bash", "--noprofile", "--norc"],
+                input=script,
+                cwd=root,
+                env=environment,
+                capture_output=True,
+                check=False,
+                text=True,
+            )
+
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("FAILED", result.stdout + result.stderr)
+            self.assertFalse(marker.exists())
+
+    def test_quick_start_is_safe_complete_and_truthful(self):
+        self.assertTrue(STEAM_DECK_QUICK_START.is_file())
+        quick_start = (
+            STEAM_DECK_QUICK_START.read_text(encoding="utf-8")
+            if STEAM_DECK_QUICK_START.exists()
+            else ""
+        )
+        normalized = " ".join(quick_start.casefold().split())
+
+        for safety_statement in (
+            "never use `sudo`",
+            "never disable steamos read-only protection for vibertemis",
+            "review commands instead of blindly pasting snippets from issue comments",
+        ):
+            with self.subTest(safety=safety_statement):
+                self.assertIn(safety_statement, normalized)
+
+        command_text = "\n".join(bash_blocks(quick_start))
+        normalized_commands = command_text.casefold()
+        for forbidden in (
+            "sudo ",
+            "steamos-readonly",
+            "flatpak-spawn",
+            "--filesystem=host",
+            "--filesystem=home",
+            "flatpak override",
+            "ostree ",
+            "pacman ",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, normalized_commands)
+
+        required_sections = (
+            "## First install: one safe copy/paste block",
+            "## Launch in Desktop Mode",
+            "## Add Vibertemis to Steam",
+            "## Launch in Gaming Mode",
+            "## Update from inside Vibertemis",
+            "## If Discover does not open: manual fallback",
+            "## Safe diagnostics",
+            "## Uninstall",
+        )
+        for heading in required_sections:
+            with self.subTest(heading=heading):
+                self.assertIn(heading, quick_start)
+
+        for command in (
+            "flatpak run com.artemisdesktop.ArtemisDesktopDev",
+            "flatpak install --user --or-update",
+            "flatpak info --user com.artemisdesktop.ArtemisDesktopDev",
+            "flatpak uninstall --user com.artemisdesktop.ArtemisDesktopDev",
+            "--build-info",
+        ):
+            with self.subTest(command=command):
+                self.assertIn(command, command_text)
+
+        public_docs = "\n".join(
+            (
+                README.read_text(encoding="utf-8"),
+                quick_start,
+                STEAM_DECK_ADVANCED.read_text(encoding="utf-8"),
+            )
+        )
+        self.assertIn("ready for Steam Deck testing", public_docs)
+        self.assertNotIn("hardware-tested", public_docs.casefold())
+        self.assertNotRegex(public_docs.casefold(), r"(?<!not )steam deck tested")
+
+    def test_advanced_guide_retains_streaming_and_hardware_validation(self):
+        advanced = STEAM_DECK_ADVANCED.read_text(encoding="utf-8")
+        for heading in (
+            "## Display and stream matching",
+            "## Vibepollo/Apollo refresh metadata acceptance",
+            "## Codec selection and safe fallback",
+            "## Frame pacing and latency",
+            "## Network and bitrate",
+            "## Read the statistics overlay",
+            "## Troubleshooting and useful logs",
+            "## Hardware acceptance matrix",
+        ):
+            with self.subTest(heading=heading):
+                self.assertIn(heading, advanced)
+        for host in ("Moonlight", "Apollo", "Vibepollo"):
+            with self.subTest(host=host):
+                self.assertIn(host, advanced)
 
 
 class UpdateManifestGeneratorTests(unittest.TestCase):

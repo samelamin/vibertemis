@@ -19,10 +19,16 @@ class FlatpakDocumentationTests(unittest.TestCase):
 
         for relative_path in (
             "README.md",
+            "docs/STEAM_DECK_QUICK_START.md",
             "docs/STEAM_DECK.md",
             ".github/ISSUE_TEMPLATE/bug_report.md",
         ):
-            text = (REPOSITORY_ROOT / relative_path).read_text(encoding="utf-8")
+            path = REPOSITORY_ROOT / relative_path
+            with self.subTest(path=relative_path):
+                self.assertTrue(path.is_file())
+            if not path.is_file():
+                continue
+            text = path.read_text(encoding="utf-8")
             documented_app_ids = re.findall(r"flatpak run\s+([A-Za-z0-9_.-]+)", text)
             with self.subTest(path=relative_path):
                 self.assertTrue(documented_app_ids)

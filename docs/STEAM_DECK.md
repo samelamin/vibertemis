@@ -4,58 +4,33 @@ This guide is for the development Flatpak with application ID
 `com.artemisdesktop.ArtemisDesktopDev`. It is a sideloaded test build, not the
 Flathub Moonlight application and not a claim of Steam Deck Verified status.
 
+New users should complete the checksum-verified
+[Steam Deck quick start](STEAM_DECK_QUICK_START.md) first. This document begins
+where installation ends: host/display matching, streaming quality,
+troubleshooting, and real-device evidence.
+
 > **Hardware status:** CI can inspect the package and exercise software-only
 > contracts, but it has no Steam Deck GPU, display, controller, or Gamescope
 > session. Every item in the [hardware acceptance matrix](#hardware-acceptance-matrix)
-> starts **Not run** until somebody records results from a real LCD or OLED Deck.
+> starts **Not run** until somebody records results from a real LCD or OLED
+> Deck. The software is ready for Steam Deck testing; unrun hardware rows are
+> not implied to pass.
 
-## Install or update the bundle
+## Installation and update boundary
 
-Switch to Desktop Mode, open Konsole, and download the current verified build
-from the rolling prerelease:
+The [quick start](STEAM_DECK_QUICK_START.md) is the maintained install,
+in-app-update, Discover-recovery, and uninstall procedure. It uses the atomic
+Flatpak-plus-checksum archive rather than racing two rolling downloads.
 
-```bash
-curl -fL \
-  https://github.com/samelamin/vibertemis/releases/download/steam-deck-latest/artemis-steam-deck.flatpak \
-  -o "$HOME/Downloads/artemis-steam-deck.flatpak"
-flatpak install --user --or-update "$HOME/Downloads/artemis-steam-deck.flatpak"
-flatpak info --user com.artemisdesktop.ArtemisDesktopDev
-flatpak run com.artemisdesktop.ArtemisDesktopDev
-```
+The beta remains a single-file bundle, so `flatpak update` cannot discover a
+new Vibertemis build by itself. Vibertemis may download and verify an exact
+newer release asset, but installation is always explicit: Gaming Mode retains
+the verified file, Desktop Mode reverifies it, and Discover or the displayed
+manual command asks the user to confirm the update. The app never invokes a
+host shell or reports installation success.
 
-Review the application ID and requested permissions before accepting the
-install. If Flatpak asks for a runtime source, enable Flathub in Discover or add
-the Flathub remote first. A single-file bundle is not connected to an update
-repository, so install each newer artifact with the same `--or-update` command;
-`flatpak update` alone cannot discover a newer Vibertemis bundle. Download the
-rolling file again and repeat the same `flatpak install --user --or-update`
-command. Flatpak documents these constraints in its
-[single-file bundle guide][flatpak-bundles] and the
-[`flatpak install` reference][flatpak-install].
-
-The rolling publisher first uploads the direct Flatpak, re-downloads it, and
-compares its digest. It only then publishes the
-[`artemis-steam-deck.flatpak.sha256` sidecar][deck-flatpak-sha] and the
-[`artemis-steam-deck-bundle.tar.gz` atomic archive][deck-flatpak-archive]. A
-later successful branch build replaces all three assets. Because two separate
-downloads can straddle that replacement, retry both files if a direct Flatpak
-and sidecar mismatch while publication is in progress. For an atomic
-Flatpak-plus-checksum snapshot, download and verify the archive instead:
-
-```bash
-curl -fL \
-  https://github.com/samelamin/vibertemis/releases/download/steam-deck-latest/artemis-steam-deck-bundle.tar.gz \
-  -o "$HOME/Downloads/artemis-steam-deck-bundle.tar.gz"
-mkdir -p "$HOME/Downloads/artemis-steam-deck-bundle"
-tar -xzf "$HOME/Downloads/artemis-steam-deck-bundle.tar.gz" \
-  -C "$HOME/Downloads/artemis-steam-deck-bundle"
-cd "$HOME/Downloads/artemis-steam-deck-bundle"
-sha256sum -c artemis-steam-deck.flatpak.sha256
-flatpak install --user --or-update artemis-steam-deck.flatpak
-```
-
-The development ID is an established compatibility identifier and is
-intentionally distinct from other installations. Do not uninstall another app
+The development ID is an established compatibility identifier. It is
+intentionally distinct from other applications; do not uninstall another app
 to install this bundle.
 
 ## Add Vibertemis to Steam
@@ -376,7 +351,9 @@ unsupported panel/display rate as failed; record it as blocked with its mode lis
 
 ## Known limitations
 
-- This development bundle has no automatic bundle-update channel.
+- This single-file development bundle has no Flatpak repository update
+  channel. Its in-app updater downloads and verifies the whole bundle, then
+  requires explicit Desktop Mode confirmation in Discover or Konsole.
 - AV1 presence in the package is not evidence of Steam Deck hardware decode or
   host encode support.
 - HDR is experimental and requires an end-to-end compatible path; LCD handheld
@@ -406,8 +383,6 @@ unsupported panel/display rate as failed; record it as blocked with its mode lis
 
 [flatpak-bundles]: https://docs.flatpak.org/en/latest/single-file-bundles.html
 [flatpak-install]: https://docs.flatpak.org/en/latest/flatpak-command-reference.html#flatpak-install
-[deck-flatpak-sha]: https://github.com/samelamin/vibertemis/releases/download/steam-deck-latest/artemis-steam-deck.flatpak.sha256
-[deck-flatpak-archive]: https://github.com/samelamin/vibertemis/releases/download/steam-deck-latest/artemis-steam-deck-bundle.tar.gz
 [valve-non-steam]: https://help.steampowered.com/en/faqs/view/4B8B-9697-2338-40EC
 [deck-specs]: https://www.steamdeck.com/en/tech
 [deck-refresh]: https://help.steampowered.com/en/faqs/view/69E3-14AF-9764-4C28

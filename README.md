@@ -11,6 +11,16 @@ Vibertemis connects to GameStream-compatible [Apollo](https://github.com/Classic
 
 The workflow badge links to branch runs, but a green docs-only run can skip platform builds. Before treating CI as evidence, open the run for the exact commit and confirm the relevant job actually ran and passed—especially `Flatpak Development Build` for Steam Deck packages and `macOS Development Build` for Apple Silicon packages.
 
+## Installing on Steam Deck? Start here
+
+Vibertemis is ready for Steam Deck testing. Follow the
+[Steam Deck quick start](docs/STEAM_DECK_QUICK_START.md) for the safe,
+checksum-verified first install, Desktop and Gaming Mode launch steps, in-app
+updates, Discover recovery, diagnostics, and uninstall commands. The
+[advanced Steam Deck guide](docs/STEAM_DECK.md) covers Moonlight/Apollo
+streaming, codecs, refresh matching, controls, logs, and the hardware acceptance
+matrix.
+
 ## Why Vibertemis?
 
 These are reports from upstream users, not claims that upstream Artemis fails for everyone. The fork status column is limited to work covered by source contracts, package checks, unit tests, or documented local verification.
@@ -46,38 +56,26 @@ The refresh wire format is unit-tested for 23.976, 29.97, 59.94, 119.88, integer
 
 ### Install or update the rolling Flatpak
 
-In Steam Deck Desktop Mode, open Konsole and run:
+Use the [Steam Deck quick start](docs/STEAM_DECK_QUICK_START.md), which
+downloads the atomic archive into a new temporary directory and verifies its
+checksum before invoking Flatpak. Do not use the direct file as an unverified
+copy/paste install shortcut.
 
-```bash
-curl -fL https://github.com/samelamin/vibertemis/releases/download/steam-deck-latest/artemis-steam-deck.flatpak \
-  -o "$HOME/Downloads/artemis-steam-deck.flatpak"
-flatpak install --user --or-update "$HOME/Downloads/artemis-steam-deck.flatpak"
-flatpak info --user com.artemisdesktop.ArtemisDesktopDev
-flatpak run com.artemisdesktop.ArtemisDesktopDev
-```
-
-The app appears publicly as **Vibertemis**, but the Flatpak ID remains `com.artemisdesktop.ArtemisDesktopDev` and its internal command/executable remains `artemis`. The `artemis-steam-deck.*` asset names are also deliberate compatibility names. Keeping them protects existing installs, Steam shortcuts, direct-download scripts, and automation; it is not incomplete rebranding.
-
-This is a single-file bundle, not a Flatpak repository. Install each newer download with `--or-update`; `flatpak update` alone cannot discover a replacement. The rolling prerelease replaces these stable URLs after a later branch build succeeds:
+The app appears publicly as **Vibertemis**, but the Flatpak ID remains
+`com.artemisdesktop.ArtemisDesktopDev` and its internal command remains
+`artemis`. After installation, launch it from the application menu or run
+`flatpak run com.artemisdesktop.ArtemisDesktopDev`. The compatibility download
+names remain:
 
 - [direct Flatpak](https://github.com/samelamin/vibertemis/releases/download/steam-deck-latest/artemis-steam-deck.flatpak)
 - [SHA-256 sidecar](https://github.com/samelamin/vibertemis/releases/download/steam-deck-latest/artemis-steam-deck.flatpak.sha256)
 - [atomic Flatpak-plus-checksum archive](https://github.com/samelamin/vibertemis/releases/download/steam-deck-latest/artemis-steam-deck-bundle.tar.gz)
 
-CI uploads the Flatpak first, re-downloads it, and compares its digest before publishing the checksum companions. Two separately downloaded files can straddle a rolling replacement. Retry both after a mismatch, or use the atomic archive:
-
-```bash
-curl -fL https://github.com/samelamin/vibertemis/releases/download/steam-deck-latest/artemis-steam-deck-bundle.tar.gz \
-  -o "$HOME/Downloads/artemis-steam-deck-bundle.tar.gz"
-mkdir -p "$HOME/Downloads/artemis-steam-deck-bundle"
-tar -xzf "$HOME/Downloads/artemis-steam-deck-bundle.tar.gz" \
-  -C "$HOME/Downloads/artemis-steam-deck-bundle"
-cd "$HOME/Downloads/artemis-steam-deck-bundle"
-sha256sum -c artemis-steam-deck.flatpak.sha256
-flatpak install --user --or-update artemis-steam-deck.flatpak
-```
-
-The rolling tag is a development prerelease. Review the application ID and Flatpak permissions before installing it.
+This beta is a single-file bundle, not a Flatpak repository, so `flatpak
+update` alone cannot discover replacements. A rolling build can instead
+download and verify a newer maintained bundle inside Vibertemis, then ask the
+user to complete installation visibly in Discover from Desktop Mode. The app
+does not install silently or claim that Discover finished.
 
 ## macOS development build
 
