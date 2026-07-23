@@ -307,6 +307,11 @@ jobs:
       shell: pwsh
       run: |
         $binary = "build\build-x64-release\app\release\Artemis.exe"
+        $runtimePaths = @(
+          (Resolve-Path "libs\windows\lib\x64").Path
+          (Resolve-Path "build\build-x64-release\AntiHooking\release").Path
+        )
+        $env:PATH = "$($runtimePaths -join ';');$env:Qt6_DIR\bin;$env:PATH"
         $buildInfo = (& $binary --build-info | ConvertFrom-Json)
         if ($LASTEXITCODE -ne 0) { throw "$binary --build-info failed" }
         $expectedVersion = (Get-Content app\version.txt -Raw).Trim()
@@ -454,6 +459,11 @@ jobs:
       shell: pwsh
       run: |
         $binary = "build\build-arm64-release\app\release\Artemis.exe"
+        $runtimePaths = @(
+          (Resolve-Path "libs\windows\lib\arm64").Path
+          (Resolve-Path "build\build-arm64-release\AntiHooking\release").Path
+        )
+        $env:PATH = "$($runtimePaths -join ';');$env:Qt6_DIR\bin;$env:PATH"
         $buildInfo = (& $binary --build-info | ConvertFrom-Json)
         if ($LASTEXITCODE -ne 0) { throw "$binary --build-info failed" }
         $expectedVersion = (Get-Content app\version.txt -Raw).Trim()
@@ -593,6 +603,11 @@ jobs:
         } else {
           $binary = "build\build-x64-release\app\release\Artemis.exe"
         }
+        $runtimePaths = @(
+          (Resolve-Path "libs\windows\lib\${env:TARGET_ARCH}").Path
+          (Resolve-Path "build\build-${env:TARGET_ARCH}-release\AntiHooking\release").Path
+        )
+        $env:PATH = "$($runtimePaths -join ';');$env:Qt6_DIR\bin;$env:PATH"
         $buildInfo = (& $binary --build-info | ConvertFrom-Json)
         if ($LASTEXITCODE -ne 0) { throw "$binary --build-info failed" }
         $expectedVersion = (Get-Content app\version.txt -Raw).Trim()

@@ -600,6 +600,67 @@ class UpdaterQmlContractTests(unittest.TestCase):
             arm64_job,
         )
 
+    def test_windows_raw_identity_checks_include_runtime_dll_paths(self):
+        x64_job = self.workflow[
+            self.workflow.index("  build-windows-x64-portable:") :
+            self.workflow.index("\n  build-windows-arm64-portable:")
+        ]
+        arm64_job = self.workflow[
+            self.workflow.index("  build-windows-arm64-portable:") :
+            self.workflow.index("\n  build-windows-msi-components:")
+        ]
+        components_job = self.workflow[
+            self.workflow.index("  build-windows-msi-components:") :
+            self.workflow.index("\n  build-windows-universal-installer:")
+        ]
+        path_assignment = (
+            '$env:PATH = "$($runtimePaths -join \';\');'
+            '$env:Qt6_DIR\\bin;$env:PATH"'
+        )
+
+        for job, architecture in (
+            (x64_job, "x64"),
+            (arm64_job, "arm64"),
+        ):
+            with self.subTest(job=architecture):
+                self.assertIn(
+                    rf"libs\windows\lib\{architecture}",
+                    job,
+                )
+                self.assertIn(
+                    rf"build\build-{architecture}-release"
+                    r"\AntiHooking\release",
+                    job,
+                )
+                self.assertIn(path_assignment, job)
+                self.assertLess(
+                    job.index(rf"libs\windows\lib\{architecture}"),
+                    job.index(path_assignment),
+                )
+                self.assertLess(
+                    job.index(path_assignment),
+                    job.index("& $binary --build-info"),
+                )
+
+        self.assertIn(
+            r"libs\windows\lib\${env:TARGET_ARCH}",
+            components_job,
+        )
+        self.assertIn(
+            r"build\build-${env:TARGET_ARCH}-release"
+            r"\AntiHooking\release",
+            components_job,
+        )
+        self.assertIn(path_assignment, components_job)
+        self.assertLess(
+            components_job.index(r"libs\windows\lib\${env:TARGET_ARCH}"),
+            components_job.index(path_assignment),
+        )
+        self.assertLess(
+            components_job.index(path_assignment),
+            components_job.index("& $binary --build-info"),
+        )
+
     def test_windows_msi_components_use_native_matrix_and_artifact_handoff(self):
         component_marker = "  build-windows-msi-components:"
         self.assertIn(component_marker, self.workflow)
