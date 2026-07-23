@@ -221,6 +221,10 @@ QString AutoUpdateChecker::releaseUrl() const
     return m_Candidate.releasePage.toString();
 }
 QString AutoUpdateChecker::downloadedPath() const { return m_DownloadedPath; }
+QString AutoUpdateChecker::manualInstallCommand() const
+{
+    return manualInstallCommandForPath(m_DownloadedPath);
+}
 qint64 AutoUpdateChecker::bytesReceived() const { return m_BytesReceived; }
 qint64 AutoUpdateChecker::bytesTotal() const { return m_BytesTotal; }
 qint64 AutoUpdateChecker::expectedDownloadBytes() const
@@ -263,6 +267,20 @@ bool AutoUpdateChecker::isApprovedRedirect(const QUrl &url)
 int AutoUpdateChecker::maximumRedirects() { return RedirectLimit; }
 qint64 AutoUpdateChecker::jsonResponseLimit() { return JsonLimit; }
 qint64 AutoUpdateChecker::manifestResponseLimit() { return ManifestLimit; }
+
+QString AutoUpdateChecker::manualInstallCommandForPath(const QString &path)
+{
+    if (path.isEmpty()) {
+        return QString();
+    }
+    QString escaped(path);
+    escaped.replace(QStringLiteral("\\"), QStringLiteral("\\\\"));
+    escaped.replace(QStringLiteral("\""), QStringLiteral("\\\""));
+    escaped.replace(QStringLiteral("$"), QStringLiteral("\\$"));
+    escaped.replace(QStringLiteral("`"), QStringLiteral("\\`"));
+    return QStringLiteral("flatpak install --user --or-update \"")
+        + escaped + QLatin1Char('"');
+}
 
 bool AutoUpdateChecker::applyTransition(int rawEvent)
 {

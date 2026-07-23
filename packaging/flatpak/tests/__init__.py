@@ -1,1 +1,0 @@
-"""Flatpak packaging test suite."""

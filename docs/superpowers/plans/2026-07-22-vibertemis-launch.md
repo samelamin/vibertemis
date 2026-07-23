@@ -37,7 +37,7 @@ Require `com.artemisdesktop.ArtemisDesktopDev`, `com.artemis_desktop.Artemis`, `
 
 - [ ] **Step 3: Run the test and verify RED**
 
-Run: `python3 -m unittest packaging.flatpak.tests.test_fork_identity -v`
+Run: `python3 -m unittest vibertemis_packaging_tests.test_fork_identity -v`
 
 Expected: failures identify missing Vibertemis README/metadata/routes while compatibility assertions pass.
 
@@ -78,7 +78,7 @@ Use `Vibertemis` for Linux/Flatpak desktop and AppStream names/summaries, macOS 
 
 - [ ] **Step 3: Run the identity test toward GREEN**
 
-Run: `python3 -m unittest packaging.flatpak.tests.test_fork_identity -v`
+Run: `python3 -m unittest vibertemis_packaging_tests.test_fork_identity -v`
 
 Expected: branding assertions for application metadata pass; repository/README assertions may remain red until later tasks.
 
@@ -101,7 +101,7 @@ Require `Vibertemis.app`, its compatibility executable `Contents/MacOS/Artemis`,
 
 - [ ] **Step 2: Run the contract and verify RED**
 
-Run: `python3 -m unittest packaging.flatpak.tests.test_fork_identity -v`
+Run: `python3 -m unittest vibertemis_packaging_tests.test_fork_identity -v`
 
 Expected: macOS path assertions fail on the old Artemis public bundle names.
 
@@ -136,7 +136,7 @@ Run: `git add packaging/flatpak/tests/test_fork_identity.py scripts .github/work
 
 - [ ] **Step 1: Run the route contract and verify RED**
 
-Run: `python3 -m unittest packaging.flatpak.tests.test_fork_identity -v`
+Run: `python3 -m unittest vibertemis_packaging_tests.test_fork_identity -v`
 
 Expected: maintained `samelamin/artemis` routes and the old workflow repository gate are reported.
 
@@ -163,7 +163,7 @@ Run: `git add .github app packaging/flatpak docs tests wix && git commit -m "bui
 
 - [ ] **Step 1: Run README contract and verify RED**
 
-Run: `python3 -m unittest packaging.flatpak.tests.test_fork_identity -v`
+Run: `python3 -m unittest vibertemis_packaging_tests.test_fork_identity -v`
 
 Expected: required launch headings/comparison/renamed routes are missing.
 
@@ -177,7 +177,7 @@ Describe Sam's role, Codex's implementation/testing/documentation role, and Clau
 
 - [ ] **Step 4: Run identity and documentation tests**
 
-Run: `python3 -m unittest packaging.flatpak.tests.test_fork_identity packaging.flatpak.tests.test_flatpak_documentation -v`
+Run: `python3 -m unittest vibertemis_packaging_tests.test_fork_identity vibertemis_packaging_tests.test_flatpak_documentation -v`
 
 Expected: all tests pass.
 

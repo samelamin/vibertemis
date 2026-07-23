@@ -354,6 +354,9 @@ restoration follow the existing controller navigation conventions.
 - The app receives only Downloads-directory write access.
 - Vibertemis never invokes a host shell, `sudo`, `flatpak-spawn --host`, or the
   Flatpak service D-Bus API.
+- The manual fallback is a display-only backend property. It POSIX
+  double-quote escapes the verified path before QML can copy it; QML neither
+  constructs nor executes the command.
 - Desktop handoff uses only `org.freedesktop.portal.OpenURI.OpenFile` with the
   verified read-only file descriptor. A `file://` URL is not used.
 - Installation remains visible and confirmable in the configured desktop

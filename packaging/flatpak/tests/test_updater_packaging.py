@@ -1,5 +1,7 @@
 from pathlib import Path
 import re
+import subprocess
+import sys
 import unittest
 
 
@@ -26,6 +28,44 @@ class UpdaterQmlContractTests(unittest.TestCase):
         self.assertTrue(UPDATE_DIALOG_QML.is_file())
         self.assertIn("<file>gui/UpdateDialog.qml</file>", self.resource)
         self.assertRegex(self.dialog, r"\bNavigableDialog\s*\{")
+
+    def test_python_packaging_distribution_is_not_shadowed(self):
+        for marker in (
+            REPOSITORY_ROOT / "packaging" / "__init__.py",
+            REPOSITORY_ROOT / "packaging" / "flatpak" / "__init__.py",
+            REPOSITORY_ROOT / "packaging" / "flatpak" / "tests" / "__init__.py",
+        ):
+            with self.subTest(marker=marker):
+                self.assertFalse(marker.exists())
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "from packaging.version import Version; "
+                "assert Version('1.2.3') < Version('2')",
+            ],
+            cwd=REPOSITORY_ROOT,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        plan = (
+            REPOSITORY_ROOT
+            / "docs"
+            / "superpowers"
+            / "plans"
+            / "2026-07-23-steam-deck-quick-start-and-updater.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "vibertemis_packaging_tests.test_updater_packaging",
+            plan,
+        )
+        self.assertNotIn(
+            "packaging.flatpak.tests.test_updater_packaging",
+            plan,
+        )
 
     def test_toolbar_opens_modal_only_from_a_user_click(self):
         self.assertRegex(
@@ -189,7 +229,7 @@ class UpdaterQmlContractTests(unittest.TestCase):
             self.dialog,
             re.compile(
                 r"function\s+manualCommandAvailable\(\)\s*\{.*?"
-                r"AutoUpdateChecker\.downloadedPath\s*!==\s*\"\".*?"
+                r"AutoUpdateChecker\.manualInstallCommand\s*!==\s*\"\".*?"
                 r"AutoUpdateChecker\.ReadyForDesktop.*?"
                 r"AutoUpdateChecker\.ReadyToHandOff.*?"
                 r"AutoUpdateChecker\.HandOffRequested.*?"
@@ -218,13 +258,12 @@ class UpdaterQmlContractTests(unittest.TestCase):
         self.assertNotIn("updated successfully", self.dialog.lower())
 
     def test_manual_command_uses_only_the_verified_downloads_path(self):
+        self.assertNotIn("property string manualCommand", self.dialog)
+        self.assertNotIn("AutoUpdateChecker.downloadedPath", self.dialog)
         self.assertRegex(
             self.dialog,
-            re.compile(
-                r"property\s+string\s+manualCommand:\s*"
-                r"'flatpak install --user --or-update \"'\s*\+\s*"
-                r"AutoUpdateChecker\.downloadedPath\s*\+\s*'\"'",
-            ),
+            r"id:\s*manualCommandField[\s\S]{0,300}"
+            r"text:\s*AutoUpdateChecker\.manualInstallCommand",
         )
         self.assertRegex(
             self.dialog,

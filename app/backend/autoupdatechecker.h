@@ -32,6 +32,7 @@ class AutoUpdateChecker : public QObject
     Q_PROPERTY(QString availableBuild READ availableBuild NOTIFY candidateChanged)
     Q_PROPERTY(QString releaseUrl READ releaseUrl NOTIFY candidateChanged)
     Q_PROPERTY(QString downloadedPath READ downloadedPath NOTIFY downloadedPathChanged)
+    Q_PROPERTY(QString manualInstallCommand READ manualInstallCommand NOTIFY downloadedPathChanged)
     Q_PROPERTY(qint64 bytesReceived READ bytesReceived NOTIFY progressChanged)
     Q_PROPERTY(qint64 bytesTotal READ bytesTotal NOTIFY progressChanged)
     Q_PROPERTY(qint64 expectedDownloadBytes READ expectedDownloadBytes NOTIFY expectedDownloadBytesChanged)
@@ -82,6 +83,7 @@ public:
     QString availableBuild() const;
     QString releaseUrl() const;
     QString downloadedPath() const;
+    QString manualInstallCommand() const;
     qint64 bytesReceived() const;
     qint64 bytesTotal() const;
     qint64 expectedDownloadBytes() const;
@@ -92,6 +94,7 @@ public:
     static int maximumRedirects();
     static qint64 jsonResponseLimit();
     static qint64 manifestResponseLimit();
+    static QString manualInstallCommandForPath(const QString &path);
 
     Q_INVOKABLE void start();
     Q_INVOKABLE void checkNow();

@@ -468,6 +468,8 @@ private slots:
     void optionalLeadingVIsNormalized();
     void updateDecisionUsesSemverNumericCore_data();
     void updateDecisionUsesSemverNumericCore();
+    void manualInstallCommandEscapesHostilePath_data();
+    void manualInstallCommandEscapesHostilePath();
     void buildIdentity();
     void buildIdentityValidation_data();
     void buildIdentityValidation();
@@ -871,6 +873,57 @@ void AutoUpdateTest::updateDecisionUsesSemverNumericCore()
         QCOMPARE(updateSpy.at(0).at(1).toString(), QStringLiteral("https://example.invalid/release"));
     }
     QCOMPARE(checker.expectedDownloadBytes(), qint64(0));
+}
+
+void AutoUpdateTest::manualInstallCommandEscapesHostilePath_data()
+{
+    QTest::addColumn<QString>("path");
+    QTest::addColumn<QString>("expected");
+
+    const QString prefix =
+        QStringLiteral("flatpak install --user --or-update \"");
+    QTest::newRow("empty")
+        << QString()
+        << QString();
+    QTest::newRow("whitespace")
+        << QStringLiteral("/home/deck/My Downloads/update file.flatpak")
+        << prefix
+               + QStringLiteral("/home/deck/My Downloads/update file.flatpak\"");
+    QTest::newRow("dollar command substitution")
+        << QStringLiteral("/tmp/update $(touch PWNED).flatpak")
+        << prefix
+               + QStringLiteral("/tmp/update \\$(touch PWNED).flatpak\"");
+    QTest::newRow("backticks")
+        << QStringLiteral("/tmp/update `touch PWNED`.flatpak")
+        << prefix
+               + QStringLiteral("/tmp/update \\`touch PWNED\\`.flatpak\"");
+    QTest::newRow("double quote")
+        << QStringLiteral("/tmp/update\";touch PWNED;\".flatpak")
+        << prefix
+               + QStringLiteral("/tmp/update\\\";touch PWNED;\\\".flatpak\"");
+    QTest::newRow("backslash")
+        << QStringLiteral("/tmp/update\\name.flatpak")
+        << prefix
+               + QStringLiteral("/tmp/update\\\\name.flatpak\"");
+    QTest::newRow("newline and substitution")
+        << QStringLiteral("/tmp/update\n$(touch PWNED).flatpak")
+        << prefix
+               + QStringLiteral("/tmp/update\n\\$(touch PWNED).flatpak\"");
+}
+
+void AutoUpdateTest::manualInstallCommandEscapesHostilePath()
+{
+    QFETCH(QString, path);
+    QFETCH(QString, expected);
+
+    const QString command =
+        AutoUpdateChecker::manualInstallCommandForPath(path);
+    QCOMPARE(command, expected);
+    if (!command.isEmpty()) {
+        QVERIFY(command.startsWith(
+            QStringLiteral("flatpak install --user --or-update \"")));
+        QVERIFY(command.endsWith(QLatin1Char('"')));
+    }
 }
 
 void AutoUpdateTest::buildIdentity()
@@ -2175,6 +2228,7 @@ void AutoUpdateTest::stateMachine()
     QVERIFY(meta.indexOfProperty("availableBuild") >= 0);
     QVERIFY(meta.indexOfProperty("releaseUrl") >= 0);
     QVERIFY(meta.indexOfProperty("downloadedPath") >= 0);
+    QVERIFY(meta.indexOfProperty("manualInstallCommand") >= 0);
     QVERIFY(meta.indexOfProperty("bytesReceived") >= 0);
     QVERIFY(meta.indexOfProperty("bytesTotal") >= 0);
     QVERIFY(meta.indexOfProperty("expectedDownloadBytes") >= 0);

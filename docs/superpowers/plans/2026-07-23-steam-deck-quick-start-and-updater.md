@@ -569,6 +569,7 @@ Q_PROPERTY(QString currentBuild READ currentBuild CONSTANT)
 Q_PROPERTY(QString availableBuild READ availableBuild NOTIFY candidateChanged)
 Q_PROPERTY(QString releaseUrl READ releaseUrl NOTIFY candidateChanged)
 Q_PROPERTY(QString downloadedPath READ downloadedPath NOTIFY downloadedPathChanged)
+Q_PROPERTY(QString manualInstallCommand READ manualInstallCommand NOTIFY downloadedPathChanged)
 Q_PROPERTY(qint64 bytesReceived READ bytesReceived NOTIFY progressChanged)
 Q_PROPERTY(qint64 bytesTotal READ bytesTotal NOTIFY progressChanged)
 Q_PROPERTY(QString errorMessage READ errorMessage NOTIFY errorChanged)
@@ -859,12 +860,17 @@ The Python contract test must require:
 flatpak install --user --or-update "<verified Downloads path>"
 ```
 
+The backend constructs this display-only fallback from `downloadedPath` and
+POSIX double-quote escapes backslashes, double quotes, dollar signs, and
+backticks. QML must only display and copy the backend property in verified
+states; it must not concatenate the path or execute the command.
+
 - [ ] **Step 2: Run the contract test and verify failure**
 
 Run:
 
 ```bash
-python3 -m unittest packaging.flatpak.tests.test_updater_packaging -v
+python3 -m unittest vibertemis_packaging_tests.test_updater_packaging -v
 ```
 
 Expected: failure because the dialog and settings entry do not exist.
@@ -891,7 +897,7 @@ surface.
 Run:
 
 ```bash
-python3 -m unittest packaging.flatpak.tests.test_updater_packaging -v
+python3 -m unittest vibertemis_packaging_tests.test_updater_packaging -v
 mkdir -p build/native-qml
 cd build/native-qml
 qmake6 ../../artemis.pro CONFIG+=release
@@ -1109,8 +1115,8 @@ Run:
 
 ```bash
 python3 -m unittest \
-  packaging.flatpak.tests.test_updater_packaging \
-  packaging.flatpak.tests.test_fork_identity -v
+  vibertemis_packaging_tests.test_updater_packaging \
+  vibertemis_packaging_tests.test_fork_identity -v
 ```
 
 Expected: failures because the job is branch-gated to

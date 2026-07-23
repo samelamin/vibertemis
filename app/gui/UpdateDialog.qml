@@ -9,8 +9,6 @@ NavigableDialog {
     id: updateDialog
 
     property var previousFocusItem: null
-    property string manualCommand: 'flatpak install --user --or-update "' +
-                                   AutoUpdateChecker.downloadedPath + '"'
 
     modal: true
     title: qsTr("Application update")
@@ -42,7 +40,7 @@ NavigableDialog {
     }
 
     function manualCommandAvailable() {
-        return AutoUpdateChecker.downloadedPath !== "" &&
+        return AutoUpdateChecker.manualInstallCommand !== "" &&
                (AutoUpdateChecker.state === AutoUpdateChecker.ReadyForDesktop ||
                 AutoUpdateChecker.state === AutoUpdateChecker.ReadyToHandOff ||
                 AutoUpdateChecker.state === AutoUpdateChecker.HandingOff ||
@@ -302,7 +300,7 @@ NavigableDialog {
             Layout.fillWidth: true
             visible: updateDialog.manualCommandAvailable()
             readOnly: true
-            text: updateDialog.manualCommand
+            text: AutoUpdateChecker.manualInstallCommand
             selectByMouse: true
         }
     }
