@@ -28,10 +28,27 @@ Copy the whole block into Konsole:
 set -euo pipefail
 VIBERTEMIS_INSTALL_DIR="$(mktemp -d "$HOME/Downloads/vibertemis-install.XXXXXX")"
 cd "$VIBERTEMIS_INSTALL_DIR"
+printf 'Install files will be retained in: %s\n' "$VIBERTEMIS_INSTALL_DIR"
 curl --fail --location --retry 3 \
   --output artemis-steam-deck-bundle.tar.gz \
   https://github.com/samelamin/vibertemis/releases/download/steam-deck-latest/artemis-steam-deck-bundle.tar.gz
-tar --extract --gzip --file artemis-steam-deck-bundle.tar.gz
+VIBERTEMIS_ARCHIVE_MEMBERS="$(tar -tzf "artemis-steam-deck-bundle.tar.gz" | LC_ALL=C sort)"
+VIBERTEMIS_EXPECTED_MEMBERS="$(
+  printf '%s\n' \
+    artemis-steam-deck.flatpak \
+    artemis-steam-deck.flatpak.sha256 |
+    LC_ALL=C sort
+)"
+VIBERTEMIS_ARCHIVE_TYPES="$(tar -tvzf "artemis-steam-deck-bundle.tar.gz" | cut -c1 | LC_ALL=C sort)"
+VIBERTEMIS_EXPECTED_TYPES="$(printf '%s\n' - - | LC_ALL=C sort)"
+if [[ "$VIBERTEMIS_ARCHIVE_MEMBERS" != "$VIBERTEMIS_EXPECTED_MEMBERS" ||
+      "$VIBERTEMIS_ARCHIVE_TYPES" != "$VIBERTEMIS_EXPECTED_TYPES" ]]; then
+  printf '%s\n' 'Archive validation failed: expected exactly two regular files.' >&2
+  exit 1
+fi
+tar -xzf "artemis-steam-deck-bundle.tar.gz" \
+  --no-same-owner --no-same-permissions \
+  -- artemis-steam-deck.flatpak artemis-steam-deck.flatpak.sha256
 sha256sum --check artemis-steam-deck.flatpak.sha256
 flatpak remote-add --user --if-not-exists flathub \
   https://flathub.org/repo/flathub.flatpakrepo
@@ -42,6 +59,11 @@ flatpak info --user com.artemisdesktop.ArtemisDesktopDev
 What to expect:
 
 - `curl` downloads one atomic archive containing the Flatpak and its checksum.
+- The two `tar` listings require exactly the two expected names and require
+  both entries to be regular files. Extra, duplicate, linked, or path-changing
+  entries stop the block before extraction. The extraction then names only
+  those two approved members, ignores archive ownership, and applies your
+  normal user permissions.
 - `sha256sum` must print `artemis-steam-deck.flatpak: OK`. Because the block
   starts with `set -e`, a mismatch stops before any Flatpak command runs.
 - `flatpak remote-add` makes the Flathub runtime source available only for your
@@ -111,7 +133,7 @@ A verified rolling build checks the maintained release for a strictly newer
 source commit. It does not interrupt a stream or open a dialog by itself.
 
 1. Open Vibertemis and activate the update button, or use
-   **Settings > About > Check for updates**.
+   **Settings > Vibertemis Features > Check for updates**.
 2. Review the current build, available build, and download size.
 3. Choose **Download update**. Vibertemis downloads the exact release asset to
    Downloads and verifies its recorded byte size and SHA-256.
@@ -141,15 +163,20 @@ command** only after the dialog says the download is verified. Paste that exact
 command into Konsole. It has this quoted form:
 
 ```bash
+set -euo pipefail
 VIBERTEMIS_UPDATE="$HOME/Downloads/artemis-steam-deck-PASTE_12_CHARACTER_COMMIT.flatpak"
-test -f "$VIBERTEMIS_UPDATE"
+if [[ ! -f "$VIBERTEMIS_UPDATE" ]]; then
+  printf 'Verified update file not found: %s\n' "$VIBERTEMIS_UPDATE" >&2
+  exit 1
+fi
 flatpak install --user --or-update "$VIBERTEMIS_UPDATE"
 ```
 
 Replace `PASTE_12_CHARACTER_COMMIT` with the 12-character filename shown by
-Vibertemis, or use the exact command copied by the app. The `test -f` line
-stops safely if the path is wrong. Do not remove the quotes, choose a different
-download, or run the install command before Vibertemis reports verification.
+Vibertemis, or use the exact command copied by the app. The explicit file guard
+prints an error and exits before Flatpak if the path is wrong. Do not remove the
+quotes, choose a different download, or run the install command before
+Vibertemis reports verification.
 
 If the update dialog reports that the saved file or release changed, use
 **Check for updates** again and download a fresh copy. A failed Discover handoff

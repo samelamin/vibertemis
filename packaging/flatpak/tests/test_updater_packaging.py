@@ -1,4 +1,5 @@
 from pathlib import Path
+import hashlib
 import io
 import json
 import re
@@ -44,6 +45,99 @@ def first_install_script(document):
 
 def bash_blocks(document):
     return re.findall(r"(?ms)^```bash\n(.*?)^```$", document)
+
+
+def section_bash_script(document, heading):
+    section = re.search(
+        rf"(?ms)^{re.escape(heading)}\s*$"
+        r"(?P<body>.*?)(?=^## |\Z)",
+        document,
+    )
+    if section is None:
+        return ""
+    code = re.search(r"(?ms)^```bash\n(?P<script>.*?)^```$", section["body"])
+    return "" if code is None else code["script"]
+
+
+def write_flatpak_archive(path, entries):
+    with tarfile.open(path, "w:gz") as bundle:
+        for entry in entries:
+            info = tarfile.TarInfo(entry["name"])
+            info.type = entry.get("type", tarfile.REGTYPE)
+            info.linkname = entry.get("linkname", "")
+            contents = entry.get("contents", b"")
+            if info.isreg():
+                info.size = len(contents)
+                bundle.addfile(info, io.BytesIO(contents))
+            else:
+                bundle.addfile(info)
+
+
+def run_documented_first_install(script, archive, root):
+    home = root / "home"
+    downloads = home / "Downloads"
+    fake_bin = root / "bin"
+    downloads.mkdir(parents=True)
+    fake_bin.mkdir()
+    marker = root / "flatpak-was-called"
+
+    fake_curl = fake_bin / "curl"
+    fake_curl.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "output=''\n"
+        "while [ \"$#\" -gt 0 ]; do\n"
+        "  case \"$1\" in\n"
+        "    --output) output=\"$2\"; shift 2 ;;\n"
+        "    *) shift ;;\n"
+        "  esac\n"
+        "done\n"
+        "test -n \"$output\"\n"
+        "cp \"$FIXTURE_ARCHIVE\" \"$output\"\n",
+        encoding="utf-8",
+    )
+    fake_curl.chmod(0o755)
+
+    checksum_program = shutil.which("sha256sum") or shutil.which("shasum")
+    if checksum_program is None:
+        raise AssertionError("sha256sum or shasum is required for this fixture")
+    fake_sha256sum = fake_bin / "sha256sum"
+    checksum_arguments = (
+        '"$@"'
+        if Path(checksum_program).name == "sha256sum"
+        else '-a 256 "$@"'
+    )
+    fake_sha256sum.write_text(
+        "#!/usr/bin/env bash\n"
+        f'exec "{checksum_program}" {checksum_arguments}\n',
+        encoding="utf-8",
+    )
+    fake_sha256sum.chmod(0o755)
+
+    fake_flatpak = fake_bin / "flatpak"
+    fake_flatpak.write_text(
+        "#!/usr/bin/env bash\n"
+        "printf '%s\n' \"$*\" >> \"$FLATPAK_MARKER\"\n",
+        encoding="utf-8",
+    )
+    fake_flatpak.chmod(0o755)
+
+    environment = {
+        "HOME": str(home),
+        "PATH": f"{fake_bin}:/usr/bin:/bin",
+        "FIXTURE_ARCHIVE": str(archive),
+        "FLATPAK_MARKER": str(marker),
+    }
+    result = subprocess.run(
+        ["bash", "--noprofile", "--norc"],
+        input=script,
+        cwd=root,
+        env=environment,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    return result, marker
 
 
 class UpdaterQmlContractTests(unittest.TestCase):
@@ -832,7 +926,13 @@ class UpdaterQmlContractTests(unittest.TestCase):
             'cd "$VIBERTEMIS_INSTALL_DIR"',
             "https://github.com/samelamin/vibertemis/releases/download/"
             "steam-deck-latest/artemis-steam-deck-bundle.tar.gz",
-            "tar --extract --gzip --file artemis-steam-deck-bundle.tar.gz",
+            'VIBERTEMIS_ARCHIVE_MEMBERS="$(tar -tzf '
+            '"artemis-steam-deck-bundle.tar.gz"',
+            'VIBERTEMIS_ARCHIVE_TYPES="$(tar -tvzf '
+            '"artemis-steam-deck-bundle.tar.gz"',
+            "tar -xzf \"artemis-steam-deck-bundle.tar.gz\"",
+            "--no-same-owner --no-same-permissions",
+            "-- artemis-steam-deck.flatpak artemis-steam-deck.flatpak.sha256",
             "sha256sum --check artemis-steam-deck.flatpak.sha256",
             "flatpak remote-add --user --if-not-exists flathub",
             "https://flathub.org/repo/flathub.flatpakrepo",
@@ -847,6 +947,11 @@ class UpdaterQmlContractTests(unittest.TestCase):
                 self.assertGreater(next_position, position)
                 position = next_position
         self.assertNotIn("rm ", script)
+        self.assertIn(
+            'printf \'Install files will be retained in: %s\\n\' '
+            '"$VIBERTEMIS_INSTALL_DIR"',
+            script,
+        )
 
     def test_corrupted_first_install_stops_before_flatpak_is_called(self):
         self.assertTrue(STEAM_DECK_QUICK_START.is_file())
@@ -860,85 +965,180 @@ class UpdaterQmlContractTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
-            home = root / "home"
-            downloads = home / "Downloads"
-            fake_bin = root / "bin"
-            downloads.mkdir(parents=True)
-            fake_bin.mkdir()
             archive = root / "corrupt.tar.gz"
-            marker = root / "flatpak-was-called"
 
             flatpak_bytes = b"deliberately corrupted Flatpak\n"
             checksum_bytes = (
                 ("0" * 64) + "  artemis-steam-deck.flatpak\n"
             ).encode("ascii")
-            with tarfile.open(archive, "w:gz") as bundle:
-                for name, contents in (
-                    ("artemis-steam-deck.flatpak", flatpak_bytes),
-                    ("artemis-steam-deck.flatpak.sha256", checksum_bytes),
-                ):
-                    info = tarfile.TarInfo(name)
-                    info.size = len(contents)
-                    bundle.addfile(info, io.BytesIO(contents))
+            write_flatpak_archive(
+                archive,
+                [
+                    {
+                        "name": "artemis-steam-deck.flatpak",
+                        "contents": flatpak_bytes,
+                    },
+                    {
+                        "name": "artemis-steam-deck.flatpak.sha256",
+                        "contents": checksum_bytes,
+                    },
+                ],
+            )
+            result, marker = run_documented_first_install(script, archive, root)
 
-            fake_curl = fake_bin / "curl"
-            fake_curl.write_text(
-                "#!/usr/bin/env bash\n"
-                "set -euo pipefail\n"
-                "output=''\n"
-                "while [ \"$#\" -gt 0 ]; do\n"
-                "  case \"$1\" in\n"
-                "    --output) output=\"$2\"; shift 2 ;;\n"
-                "    *) shift ;;\n"
-                "  esac\n"
-                "done\n"
-                "test -n \"$output\"\n"
-                "cp \"$FIXTURE_ARCHIVE\" \"$output\"\n",
-                encoding="utf-8",
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("FAILED", result.stdout + result.stderr)
+            self.assertFalse(marker.exists())
+
+    def test_archive_validation_rejects_unsafe_members_before_flatpak(self):
+        quick_start = STEAM_DECK_QUICK_START.read_text(encoding="utf-8")
+        script = first_install_script(quick_start)
+        flatpak_bytes = b"valid Flatpak fixture\n"
+        checksum_bytes = (
+            hashlib.sha256(flatpak_bytes).hexdigest()
+            + "  artemis-steam-deck.flatpak\n"
+        ).encode("ascii")
+        regular_entries = [
+            {
+                "name": "artemis-steam-deck.flatpak",
+                "contents": flatpak_bytes,
+            },
+            {
+                "name": "artemis-steam-deck.flatpak.sha256",
+                "contents": checksum_bytes,
+            },
+        ]
+        malicious_entries = {
+            "traversal": regular_entries
+            + [{"name": "../outside", "contents": b"escape\n"}],
+            "symlink": [
+                {
+                    "name": "artemis-steam-deck.flatpak",
+                    "type": tarfile.SYMTYPE,
+                    "linkname": "../outside",
+                },
+                regular_entries[1],
+            ],
+            "hardlink": [
+                regular_entries[1],
+                {
+                    "name": "artemis-steam-deck.flatpak",
+                    "type": tarfile.LNKTYPE,
+                    "linkname": "artemis-steam-deck.flatpak.sha256",
+                },
+            ],
+            "duplicate": [
+                regular_entries[0],
+                regular_entries[0],
+                regular_entries[1],
+            ],
+            "unexpected": regular_entries
+            + [{"name": "release-notes.txt", "contents": b"unexpected\n"}],
+        }
+
+        for fixture_name, entries in malicious_entries.items():
+            with self.subTest(fixture=fixture_name):
+                with tempfile.TemporaryDirectory() as temporary_directory:
+                    root = Path(temporary_directory)
+                    archive = root / f"{fixture_name}.tar.gz"
+                    write_flatpak_archive(archive, entries)
+                    result, marker = run_documented_first_install(
+                        script, archive, root
+                    )
+                    self.assertNotEqual(0, result.returncode)
+                    self.assertIn(
+                        "Archive validation failed",
+                        result.stdout + result.stderr,
+                    )
+                    self.assertFalse(marker.exists())
+
+    def test_archive_validation_accepts_current_two_regular_file_shape(self):
+        quick_start = STEAM_DECK_QUICK_START.read_text(encoding="utf-8")
+        script = first_install_script(quick_start)
+        flatpak_bytes = b"valid Flatpak fixture\n"
+        checksum_bytes = (
+            hashlib.sha256(flatpak_bytes).hexdigest()
+            + "  artemis-steam-deck.flatpak\n"
+        ).encode("ascii")
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            archive = root / "valid.tar.gz"
+            write_flatpak_archive(
+                archive,
+                [
+                    {
+                        "name": "artemis-steam-deck.flatpak",
+                        "contents": flatpak_bytes,
+                    },
+                    {
+                        "name": "artemis-steam-deck.flatpak.sha256",
+                        "contents": checksum_bytes,
+                    },
+                ],
             )
-            fake_curl.chmod(0o755)
-            checksum_program = shutil.which("sha256sum") or shutil.which("shasum")
-            self.assertIsNotNone(checksum_program)
-            fake_sha256sum = fake_bin / "sha256sum"
-            checksum_arguments = (
-                '"$@"'
-                if Path(checksum_program).name == "sha256sum"
-                else '-a 256 "$@"'
+            result, marker = run_documented_first_install(script, archive, root)
+
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            self.assertTrue(marker.exists())
+            self.assertIn(
+                "install --user --or-update artemis-steam-deck.flatpak",
+                marker.read_text(encoding="utf-8"),
             )
-            fake_sha256sum.write_text(
-                "#!/usr/bin/env bash\n"
-                f'exec "{checksum_program}" {checksum_arguments}\n',
-                encoding="utf-8",
-            )
-            fake_sha256sum.chmod(0o755)
+
+    def test_manual_fallback_missing_file_stops_before_flatpak(self):
+        quick_start = STEAM_DECK_QUICK_START.read_text(encoding="utf-8")
+        script = section_bash_script(
+            quick_start,
+            "## If Discover does not open: manual fallback",
+        )
+        self.assertIn("set -euo pipefail", script)
+        self.assertIn('if [[ ! -f "$VIBERTEMIS_UPDATE" ]]; then', script)
+        self.assertIn("exit 1", script)
+        self.assertLess(script.index("exit 1"), script.index("flatpak install"))
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            home = root / "home"
+            fake_bin = root / "bin"
+            home.mkdir()
+            fake_bin.mkdir()
+            marker = root / "flatpak-was-called"
             fake_flatpak = fake_bin / "flatpak"
             fake_flatpak.write_text(
                 "#!/usr/bin/env bash\n"
-                "printf 'called\\n' > \"$FLATPAK_MARKER\"\n"
-                "exit 97\n",
+                "printf 'called\n' > \"$FLATPAK_MARKER\"\n",
                 encoding="utf-8",
             )
             fake_flatpak.chmod(0o755)
-
-            environment = {
-                "HOME": str(home),
-                "PATH": f"{fake_bin}:/usr/bin:/bin",
-                "FIXTURE_ARCHIVE": str(archive),
-                "FLATPAK_MARKER": str(marker),
-            }
             result = subprocess.run(
                 ["bash", "--noprofile", "--norc"],
                 input=script,
                 cwd=root,
-                env=environment,
+                env={
+                    "HOME": str(home),
+                    "PATH": f"{fake_bin}:/usr/bin:/bin",
+                    "FLATPAK_MARKER": str(marker),
+                },
                 capture_output=True,
                 check=False,
                 text=True,
             )
 
             self.assertNotEqual(0, result.returncode)
-            self.assertIn("FAILED", result.stdout + result.stderr)
+            self.assertIn(
+                "Verified update file not found",
+                result.stdout + result.stderr,
+            )
             self.assertFalse(marker.exists())
+
+    def test_quick_start_uses_actual_settings_breadcrumb(self):
+        quick_start = STEAM_DECK_QUICK_START.read_text(encoding="utf-8")
+        self.assertIn(
+            "**Settings > Vibertemis Features > Check for updates**",
+            quick_start,
+        )
+        self.assertNotIn("**Settings > About > Check for updates**", quick_start)
 
     def test_quick_start_is_safe_complete_and_truthful(self):
         self.assertTrue(STEAM_DECK_QUICK_START.is_file())
