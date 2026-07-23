@@ -6,10 +6,13 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QNetworkReply>
+#include <QProcessEnvironment>
 
 #include "backend/autoupdatechecker.h"
 #include "backend/buildinfo.h"
 #include "backend/releaseversionselector.h"
+#include "backend/rollingupdateparser.h"
+#include "backend/steamdecksession.h"
 
 class StaticNetworkReply : public QNetworkReply
 {
@@ -74,7 +77,60 @@ private slots:
     void buildInfoPreflight();
     void buildInfoPreflightConsoleAttachment_data();
     void buildInfoPreflightConsoleAttachment();
+    void rollingParserAcceptsExactReleaseAndManifest();
+    void rollingParserRejectsInvalidReleaseAndManifest_data();
+    void rollingParserRejectsInvalidReleaseAndManifest();
+    void rollingParserDetectsCapturedIdentityChanges();
+    void rollingParserResolvesAnnotatedTags();
+    void rollingParserRejectsInvalidTagGraphs();
+    void rollingParserClassifiesCommitRelations();
+    void rollingParserRequiresNewerSequence();
+    void steamDeckSessionClassifiesEnvironment_data();
+    void steamDeckSessionClassifiesEnvironment();
 };
+
+static const QString RollingCommit(40, QLatin1Char('b'));
+static const QString TagObject(40, QLatin1Char('d'));
+static const QString TagCommit(40, QLatin1Char('e'));
+static const QString FlatpakDigest(64, QLatin1Char('c'));
+
+static QByteArray validReleaseJson()
+{
+    return R"json({
+      "id":"24680",
+      "tag_name":"steam-deck-latest",
+      "html_url":"https://github.com/samelamin/vibertemis/releases/tag/steam-deck-latest",
+      "updated_at":"2026-07-23T10:00:00Z",
+      "assets":[
+        {"id":"11223","name":"artemis-steam-deck-update.json","size":"512","url":"https://api.github.com/repos/samelamin/vibertemis/releases/assets/11223","browser_download_url":"https://github.com/samelamin/vibertemis/releases/download/steam-deck-latest/artemis-steam-deck-update.json","updated_at":"2026-07-23T10:00:00Z"},
+        {"id":"13579","name":"artemis-steam-deck.flatpak","size":"1048576","url":"https://api.github.com/repos/samelamin/vibertemis/releases/assets/13579","browser_download_url":"https://github-releases.githubusercontent.com/asset/flatpak","updated_at":"2026-07-23T10:00:00Z"}
+      ]
+    })json";
+}
+
+static QByteArray validManifestJson()
+{
+    return QStringLiteral(R"json({
+      "schema":1,
+      "repository":"samelamin/vibertemis",
+      "application_id":"com.artemisdesktop.ArtemisDesktopDev",
+      "source_commit":"%1",
+      "build_sequence":"5678",
+      "release_id":"24680",
+      "tag":"steam-deck-latest",
+      "tag_commit":"%1",
+      "flatpak":{"asset_id":"13579","name":"artemis-steam-deck.flatpak","size":"1048576","sha256":"%2"},
+      "published_at":"2026-07-23T10:00:00Z"
+    })json").arg(RollingCommit, FlatpakDigest).toUtf8();
+}
+
+static QByteArray replaceOnce(QByteArray value, const QByteArray &needle, const QByteArray &replacement)
+{
+    const int index = value.indexOf(needle);
+    Q_ASSERT(index >= 0);
+    value.replace(index, needle.size(), replacement);
+    return value;
+}
 
 static QJsonArray releases(const QByteArray &json)
 {
@@ -339,6 +395,262 @@ void AutoUpdateTest::buildInfoPreflightConsoleAttachment()
     QFETCH(bool, expected);
 
     QCOMPARE(BuildInfo::requiresParentConsoleAttachment(stdoutUnspecified, stderrUnspecified), expected);
+}
+
+void AutoUpdateTest::rollingParserAcceptsExactReleaseAndManifest()
+{
+    const UpdateResult<RollingUpdateCandidate> release =
+        RollingUpdateParser::parseRelease(validReleaseJson());
+    QVERIFY2(release.ok, qPrintable(release.message));
+    QCOMPARE(release.value.releaseId, quint64(24680));
+    QCOMPARE(release.value.releaseLabel, QStringLiteral("steam-deck-latest"));
+    QCOMPARE(release.value.releasePage,
+             QUrl(QStringLiteral("https://github.com/samelamin/vibertemis/releases/tag/steam-deck-latest")));
+    QCOMPARE(release.value.releaseUpdatedAt.toUTC(),
+             QDateTime::fromString(QStringLiteral("2026-07-23T10:00:00Z"), Qt::ISODate).toUTC());
+    QCOMPARE(release.value.manifest.id, quint64(11223));
+    QCOMPARE(release.value.manifest.name, QStringLiteral("artemis-steam-deck-update.json"));
+    QCOMPARE(release.value.manifest.size, quint64(512));
+    QCOMPARE(release.value.manifest.apiUrl,
+             QUrl(QStringLiteral("https://api.github.com/repos/samelamin/vibertemis/releases/assets/11223")));
+    QCOMPARE(release.value.manifest.downloadUrl,
+             QUrl(QStringLiteral("https://github.com/samelamin/vibertemis/releases/download/steam-deck-latest/artemis-steam-deck-update.json")));
+    QCOMPARE(release.value.manifest.sha256, QByteArray());
+
+    const UpdateResult<RollingUpdateCandidate> candidate =
+        RollingUpdateParser::parseManifest(validManifestJson(), release.value);
+    QVERIFY2(candidate.ok, qPrintable(candidate.message));
+    QCOMPARE(candidate.value.manifestSchema, 1);
+    QCOMPARE(candidate.value.sourceCommit, RollingCommit);
+    QCOMPARE(candidate.value.sequence, quint64(5678));
+    QCOMPARE(candidate.value.flatpak.id, quint64(13579));
+    QCOMPARE(candidate.value.flatpak.name, QStringLiteral("artemis-steam-deck.flatpak"));
+    QCOMPARE(candidate.value.flatpak.size, quint64(1048576));
+    QCOMPARE(candidate.value.flatpak.sha256, FlatpakDigest.toLatin1());
+    QCOMPARE(candidate.value.flatpak.apiUrl,
+             QUrl(QStringLiteral("https://api.github.com/repos/samelamin/vibertemis/releases/assets/13579")));
+    QCOMPARE(candidate.value.flatpak.downloadUrl,
+             QUrl(QStringLiteral("https://github-releases.githubusercontent.com/asset/flatpak")));
+    QCOMPARE(candidate.value.publishedAt.toUTC(),
+             QDateTime::fromString(QStringLiteral("2026-07-23T10:00:00Z"), Qt::ISODate).toUTC());
+}
+
+void AutoUpdateTest::rollingParserRejectsInvalidReleaseAndManifest_data()
+{
+    QTest::addColumn<QByteArray>("release");
+    QTest::addColumn<QByteArray>("manifest");
+    QTest::addColumn<bool>("invalidRelease");
+
+    QTest::newRow("wrong release tag")
+        << replaceOnce(validReleaseJson(), "steam-deck-latest", "Steam-Deck-Latest") << validManifestJson() << true;
+    QTest::newRow("duplicate Flatpak asset")
+        << replaceOnce(validReleaseJson(), "\n      ]\n    }", ",{\"id\":\"13580\",\"name\":\"artemis-steam-deck.flatpak\",\"size\":\"1\",\"url\":\"https://api.github.com/repos/samelamin/vibertemis/releases/assets/13580\",\"browser_download_url\":\"https://github-releases.githubusercontent.com/asset/duplicate\",\"updated_at\":\"2026-07-23T10:00:00Z\"}\n      ]\n    }") << validManifestJson() << true;
+    QTest::newRow("missing manifest asset")
+        << replaceOnce(validReleaseJson(), "artemis-steam-deck-update.json", "other.json") << validManifestJson() << true;
+    QTest::newRow("foreign API repository")
+        << replaceOnce(validReleaseJson(), "samelamin/vibertemis/releases/assets/11223", "evil/vibertemis/releases/assets/11223") << validManifestJson() << true;
+    QTest::newRow("non HTTPS")
+        << replaceOnce(validReleaseJson(), "https://github.com/samelamin/vibertemis/releases/tag", "http://github.com/samelamin/vibertemis/releases/tag") << validManifestJson() << true;
+    QTest::newRow("URL user info")
+        << replaceOnce(validReleaseJson(), "https://github-releases.githubusercontent.com/asset/flatpak", "https://user@github-releases.githubusercontent.com/asset/flatpak") << validManifestJson() << true;
+    QTest::newRow("URL query")
+        << replaceOnce(validReleaseJson(), "https://github-releases.githubusercontent.com/asset/flatpak", "https://github-releases.githubusercontent.com/asset/flatpak?token=x") << validManifestJson() << true;
+    QTest::newRow("URL fragment")
+        << replaceOnce(validReleaseJson(), "https://github-releases.githubusercontent.com/asset/flatpak", "https://github-releases.githubusercontent.com/asset/flatpak#fragment") << validManifestJson() << true;
+    QTest::newRow("bad CDN boundary")
+        << replaceOnce(validReleaseJson(), "github-releases.githubusercontent.com/asset/flatpak", "notgithub-releases.githubusercontent.com/asset/flatpak") << validManifestJson() << true;
+    QTest::newRow("unsafe numeric release ID")
+        << replaceOnce(validReleaseJson(), "\"24680\"", "9007199254740993") << validManifestJson() << true;
+    QTest::newRow("release ID overflow")
+        << replaceOnce(validReleaseJson(), "\"24680\"", "\"18446744073709551616\"") << validManifestJson() << true;
+    QTest::newRow("unknown manifest schema")
+        << validReleaseJson() << replaceOnce(validManifestJson(), "\"schema\":1", "\"schema\":2") << false;
+    QTest::newRow("foreign manifest repository")
+        << validReleaseJson() << replaceOnce(validManifestJson(), "samelamin/vibertemis", "evil/vibertemis") << false;
+    QTest::newRow("bad application ID")
+        << validReleaseJson() << replaceOnce(validManifestJson(), "com.artemisdesktop.ArtemisDesktopDev", "com.example.Artemis") << false;
+    QTest::newRow("abbreviated commit")
+        << validReleaseJson() << replaceOnce(validManifestJson(), RollingCommit.toLatin1(), "bbbbbbb") << false;
+    QTest::newRow("uppercase commit")
+        << validReleaseJson() << replaceOnce(validManifestJson(), RollingCommit.toLatin1(), QString(40, QLatin1Char('B')).toLatin1()) << false;
+    QTest::newRow("numeric sequence")
+        << validReleaseJson() << replaceOnce(validManifestJson(), "\"5678\"", "5678") << false;
+    QTest::newRow("sequence overflow")
+        << validReleaseJson() << replaceOnce(validManifestJson(), "\"5678\"", "\"18446744073709551616\"") << false;
+    QTest::newRow("large manifest")
+        << validReleaseJson() << validManifestJson().append(65537, ' ') << false;
+}
+
+void AutoUpdateTest::rollingParserRejectsInvalidReleaseAndManifest()
+{
+    QFETCH(QByteArray, release);
+    QFETCH(QByteArray, manifest);
+    QFETCH(bool, invalidRelease);
+    const UpdateResult<RollingUpdateCandidate> parsedRelease = RollingUpdateParser::parseRelease(release);
+    if (invalidRelease) {
+        QVERIFY(!parsedRelease.ok);
+        QVERIFY(parsedRelease.error == UpdateError::InvalidMetadata || parsedRelease.error == UpdateError::UnsafeUrl);
+        return;
+    }
+    QVERIFY(parsedRelease.ok);
+    const UpdateResult<RollingUpdateCandidate> parsedManifest =
+        RollingUpdateParser::parseManifest(manifest, parsedRelease.value);
+    QVERIFY(!parsedManifest.ok);
+    QVERIFY(parsedManifest.error == UpdateError::InvalidMetadata || parsedManifest.error == UpdateError::ResponseTooLarge);
+}
+
+void AutoUpdateTest::rollingParserDetectsCapturedIdentityChanges()
+{
+    const QList<QPair<QByteArray, QByteArray>> releaseChanges = {
+        qMakePair(QByteArray("\"24680\""), QByteArray("\"24681\"")),
+        qMakePair(QByteArray("steam-deck-latest"), QByteArray("other-tag")),
+        qMakePair(QByteArray("2026-07-23T10:00:00Z"), QByteArray("2026-07-24T10:00:00Z")),
+        qMakePair(QByteArray("\"11223\""), QByteArray("\"11224\"")),
+        qMakePair(QByteArray("artemis-steam-deck-update.json"), QByteArray("other.json")),
+        qMakePair(QByteArray("\"512\""), QByteArray("\"513\"")),
+        qMakePair(QByteArray("assets/11223"), QByteArray("assets/11224")),
+        qMakePair(QByteArray("artemis-steam-deck-update.json\""), QByteArray("different.json\"")),
+        qMakePair(QByteArray("\"13579\""), QByteArray("\"13580\"")),
+        qMakePair(QByteArray("artemis-steam-deck.flatpak"), QByteArray("other.flatpak")),
+        qMakePair(QByteArray("\"1048576\""), QByteArray("\"1048577\"")),
+        qMakePair(QByteArray("asset/flatpak"), QByteArray("asset/changed"))
+    };
+    const UpdateResult<RollingUpdateCandidate> release = RollingUpdateParser::parseRelease(validReleaseJson());
+    QVERIFY(release.ok);
+    const UpdateResult<RollingUpdateCandidate> expected =
+        RollingUpdateParser::parseManifest(validManifestJson(), release.value);
+    QVERIFY(expected.ok);
+    for (const QPair<QByteArray, QByteArray> &change : releaseChanges) {
+        const UpdateResult<bool> matched = RollingUpdateParser::matchesRelease(
+            expected.value, replaceOnce(validReleaseJson(), change.first, change.second));
+        QVERIFY(!matched.ok);
+        QCOMPARE(matched.error, UpdateError::PublisherChanged);
+    }
+    const QList<QPair<QByteArray, QByteArray>> manifestChanges = {
+        qMakePair(QByteArray("\"schema\":1"), QByteArray("\"schema\":2")),
+        qMakePair(QByteArray("samelamin/vibertemis"), QByteArray("evil/vibertemis")),
+        qMakePair(QByteArray("com.artemisdesktop.ArtemisDesktopDev"), QByteArray("com.example.Artemis")),
+        qMakePair(RollingCommit.toLatin1(), TagCommit.toLatin1()),
+        qMakePair(QByteArray("\"5678\""), QByteArray("\"5679\"")),
+        qMakePair(QByteArray("\"24680\""), QByteArray("\"24681\"")),
+        qMakePair(QByteArray("steam-deck-latest"), QByteArray("other-tag")),
+        qMakePair(QByteArray("\"13579\""), QByteArray("\"13580\"")),
+        qMakePair(QByteArray("artemis-steam-deck.flatpak"), QByteArray("other.flatpak")),
+        qMakePair(QByteArray("\"1048576\""), QByteArray("\"1048577\"")),
+        qMakePair(FlatpakDigest.toLatin1(), QByteArray(64, 'd')),
+        qMakePair(QByteArray("2026-07-23T10:00:00Z"), QByteArray("2026-07-24T10:00:00Z"))
+    };
+    for (const QPair<QByteArray, QByteArray> &change : manifestChanges) {
+        const UpdateResult<bool> matched = RollingUpdateParser::matchesManifest(
+            expected.value, replaceOnce(validManifestJson(), change.first, change.second));
+        QVERIFY(!matched.ok);
+        QCOMPARE(matched.error, UpdateError::PublisherChanged);
+    }
+}
+
+void AutoUpdateTest::rollingParserResolvesAnnotatedTags()
+{
+    const UpdateResult<RollingTagObject> ref = RollingUpdateParser::parseTagReference(
+        QStringLiteral("{\"object\":{\"type\":\"tag\",\"sha\":\"%1\"}}").arg(TagObject).toUtf8());
+    QVERIFY(ref.ok);
+    const UpdateResult<RollingTagObject> tag = RollingUpdateParser::parseTagObject(
+        QStringLiteral("{\"sha\":\"%1\",\"object\":{\"type\":\"tag\",\"sha\":\"%2\"}}").arg(TagObject, TagCommit).toUtf8());
+    QVERIFY(tag.ok);
+    const UpdateResult<RollingTagObject> commit = RollingUpdateParser::parseTagObject(
+        QStringLiteral("{\"sha\":\"%1\",\"object\":{\"type\":\"commit\",\"sha\":\"%2\"}}").arg(TagCommit, RollingCommit).toUtf8());
+    QVERIFY(commit.ok);
+    const UpdateResult<TagResolution> resolved =
+        RollingUpdateParser::resolveTagCommit(ref.value, QList<RollingTagObject>{tag.value, commit.value});
+    QVERIFY(resolved.ok);
+    QCOMPARE(resolved.value.tagRefObjectId, TagObject);
+    QCOMPARE(resolved.value.tagObjectId, RollingCommit);
+    QCOMPARE(resolved.value.commit, RollingCommit);
+
+    const UpdateResult<RollingUpdateCandidate> release = RollingUpdateParser::parseRelease(validReleaseJson());
+    QVERIFY(release.ok);
+    const UpdateResult<RollingUpdateCandidate> candidate =
+        RollingUpdateParser::parseManifest(validManifestJson(), release.value);
+    QVERIFY(candidate.ok);
+    const UpdateResult<RollingUpdateCandidate> bound =
+        RollingUpdateParser::bindTagResolution(candidate.value, resolved.value);
+    QVERIFY(bound.ok);
+    QCOMPARE(bound.value.tagRefObjectId, TagObject);
+    QCOMPARE(bound.value.tagObjectId, RollingCommit);
+    QVERIFY(!RollingUpdateParser::matchesTagResolution(
+        bound.value, TagResolution{QString(40, QLatin1Char('f')), RollingCommit, RollingCommit}).ok);
+    QVERIFY(!RollingUpdateParser::matchesTagResolution(
+        bound.value, TagResolution{TagObject, QString(40, QLatin1Char('f')), RollingCommit}).ok);
+}
+
+void AutoUpdateTest::rollingParserRejectsInvalidTagGraphs()
+{
+    QVERIFY(!RollingUpdateParser::parseTagReference(QByteArray("{\"object\":{\"type\":\"tree\",\"sha\":\"deadbeef\"}}")) .ok);
+    const RollingTagObject reference{TagObject, QStringLiteral("tag"), TagObject};
+    QVERIFY(!RollingUpdateParser::resolveTagCommit(reference, QList<RollingTagObject>()).ok);
+    QVERIFY(!RollingUpdateParser::resolveTagCommit(reference,
+        QList<RollingTagObject>{RollingTagObject{TagObject, QStringLiteral("tag"), TagObject}}).ok);
+}
+
+void AutoUpdateTest::rollingParserClassifiesCommitRelations()
+{
+    QCOMPARE(RollingUpdateParser::parseCommitRelation(QByteArray("{\"status\":\"ahead\"}")), CommitRelation::CandidateAhead);
+    QCOMPARE(RollingUpdateParser::parseCommitRelation(QByteArray("{\"status\":\"identical\"}")), CommitRelation::Equal);
+    QCOMPARE(RollingUpdateParser::parseCommitRelation(QByteArray("{\"status\":\"behind\"}")), CommitRelation::CandidateBehind);
+    QCOMPARE(RollingUpdateParser::parseCommitRelation(QByteArray("{\"status\":\"diverged\"}")), CommitRelation::Diverged);
+    QCOMPARE(RollingUpdateParser::parseCommitRelation(QByteArray("{\"status\":\"unknown\"}")), CommitRelation::Unknown);
+}
+
+void AutoUpdateTest::rollingParserRequiresNewerSequence()
+{
+    const UpdateResult<RollingUpdateCandidate> release = RollingUpdateParser::parseRelease(validReleaseJson());
+    QVERIFY(release.ok);
+    const UpdateResult<RollingUpdateCandidate> candidate = RollingUpdateParser::parseManifest(validManifestJson(), release.value);
+    QVERIFY(candidate.ok);
+    QVERIFY(RollingUpdateParser::isInstallable(RollingCommit, 1234, candidate.value, CommitRelation::CandidateAhead).ok);
+    QVERIFY(!RollingUpdateParser::isInstallable(RollingCommit, 5678, candidate.value, CommitRelation::CandidateAhead).ok);
+    QVERIFY(!RollingUpdateParser::isInstallable(RollingCommit, 9999, candidate.value, CommitRelation::CandidateAhead).ok);
+    QVERIFY(!RollingUpdateParser::isInstallable(RollingCommit, 1234, candidate.value, CommitRelation::Equal).ok);
+    QVERIFY(!RollingUpdateParser::isInstallable(RollingCommit, 1234, candidate.value, CommitRelation::CandidateBehind).ok);
+    QVERIFY(!RollingUpdateParser::isInstallable(RollingCommit, 1234, candidate.value, CommitRelation::Diverged).ok);
+    QVERIFY(!RollingUpdateParser::isInstallable(RollingCommit, 1234, candidate.value, CommitRelation::Unknown).ok);
+}
+
+void AutoUpdateTest::steamDeckSessionClassifiesEnvironment_data()
+{
+    QTest::addColumn<QProcessEnvironment>("environment");
+    QTest::addColumn<SteamDeckSession::Mode>("expected");
+    QProcessEnvironment gaming;
+    gaming.insert(QStringLiteral("GAMESCOPE_WAYLAND_DISPLAY"), QStringLiteral("gamescope-0"));
+    QTest::newRow("gamescope display") << gaming << SteamDeckSession::Gaming;
+    QProcessEnvironment desktopName;
+    desktopName.insert(QStringLiteral("XDG_CURRENT_DESKTOP"), QStringLiteral("gamescope"));
+    QTest::newRow("gamescope desktop") << desktopName << SteamDeckSession::Gaming;
+    QProcessEnvironment desktop;
+    desktop.insert(QStringLiteral("XDG_CURRENT_DESKTOP"), QStringLiteral("KDE"));
+    desktop.insert(QStringLiteral("KDE_FULL_SESSION"), QStringLiteral("true"));
+    desktop.insert(QStringLiteral("XDG_SESSION_TYPE"), QStringLiteral("wayland"));
+    QTest::newRow("KDE Wayland") << desktop << SteamDeckSession::Desktop;
+    desktop.insert(QStringLiteral("XDG_CURRENT_DESKTOP"), QStringLiteral("plasma:kDe"));
+    desktop.insert(QStringLiteral("XDG_SESSION_TYPE"), QStringLiteral("x11"));
+    QTest::newRow("KDE X11 case insensitive") << desktop << SteamDeckSession::Desktop;
+    desktop.insert(QStringLiteral("GAMESCOPE_WAYLAND_DISPLAY"), QStringLiteral("gamescope-0"));
+    QTest::newRow("gaming wins conflict") << desktop << SteamDeckSession::Gaming;
+    QTest::newRow("missing") << QProcessEnvironment() << SteamDeckSession::Unknown;
+    QProcessEnvironment partial;
+    partial.insert(QStringLiteral("XDG_CURRENT_DESKTOP"), QStringLiteral("KDE"));
+    QTest::newRow("partial") << partial << SteamDeckSession::Unknown;
+    QProcessEnvironment unrelated;
+    unrelated.insert(QStringLiteral("XDG_CURRENT_DESKTOP"), QStringLiteral("GNOME"));
+    unrelated.insert(QStringLiteral("KDE_FULL_SESSION"), QStringLiteral("true"));
+    unrelated.insert(QStringLiteral("XDG_SESSION_TYPE"), QStringLiteral("wayland"));
+    QTest::newRow("unrelated") << unrelated << SteamDeckSession::Unknown;
+}
+
+void AutoUpdateTest::steamDeckSessionClassifiesEnvironment()
+{
+    QFETCH(QProcessEnvironment, environment);
+    QFETCH(SteamDeckSession::Mode, expected);
+    QCOMPARE(SteamDeckSession::classify(environment), expected);
 }
 
 QTEST_MAIN(AutoUpdateTest)

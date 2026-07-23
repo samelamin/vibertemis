@@ -209,6 +209,8 @@ SOURCES += \
     backend/autoupdatechecker.cpp \
     backend/buildinfo.cpp \
     backend/releaseversionselector.cpp \
+    backend/rollingupdateparser.cpp \
+    backend/steamdecksession.cpp \
     path.cpp \
     settings/mappingmanager.cpp \
     gui/sdlgamepadkeynavigation.cpp \
@@ -255,6 +257,9 @@ HEADERS += \
     backend/autoupdatechecker.h \
     backend/buildinfo.h \
     backend/releaseversionselector.h \
+    backend/updateresult.h \
+    backend/rollingupdateparser.h \
+    backend/steamdecksession.h \
     path.h \
     settings/mappingmanager.h \
     gui/sdlgamepadkeynavigation.h \

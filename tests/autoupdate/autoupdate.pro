@@ -17,12 +17,17 @@ SOURCES += \
     tst_autoupdate.cpp \
     $$PWD/../../app/backend/autoupdatechecker.cpp \
     $$PWD/../../app/backend/releaseversionselector.cpp \
-    $$PWD/../../app/backend/buildinfo.cpp
+    $$PWD/../../app/backend/buildinfo.cpp \
+    $$PWD/../../app/backend/rollingupdateparser.cpp \
+    $$PWD/../../app/backend/steamdecksession.cpp
 
 HEADERS += \
     $$PWD/../../app/backend/autoupdatechecker.h \
     $$PWD/../../app/backend/releaseversionselector.h \
-    $$PWD/../../app/backend/buildinfo.h
+    $$PWD/../../app/backend/buildinfo.h \
+    $$PWD/../../app/backend/updateresult.h \
+    $$PWD/../../app/backend/rollingupdateparser.h \
+    $$PWD/../../app/backend/steamdecksession.h
 
 target.path = /app/libexec
 INSTALLS += target
