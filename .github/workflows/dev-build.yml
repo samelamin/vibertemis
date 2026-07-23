@@ -1563,63 +1563,99 @@ jobs:
       cancel-in-progress: false
     if: >-
       github.repository == 'samelamin/vibertemis' &&
-      github.ref == 'refs/heads/codex/steam-deck' &&
+      github.ref == 'refs/heads/main' &&
       needs.setup-version.outputs.should_build == 'true'
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
       VERSION: ${{ needs.setup-version.outputs.version }}
       SOURCE_COMMIT: ${{ github.sha }}
+      BUILD_SEQUENCE: ${{ github.run_id }}
       RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
     steps:
-      - name: Confirm source commit is current branch head
-        id: branch-head
+      - name: Confirm source commit is current main head
+        id: initial-main-head
         run: |
           set -euo pipefail
-          branch_head="$(gh api "repos/$GH_REPO/git/ref/heads/codex/steam-deck" --jq '.object.sha')"
-          if [ "$branch_head" != "$SOURCE_COMMIT" ]; then
+          main_head="$(gh api "repos/$GH_REPO/git/ref/heads/main" --jq '.object.sha')"
+          if [ "$main_head" != "$SOURCE_COMMIT" ]; then
             echo "publish=false" >> "$GITHUB_OUTPUT"
-            echo "Skipping superseded build $SOURCE_COMMIT; branch head is $branch_head"
+            echo "Skipping superseded build $SOURCE_COMMIT; main head is $main_head"
           else
             echo "publish=true" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Checkout exact publisher source
+        if: steps.initial-main-head.outputs.publish == 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
       - name: Download exact Flatpak build artifact
-        if: steps.branch-head.outputs.publish == 'true'
+        if: steps.initial-main-head.outputs.publish == 'true'
         uses: actions/download-artifact@v4
         with:
           name: artemis-flatpak-${{ needs.setup-version.outputs.version }}
           path: steam-deck-artifact
 
-      - name: Prepare stable Steam Deck assets
-        if: steps.branch-head.outputs.publish == 'true'
+      - name: Inspect build identity and prepare Flatpak
+        if: steps.initial-main-head.outputs.publish == 'true'
         run: |
           set -euo pipefail
-          # Keep established artemis-steam-deck.* asset names for existing download links.
           source_path="steam-deck-artifact/artemis-flatpak-$VERSION.flatpak"
+          build_info_path="steam-deck-artifact/flatpak-build-info.json"
           test -f "$source_path"
+          test -f "$build_info_path"
+          python3 - <<'PY'
+          import json
+          import os
+
+          with open(
+              "steam-deck-artifact/flatpak-build-info.json",
+              encoding="utf-8",
+          ) as build_info_file:
+              data = json.load(build_info_file)
+          assert set(data) == {
+              "applicationId",
+              "channel",
+              "commit",
+              "internallyConsistent",
+              "schema",
+              "sequence",
+              "version",
+          }
+          assert data["schema"] == 1
+          assert data["applicationId"] == "com.artemisdesktop.ArtemisDesktopDev"
+          assert data["commit"] == os.environ["SOURCE_COMMIT"]
+          assert data["channel"] == "rolling"
+          assert data["sequence"] == os.environ["BUILD_SEQUENCE"]
+          assert data["version"] == os.environ["VERSION"]
+          assert data["internallyConsistent"] is True
+          PY
+
           mkdir -p release-assets
           install -m 0644 "$source_path" release-assets/artemis-steam-deck.flatpak
-          (
-            cd release-assets
-            sha256sum artemis-steam-deck.flatpak > artemis-steam-deck.flatpak.sha256
-            tar -czf artemis-steam-deck-bundle.tar.gz \
-              artemis-steam-deck.flatpak \
-              artemis-steam-deck.flatpak.sha256
-          )
+          EXPECTED_SHA="$(sha256sum release-assets/artemis-steam-deck.flatpak | awk '{print $1}')"
+          EXPECTED_SIZE="$(stat --format=%s release-assets/artemis-steam-deck.flatpak)"
+          test "$EXPECTED_SIZE" -gt 0
+          {
+            echo "EXPECTED_SHA=$EXPECTED_SHA"
+            echo "EXPECTED_SIZE=$EXPECTED_SIZE"
+          } >> "$GITHUB_ENV"
 
       - name: Create or mark rolling prerelease as updating
-        if: steps.branch-head.outputs.publish == 'true'
+        if: steps.initial-main-head.outputs.publish == 'true'
         run: |
           set -euo pipefail
           cat > release-notes-pending.md <<EOF
           # Vibertemis Steam Deck rolling build
 
           A new verified Flatpak is being published from commit \`$SOURCE_COMMIT\`.
-          Checksum assets are withheld until the published Flatpak has been re-downloaded and verified.
+          Update metadata and checksum assets are withheld until every published byte has been verified.
 
-          This rolling prerelease is replaced by every later successful build from the Steam Deck branch.
+          This rolling prerelease is replaced by every later successful build from main.
           EOF
 
           if gh release view steam-deck-latest >/dev/null 2>&1; then
@@ -1635,63 +1671,390 @@ jobs:
               --prerelease
           fi
 
-          # Never leave stale checksum companions visible beside new Flatpak bytes.
-          existing_assets="$(gh release view steam-deck-latest --json assets --jq '.assets[].name')"
-          for asset_name in \
-            artemis-steam-deck.flatpak.sha256 \
-            artemis-steam-deck-bundle.tar.gz; do
-            if grep -Fqx "$asset_name" <<< "$existing_assets"; then
-              gh release delete-asset steam-deck-latest "$asset_name" --yes
-            fi
-          done
+          gh api "repos/$GH_REPO/releases/tags/steam-deck-latest" \
+            > existing-release-assets.json
+          python3 - <<'PY'
+          import json
 
-      - name: Upload Flatpak alone
-        if: steps.branch-head.outputs.publish == 'true'
+          UINT64_MAX = (1 << 64) - 1
+          known_names = {
+              "artemis-steam-deck.flatpak",
+              "artemis-steam-deck-update.json",
+              "artemis-steam-deck.flatpak.sha256",
+              "artemis-steam-deck-bundle.tar.gz",
+          }
+          with open("existing-release-assets.json", encoding="utf-8") as source:
+              release = json.load(source)
+          assert release["tag_name"] == "steam-deck-latest"
+          confirmed = {}
+          for asset in release["assets"]:
+              name = asset.get("name")
+              if name not in known_names:
+                  continue
+              assert name not in confirmed, f"duplicate existing asset: {name}"
+              asset_id = asset["id"]
+              assert isinstance(asset_id, int) and not isinstance(asset_id, bool)
+              assert 0 < asset_id <= UINT64_MAX
+              confirmed[name] = str(asset_id)
+          with open(
+              "confirmed-existing-asset-ids.txt",
+              "w",
+              encoding="utf-8",
+          ) as output:
+              for name in sorted(confirmed):
+                  output.write(f"{confirmed[name]}\n")
+          PY
+          while IFS= read -r asset_id; do
+            [[ "$asset_id" =~ ^[1-9][0-9]*$ ]]
+            gh api --method DELETE \
+              "repos/$GH_REPO/releases/assets/$asset_id"
+          done < confirmed-existing-asset-ids.txt
+
+      - name: Upload and bind the exact Flatpak asset
+        if: steps.initial-main-head.outputs.publish == 'true'
         run: |
           set -euo pipefail
-          gh release upload steam-deck-latest release-assets/artemis-steam-deck.flatpak --clobber
+          gh release upload steam-deck-latest release-assets/artemis-steam-deck.flatpak
+          gh api "repos/$GH_REPO/releases/tags/steam-deck-latest" \
+            > release-with-flatpak.json
+          python3 - <<'PY'
+          from datetime import datetime
+          import json
+          import os
+          import re
 
-      - name: Re-download and verify published Flatpak
-        if: steps.branch-head.outputs.publish == 'true'
+          UINT64_MAX = (1 << 64) - 1
+          def identifier(value, field):
+              assert isinstance(value, int) and not isinstance(value, bool), field
+              assert 0 < value <= UINT64_MAX, field
+              return str(value)
+
+          with open("release-with-flatpak.json", encoding="utf-8") as source:
+              release = json.load(source)
+          release_id = identifier(release["id"], "release id")
+          assert release["tag_name"] == "steam-deck-latest"
+          assert release["draft"] is False
+          assert release["prerelease"] is True
+          assets = [
+              asset for asset in release["assets"]
+              if asset["name"] == "artemis-steam-deck.flatpak"
+          ]
+          assert len(assets) == 1
+          asset = assets[0]
+          asset_id = identifier(asset["id"], "asset id")
+          asset_size = identifier(asset["size"], "asset size")
+          assert asset_size == os.environ["EXPECTED_SIZE"]
+          updated_at = asset["updated_at"]
+          assert isinstance(updated_at, str)
+          assert re.fullmatch(
+              r"[0-9]{4}-[0-9]{2}-[0-9]{2}T"
+              r"[0-9]{2}:[0-9]{2}:[0-9]{2}Z",
+              updated_at,
+          )
+          assert (
+              datetime.strptime(updated_at, "%Y-%m-%dT%H:%M:%SZ")
+              .strftime("%Y-%m-%dT%H:%M:%SZ")
+              == updated_at
+          )
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as output:
+              output.write(f"RELEASE_ID={release_id}\n")
+              output.write(f"FLATPAK_ASSET_ID={asset_id}\n")
+              output.write(f"FLATPAK_ASSET_SIZE={asset_size}\n")
+              output.write(f"FLATPAK_UPDATED_AT={updated_at}\n")
+          PY
+
+      - name: Verify exact Flatpak bytes and prepare companions
+        if: steps.initial-main-head.outputs.publish == 'true'
         run: |
           set -euo pipefail
-          rm -rf published-flatpak
-          mkdir published-flatpak
-          gh release download steam-deck-latest --pattern artemis-steam-deck.flatpak --dir published-flatpak
-          expected_sha="$(awk '{print $1}' release-assets/artemis-steam-deck.flatpak.sha256)"
-          published_sha="$(sha256sum published-flatpak/artemis-steam-deck.flatpak | awk '{print $1}')"
-          test "$expected_sha" = "$published_sha"
+          mkdir -p published-assets
+          gh api --method GET \
+            -H "Accept: application/octet-stream" \
+            "repos/$GH_REPO/releases/assets/$FLATPAK_ASSET_ID" \
+            > published-assets/artemis-steam-deck.flatpak
+          published_size="$(stat --format=%s published-assets/artemis-steam-deck.flatpak)"
+          published_sha="$(sha256sum published-assets/artemis-steam-deck.flatpak | awk '{print $1}')"
+          test "$published_size" = "$FLATPAK_ASSET_SIZE"
+          test "$published_size" = "$EXPECTED_SIZE"
+          test "$published_sha" = "$EXPECTED_SHA"
+          cmp release-assets/artemis-steam-deck.flatpak \
+            published-assets/artemis-steam-deck.flatpak
 
-      - name: Move and verify rolling release tag
-        if: steps.branch-head.outputs.publish == 'true'
-        run: |
-          set -euo pipefail
-          gh api --method PATCH "repos/$GH_REPO/git/refs/tags/steam-deck-latest" \
-            -f sha="$SOURCE_COMMIT" \
-            -F force=true
-          published_tag_sha="$(gh api "repos/$GH_REPO/git/ref/tags/steam-deck-latest" --jq '.object.sha')"
-          test "$published_tag_sha" = "$SOURCE_COMMIT"
+          python3 packaging/flatpak/generate-update-manifest.py \
+            --output release-assets/artemis-steam-deck-update.json \
+            --source-commit "$SOURCE_COMMIT" \
+            --build-sequence "$BUILD_SEQUENCE" \
+            --release-id "$RELEASE_ID" \
+            --flatpak-asset-id "$FLATPAK_ASSET_ID" \
+            --flatpak-size "$FLATPAK_ASSET_SIZE" \
+            --flatpak-sha256 "$EXPECTED_SHA" \
+            --published-at "$FLATPAK_UPDATED_AT"
+          (
+            cd release-assets
+            sha256sum artemis-steam-deck.flatpak > artemis-steam-deck.flatpak.sha256
+            tar -czf artemis-steam-deck-bundle.tar.gz \
+              artemis-steam-deck.flatpak \
+              artemis-steam-deck.flatpak.sha256
+          )
 
-      - name: Publish verified checksum companions
-        if: steps.branch-head.outputs.publish == 'true'
+      - name: Upload companions and verify every public asset
+        if: steps.initial-main-head.outputs.publish == 'true'
         run: |
           set -euo pipefail
           gh release upload steam-deck-latest \
+            release-assets/artemis-steam-deck-update.json \
             release-assets/artemis-steam-deck.flatpak.sha256 \
-            release-assets/artemis-steam-deck-bundle.tar.gz --clobber
+            release-assets/artemis-steam-deck-bundle.tar.gz
+          gh api "repos/$GH_REPO/releases/tags/steam-deck-latest" \
+            > release-public-assets.json
 
-          expected_sha="$(awk '{print $1}' release-assets/artemis-steam-deck.flatpak.sha256)"
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          UINT64_MAX = (1 << 64) - 1
+          names = {
+              "artemis-steam-deck.flatpak": "PUBLIC_FLATPAK_ASSET_ID",
+              "artemis-steam-deck-update.json": "PUBLIC_MANIFEST_ASSET_ID",
+              "artemis-steam-deck.flatpak.sha256": "PUBLIC_CHECKSUM_ASSET_ID",
+              "artemis-steam-deck-bundle.tar.gz": "PUBLIC_ARCHIVE_ASSET_ID",
+          }
+          def identifier(value, field):
+              assert isinstance(value, int) and not isinstance(value, bool), field
+              assert 0 < value <= UINT64_MAX, field
+              return str(value)
+
+          with open("release-public-assets.json", encoding="utf-8") as source:
+              release = json.load(source)
+          assert identifier(release["id"], "release id") == os.environ["RELEASE_ID"]
+          assert release["tag_name"] == "steam-deck-latest"
+          assert release["draft"] is False
+          assert release["prerelease"] is True
+          selected = {}
+          for asset in release["assets"]:
+              name = asset.get("name")
+              if name in names:
+                  assert name not in selected, f"duplicate public asset: {name}"
+                  selected[name] = asset
+          assert set(selected) == set(names)
+          environment_lines = []
+          for name, variable in names.items():
+              asset = selected[name]
+              asset_id = identifier(asset["id"], f"{name} id")
+              asset_size = identifier(asset["size"], f"{name} size")
+              expected_size = str(Path("release-assets", name).stat().st_size)
+              assert asset_size == expected_size
+              if name == "artemis-steam-deck.flatpak":
+                  assert asset_id == os.environ["FLATPAK_ASSET_ID"]
+                  assert asset_size == os.environ["FLATPAK_ASSET_SIZE"]
+                  assert asset["updated_at"] == os.environ["FLATPAK_UPDATED_AT"]
+              environment_lines.append(f"{variable}={asset_id}\n")
+          with open("public-asset-ids.env", "w", encoding="utf-8") as output:
+              output.writelines(environment_lines)
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as output:
+              output.writelines(environment_lines)
+          PY
+
+          # Values are safe to source because Python accepts only positive uint64 decimals.
+          source public-asset-ids.env
+          mkdir -p public-verified-assets
+          verify_public_asset() {
+            local name="$1"
+            local asset_id="$2"
+            local expected="release-assets/$name"
+            local downloaded="public-verified-assets/$name"
+            gh api --method GET \
+              -H "Accept: application/octet-stream" \
+              "repos/$GH_REPO/releases/assets/$asset_id" > "$downloaded"
+            test "$(stat --format=%s "$downloaded")" = "$(stat --format=%s "$expected")"
+            test "$(sha256sum "$downloaded" | awk '{print $1}')" = \
+              "$(sha256sum "$expected" | awk '{print $1}')"
+            cmp "$expected" "$downloaded"
+          }
+          verify_public_asset "artemis-steam-deck.flatpak" "$PUBLIC_FLATPAK_ASSET_ID"
+          verify_public_asset "artemis-steam-deck-update.json" "$PUBLIC_MANIFEST_ASSET_ID"
+          verify_public_asset "artemis-steam-deck.flatpak.sha256" "$PUBLIC_CHECKSUM_ASSET_ID"
+          verify_public_asset "artemis-steam-deck-bundle.tar.gz" "$PUBLIC_ARCHIVE_ASSET_ID"
+
+      - name: Reconfirm current main head and move rolling tag
+        if: steps.initial-main-head.outputs.publish == 'true'
+        run: |
+          set -euo pipefail
+          main_head="$(gh api "repos/$GH_REPO/git/ref/heads/main" --jq '.object.sha')"
+          if [ "$main_head" != "$SOURCE_COMMIT" ]; then
+            echo "Refusing to move rolling tag: main advanced to $main_head"
+            exit 1
+          fi
+
+          preexisting_tag_ref_json="$(gh api "repos/$GH_REPO/git/ref/tags/steam-deck-latest")"
+          preexisting_tag_object_type="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["object"]["type"])' <<< "$preexisting_tag_ref_json")"
+          preexisting_tag_object_sha="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["object"]["sha"])' <<< "$preexisting_tag_ref_json")"
+          validate_preexisting_tag_sha() {
+            if [[ ! "$preexisting_tag_object_sha" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "Existing rolling tag contains an invalid object SHA"
+              exit 1
+            fi
+          }
+          validate_preexisting_tag_sha
+          declare -A seen_preexisting_tag_objects=()
+          preexisting_tag_depth=0
+          while true; do
+            case "$preexisting_tag_object_type" in
+              commit)
+                break
+                ;;
+              tag)
+                if [[ -n "${seen_preexisting_tag_objects["$preexisting_tag_object_sha"]:-}" ]]; then
+                  echo "Existing rolling tag contains a cycle at $preexisting_tag_object_sha"
+                  exit 1
+                fi
+                seen_preexisting_tag_objects["$preexisting_tag_object_sha"]=1
+                preexisting_tag_depth=$((preexisting_tag_depth + 1))
+                if [ "$preexisting_tag_depth" -gt 32 ]; then
+                  echo "Existing rolling tag exceeded the maximum dereference depth"
+                  exit 1
+                fi
+                preexisting_tag_json="$(gh api "repos/$GH_REPO/git/tags/$preexisting_tag_object_sha")"
+                preexisting_tag_object_type="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["object"]["type"])' <<< "$preexisting_tag_json")"
+                preexisting_tag_object_sha="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["object"]["sha"])' <<< "$preexisting_tag_json")"
+                validate_preexisting_tag_sha
+                ;;
+              *)
+                echo "Unexpected existing rolling tag object type: $preexisting_tag_object_type"
+                exit 1
+                ;;
+            esac
+          done
+
+          gh api --method PATCH "repos/$GH_REPO/git/refs/tags/steam-deck-latest" \
+            -f sha="$SOURCE_COMMIT" \
+            -F force=true
+
+      - name: Verify final binding and publish final notes
+        if: steps.initial-main-head.outputs.publish == 'true'
+        run: |
+          set -euo pipefail
+          tag_ref_json="$(gh api "repos/$GH_REPO/git/ref/tags/steam-deck-latest")"
+          tag_object_type="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["object"]["type"])' <<< "$tag_ref_json")"
+          tag_object_sha="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["object"]["sha"])' <<< "$tag_ref_json")"
+          validate_tag_sha() {
+            if [[ ! "$tag_object_sha" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "Rolling tag contains an invalid object SHA"
+              exit 1
+            fi
+          }
+          validate_tag_sha
+          declare -A seen_tag_objects=()
+          tag_depth=0
+          while true; do
+            case "$tag_object_type" in
+              commit)
+                resolved_tag_commit="$tag_object_sha"
+                break
+                ;;
+              tag)
+                if [[ -n "${seen_tag_objects["$tag_object_sha"]:-}" ]]; then
+                  echo "Rolling tag contains a cycle at $tag_object_sha"
+                  exit 1
+                fi
+                seen_tag_objects["$tag_object_sha"]=1
+                tag_depth=$((tag_depth + 1))
+                if [ "$tag_depth" -gt 32 ]; then
+                  echo "Rolling tag exceeded the maximum dereference depth"
+                  exit 1
+                fi
+                tag_json="$(gh api "repos/$GH_REPO/git/tags/$tag_object_sha")"
+                tag_object_type="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["object"]["type"])' <<< "$tag_json")"
+                tag_object_sha="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["object"]["sha"])' <<< "$tag_json")"
+                validate_tag_sha
+                ;;
+              *)
+                echo "Unexpected rolling tag object type: $tag_object_type"
+                exit 1
+                ;;
+            esac
+          done
+          test "$resolved_tag_commit" = "$SOURCE_COMMIT"
+
+          gh api "repos/$GH_REPO/releases/tags/steam-deck-latest" \
+            > final-public-release.json
+          gh api --method GET \
+            -H "Accept: application/octet-stream" \
+            "repos/$GH_REPO/releases/assets/$PUBLIC_MANIFEST_ASSET_ID" \
+            > final-public-manifest.json
+          cmp release-assets/artemis-steam-deck-update.json \
+            final-public-manifest.json
+          export RESOLVED_TAG_COMMIT="$resolved_tag_commit"
+          mapfile -t manifest_commits < <(python3 - <<'PY'
+          import json
+          import os
+
+          with open("final-public-release.json", encoding="utf-8") as source:
+              release = json.load(source)
+          with open("final-public-manifest.json", encoding="utf-8") as source:
+              manifest = json.load(source)
+          assert str(release["id"]) == os.environ["RELEASE_ID"]
+          assert release["tag_name"] == "steam-deck-latest"
+          assert release["draft"] is False
+          assert release["prerelease"] is True
+          known_names = {
+              "artemis-steam-deck.flatpak",
+              "artemis-steam-deck-update.json",
+              "artemis-steam-deck.flatpak.sha256",
+              "artemis-steam-deck-bundle.tar.gz",
+          }
+          known_assets = [
+              asset for asset in release["assets"]
+              if asset["name"] in known_names
+          ]
+          assert len(known_assets) == 4
+          assets = {asset["name"]: asset for asset in known_assets}
+          assert len(assets) == 4
+          flatpak = assets["artemis-steam-deck.flatpak"]
+          assert str(flatpak["id"]) == os.environ["FLATPAK_ASSET_ID"]
+          assert str(flatpak["size"]) == os.environ["FLATPAK_ASSET_SIZE"]
+          assert flatpak["updated_at"] == os.environ["FLATPAK_UPDATED_AT"]
+          assert str(assets["artemis-steam-deck-update.json"]["id"]) == \
+              os.environ["PUBLIC_MANIFEST_ASSET_ID"]
+          assert str(assets["artemis-steam-deck.flatpak.sha256"]["id"]) == \
+              os.environ["PUBLIC_CHECKSUM_ASSET_ID"]
+          assert str(assets["artemis-steam-deck-bundle.tar.gz"]["id"]) == \
+              os.environ["PUBLIC_ARCHIVE_ASSET_ID"]
+          assert manifest["schema"] == 1
+          assert manifest["repository"] == "samelamin/vibertemis"
+          assert manifest["application_id"] == "com.artemisdesktop.ArtemisDesktopDev"
+          assert manifest["release_id"] == os.environ["RELEASE_ID"]
+          assert manifest["build_sequence"] == os.environ["BUILD_SEQUENCE"]
+          assert manifest["tag"] == "steam-deck-latest"
+          assert manifest["flatpak"] == {
+              "asset_id": os.environ["FLATPAK_ASSET_ID"],
+              "name": "artemis-steam-deck.flatpak",
+              "sha256": os.environ["EXPECTED_SHA"],
+              "size": os.environ["FLATPAK_ASSET_SIZE"],
+          }
+          assert manifest["source_commit"] == os.environ["SOURCE_COMMIT"]
+          assert manifest["tag_commit"] == os.environ["RESOLVED_TAG_COMMIT"]
+          print(manifest["source_commit"])
+          print(manifest["tag_commit"])
+          PY
+          )
+          manifest_source_commit="${manifest_commits[0]}"
+          manifest_tag_commit="${manifest_commits[1]}"
+          test "$manifest_source_commit" = "$SOURCE_COMMIT"
+          test "$manifest_tag_commit" = "$resolved_tag_commit"
+
           cat > release-notes.md <<EOF
           # Vibertemis Steam Deck rolling build
 
           - Version: \`$VERSION\`
           - Commit: \`$SOURCE_COMMIT\`
           - Workflow run: $RUN_URL
-          - SHA-256: \`$expected_sha\`
+          - SHA-256: \`$EXPECTED_SHA\`
 
-          The Flatpak was verified after re-downloading it from this release. The checksum sidecar and atomic bundle were uploaded only after that comparison succeeded.
+          The Flatpak and every companion were verified by exact GitHub asset ID. The manifest binds this release, rolling tag, Flatpak ID, byte size, publication time, and digest to the source commit.
 
-          This rolling prerelease is replaced by every later successful build from the Steam Deck branch. The direct Flatpak and sidecar can briefly differ while a replacement is in progress; use the bundle for an atomic Flatpak-plus-checksum download.
+          This rolling prerelease is replaced by every later successful build from main. Updaters reject any release/tag/manifest mismatch while replacement is in progress.
           EOF
           gh release edit steam-deck-latest \
             --title "Vibertemis Steam Deck rolling build ($VERSION)" \

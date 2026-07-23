@@ -1302,7 +1302,7 @@ class ForkIdentityTests(unittest.TestCase):
         exact_gate = (
             "    if: >-\n"
             "      github.repository == 'samelamin/vibertemis' &&\n"
-            "      github.ref == 'refs/heads/codex/steam-deck' &&\n"
+            "      github.ref == 'refs/heads/main' &&\n"
             "      needs.setup-version.outputs.should_build == 'true'\n"
         )
         self.assertEqual(1, job.splitlines().count("    if: >-"))
@@ -1319,6 +1319,7 @@ class ForkIdentityTests(unittest.TestCase):
             job,
         )
         self.assertIn("artemis-steam-deck.flatpak", job)
+        self.assertIn("artemis-steam-deck-update.json", job)
         self.assertIn("artemis-steam-deck.flatpak.sha256", job)
         self.assertIn("artemis-steam-deck-bundle.tar.gz", job)
         self.assertIn("steam-deck-latest", job)
@@ -1342,23 +1343,27 @@ class ForkIdentityTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         job = workflow_job_block(workflow, "publish-steam-deck-release")
 
-        self.assertIn("id: branch-head", job)
-        guard = job.index("id: branch-head")
+        self.assertIn("id: initial-main-head", job)
+        guard = job.index("id: initial-main-head")
         artifact_download = job.index("uses: actions/download-artifact@v4")
         self.assertLess(guard, artifact_download)
-        self.assertIn(
-            'branch_head="$(gh api "repos/$GH_REPO/git/ref/heads/codex/steam-deck" '
-            "--jq '.object.sha')\"",
-            job,
+        main_head_query = (
+            'gh api "repos/$GH_REPO/git/ref/heads/main" --jq \'.object.sha\''
         )
-        self.assertIn('if [ "$branch_head" != "$SOURCE_COMMIT" ]; then', job)
+        self.assertGreaterEqual(job.count(main_head_query), 2)
+        self.assertIn('if [ "$main_head" != "$SOURCE_COMMIT" ]; then', job)
         self.assertIn('echo "publish=false" >> "$GITHUB_OUTPUT"', job)
         self.assertIn('echo "publish=true" >> "$GITHUB_OUTPUT"', job)
-        self.assertEqual(
-            7,
-            job.count("if: steps.branch-head.outputs.publish == 'true'"),
-            "every mutating or artifact-handling step must be gated by the branch-head check",
+        self.assertIn(
+            "if: steps.initial-main-head.outputs.publish == 'true'",
+            job,
         )
+        second_guard = job.index("- name: Reconfirm current main head")
+        tag_move = job.index(
+            'gh api --method PATCH '
+            '"repos/$GH_REPO/git/refs/tags/steam-deck-latest"'
+        )
+        self.assertLess(second_guard, tag_move)
 
     def test_steam_deck_publisher_deletes_only_confirmed_existing_assets(self):
         workflow = (
@@ -1367,32 +1372,31 @@ class ForkIdentityTests(unittest.TestCase):
         job = workflow_job_block(workflow, "publish-steam-deck-release")
 
         asset_query = (
-            "gh release view steam-deck-latest --json assets "
-            "--jq '.assets[].name'"
+            'gh api "repos/$GH_REPO/releases/tags/steam-deck-latest" '
+            "\\\n            > existing-release-assets.json"
         )
         self.assertEqual(1, job.count(asset_query))
-        self.assertIn('for asset_name in \\\n', job)
-        self.assertIn('grep -Fqx "$asset_name" <<< "$existing_assets"', job)
+        for asset_name in (
+            "artemis-steam-deck.flatpak",
+            "artemis-steam-deck-update.json",
+            "artemis-steam-deck.flatpak.sha256",
+            "artemis-steam-deck-bundle.tar.gz",
+        ):
+            self.assertIn(f'"{asset_name}"', job)
+        self.assertIn("confirmed-existing-asset-ids.txt", job)
+        self.assertIn('while IFS= read -r asset_id; do', job)
         self.assertIn(
-            'gh release delete-asset steam-deck-latest "$asset_name" --yes',
+            'gh api --method DELETE \\\n'
+            '              '
+            '"repos/$GH_REPO/releases/assets/$asset_id"',
             job,
         )
-        delete_commands = [
-            line for line in job.splitlines() if "gh release delete-asset" in line
-        ]
-        self.assertTrue(delete_commands)
-        for delete_command in delete_commands:
-            self.assertNotIn("|| true", delete_command)
-        self.assertNotIn(
-            "delete-asset steam-deck-latest "
-            "artemis-steam-deck.flatpak.sha256 --yes 2>/dev/null || true",
+        self.assertIn(
+            '[[ "$asset_id" =~ ^[1-9][0-9]*$ ]]',
             job,
         )
-        self.assertNotIn(
-            "delete-asset steam-deck-latest "
-            "artemis-steam-deck-bundle.tar.gz --yes 2>/dev/null || true",
-            job,
-        )
+        self.assertNotIn("gh release delete-asset", job)
+        self.assertNotIn("|| true", job)
 
     def test_steam_deck_publisher_verifies_download_before_companion_assets(self):
         workflow = (
@@ -1401,68 +1405,154 @@ class ForkIdentityTests(unittest.TestCase):
         self.assertIn("  publish-steam-deck-release:\n", workflow)
         job = workflow_job_block(workflow, "publish-steam-deck-release")
 
+        build_info = job.index(
+            "steam-deck-artifact/flatpak-build-info.json"
+        )
+        first_release_mutation = min(
+            job.index("gh release edit steam-deck-latest"),
+            job.index("gh release create steam-deck-latest"),
+        )
+        self.assertLess(build_info, first_release_mutation)
+        for field in (
+            "applicationId",
+            "channel",
+            "commit",
+            "internallyConsistent",
+            "schema",
+            "sequence",
+            "version",
+        ):
+            self.assertIn(field, job)
+
         flatpak_upload = job.index(
-            "gh release upload steam-deck-latest release-assets/artemis-steam-deck.flatpak --clobber"
+            "gh release upload steam-deck-latest "
+            "release-assets/artemis-steam-deck.flatpak"
         )
-        published_download = job.index(
-            "gh release download steam-deck-latest --pattern artemis-steam-deck.flatpak"
+        flatpak_query = job.index("release-with-flatpak.json")
+        exact_asset_download = job.index(
+            '"repos/$GH_REPO/releases/assets/$FLATPAK_ASSET_ID"'
         )
-        digest_comparison = job.index(
-            'test "$expected_sha" = "$published_sha"'
+        generator = job.index("generate-update-manifest.py")
+        companion_upload = job.index(
+            "release-assets/artemis-steam-deck-update.json"
         )
+        self.assertLess(flatpak_upload, flatpak_query)
+        self.assertLess(flatpak_query, exact_asset_download)
+        self.assertLess(exact_asset_download, generator)
+        self.assertLess(generator, companion_upload)
+        self.assertIn('-H "Accept: application/octet-stream"', job)
+        self.assertIn('test "$published_size" = "$FLATPAK_ASSET_SIZE"', job)
+        self.assertIn('test "$published_sha" = "$EXPECTED_SHA"', job)
+        for token in (
+            "RELEASE_ID",
+            "FLATPAK_ASSET_ID",
+            "FLATPAK_ASSET_SIZE",
+            "FLATPAK_UPDATED_AT",
+        ):
+            self.assertIn(token, job)
+        for argument in (
+            '--source-commit "$SOURCE_COMMIT"',
+            '--build-sequence "$BUILD_SEQUENCE"',
+            '--release-id "$RELEASE_ID"',
+            '--flatpak-asset-id "$FLATPAK_ASSET_ID"',
+            '--flatpak-size "$FLATPAK_ASSET_SIZE"',
+            '--flatpak-sha256 "$EXPECTED_SHA"',
+            '--published-at "$FLATPAK_UPDATED_AT"',
+        ):
+            self.assertIn(argument, job)
+
+    def test_steam_deck_publisher_verifies_all_assets_then_moves_tag_and_notes(self):
+        workflow = (
+            REPOSITORY_ROOT / ".github/workflows/dev-build.yml"
+        ).read_text(encoding="utf-8")
+        job = workflow_job_block(workflow, "publish-steam-deck-release")
+
+        companion_upload = job.index(
+            "release-assets/artemis-steam-deck-update.json"
+        )
+        public_asset_query = job.index("release-public-assets.json")
+        second_guard = job.index("- name: Reconfirm current main head")
         tag_patch_command = (
             'gh api --method PATCH '
             '"repos/$GH_REPO/git/refs/tags/steam-deck-latest"'
         )
         self.assertIn(tag_patch_command, job)
         tag_patch = job.index(tag_patch_command)
-        tag_sha_query = job.index(
-            'gh api "repos/$GH_REPO/git/ref/tags/steam-deck-latest" '
-            "--jq '.object.sha'"
+        recursive_dereference = job.index(
+            "declare -A seen_tag_objects=()"
         )
-        tag_sha_comparison = job.index(
-            'test "$published_tag_sha" = "$SOURCE_COMMIT"'
-        )
-        companion_upload = job.index(
-            "gh release upload steam-deck-latest \\\n"
-            "            release-assets/artemis-steam-deck.flatpak.sha256 \\\n"
-            "            release-assets/artemis-steam-deck-bundle.tar.gz --clobber"
-        )
+        final_release = job.index("final-public-release.json")
+        final_notes = job.rindex("gh release edit steam-deck-latest")
 
-        self.assertLess(flatpak_upload, published_download)
-        self.assertLess(published_download, digest_comparison)
-        self.assertLess(digest_comparison, tag_patch)
-        self.assertLess(tag_patch, tag_sha_query)
-        self.assertLess(tag_sha_query, tag_sha_comparison)
-        self.assertLess(tag_sha_comparison, companion_upload)
-        self.assertIn("rm -rf published-flatpak", job)
-        self.assertIn("mkdir published-flatpak", job)
+        self.assertLess(companion_upload, public_asset_query)
+        self.assertLess(public_asset_query, second_guard)
+        self.assertLess(second_guard, tag_patch)
+        self.assertLess(tag_patch, recursive_dereference)
+        self.assertLess(recursive_dereference, final_release)
+        self.assertLess(final_release, final_notes)
+        for asset in (
+            "artemis-steam-deck.flatpak",
+            "artemis-steam-deck-update.json",
+            "artemis-steam-deck.flatpak.sha256",
+            "artemis-steam-deck-bundle.tar.gz",
+        ):
+            self.assertIn(f'verify_public_asset "{asset}"', job)
+        self.assertLess(
+            job.index("source public-asset-ids.env"),
+            job.index(
+                'verify_public_asset "artemis-steam-deck.flatpak"'
+            ),
+        )
+        self.assertIn('case "$tag_object_type" in', job)
+        self.assertIn('seen_tag_objects["$tag_object_sha"]', job)
+        preexisting_dereference = job.index(
+            "declare -A seen_preexisting_tag_objects=()"
+        )
+        self.assertLess(preexisting_dereference, tag_patch)
+        self.assertIn('case "$preexisting_tag_object_type" in', job)
+        self.assertIn(
+            'seen_preexisting_tag_objects["$preexisting_tag_object_sha"]',
+            job,
+        )
+        self.assertIn('test "$resolved_tag_commit" = "$SOURCE_COMMIT"', job)
+        self.assertIn('test "$manifest_source_commit" = "$SOURCE_COMMIT"', job)
+        self.assertIn(
+            'test "$manifest_tag_commit" = "$resolved_tag_commit"',
+            job,
+        )
+        for final_asset_id in (
+            "PUBLIC_MANIFEST_ASSET_ID",
+            "PUBLIC_CHECKSUM_ASSET_ID",
+            "PUBLIC_ARCHIVE_ASSET_ID",
+        ):
+            self.assertIn(
+                f'os.environ["{final_asset_id}"]',
+                job,
+            )
         self.assertIn("Version: \\`$VERSION\\`", job)
         self.assertIn("Commit: \\`$SOURCE_COMMIT\\`", job)
         self.assertIn("Workflow run: $RUN_URL", job)
-        self.assertIn("SHA-256: \\`$expected_sha\\`", job)
+        self.assertIn("SHA-256: \\`$EXPECTED_SHA\\`", job)
         self.assertIn("replaced by every later successful build", job)
-        self.assertIn("verified after re-downloading", job)
+        self.assertIn("verified by exact GitHub asset ID", job)
 
-    def test_steam_deck_publisher_force_moves_rolling_tag_each_time(self):
+    def test_steam_deck_publisher_bootstraps_only_when_release_is_absent(self):
         workflow = (
             REPOSITORY_ROOT / ".github/workflows/dev-build.yml"
         ).read_text(encoding="utf-8")
         job = workflow_job_block(workflow, "publish-steam-deck-release")
 
-        self.assertIn(
-            'gh api --method PATCH '
-            '"repos/$GH_REPO/git/refs/tags/steam-deck-latest" \\\n'
-            '            -f sha="$SOURCE_COMMIT" \\\n'
-            "            -F force=true",
-            job,
+        self.assertEqual(1, job.count("gh release create steam-deck-latest"))
+        release_check = job.index("if gh release view steam-deck-latest")
+        release_edit = job.index("gh release edit steam-deck-latest")
+        release_create = job.index("gh release create steam-deck-latest")
+        flatpak_upload = job.index(
+            "gh release upload steam-deck-latest "
+            "release-assets/artemis-steam-deck.flatpak"
         )
-        self.assertIn(
-            'published_tag_sha="$(gh api '
-            '"repos/$GH_REPO/git/ref/tags/steam-deck-latest" '
-            "--jq '.object.sha')\"",
-            job,
-        )
+        self.assertLess(release_check, release_edit)
+        self.assertLess(release_edit, release_create)
+        self.assertLess(release_create, flatpak_upload)
 
 
 if __name__ == "__main__":

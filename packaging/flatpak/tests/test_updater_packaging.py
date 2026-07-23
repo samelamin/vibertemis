@@ -1,7 +1,9 @@
 from pathlib import Path
+import json
 import re
 import subprocess
 import sys
+import tempfile
 import unittest
 
 
@@ -11,6 +13,9 @@ MAIN_QML = REPOSITORY_ROOT / "app" / "gui" / "main.qml"
 SETTINGS_QML = REPOSITORY_ROOT / "app" / "gui" / "SettingsView.qml"
 UPDATE_DIALOG_QML = REPOSITORY_ROOT / "app" / "gui" / "UpdateDialog.qml"
 WORKFLOW = REPOSITORY_ROOT / ".github" / "workflows" / "dev-build.yml"
+UPDATE_MANIFEST_GENERATOR = (
+    REPOSITORY_ROOT / "packaging" / "flatpak" / "generate-update-manifest.py"
+)
 WINDOWS_BUILD_SCRIPT = REPOSITORY_ROOT / "scripts" / "build-artemis-arch.bat"
 MACOS_DMG_SCRIPT = REPOSITORY_ROOT / "scripts" / "generate-dmg.sh"
 MACOS_VERIFY_SCRIPT = REPOSITORY_ROOT / "scripts" / "verify-macos-bundle.sh"
@@ -82,6 +87,19 @@ class UpdaterQmlContractTests(unittest.TestCase):
             "packaging.flatpak.tests.test_updater_packaging",
             plan,
         )
+        alias_probe = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import vibertemis_packaging_tests.test_updater_packaging as m; "
+                "assert m.UpdateManifestGeneratorTests is "
+                "m._canonical.UpdateManifestGeneratorTests",
+            ],
+            cwd=REPOSITORY_ROOT,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(alias_probe.returncode, 0, alias_probe.stderr)
 
     def test_toolbar_opens_modal_only_from_a_user_click(self):
         self.assertRegex(
@@ -742,6 +760,121 @@ class UpdaterQmlContractTests(unittest.TestCase):
             'verify_app "$MOUNT_DIR/Vibertemis.app"',
             self.macos_verify_script,
         )
+
+
+class UpdateManifestGeneratorTests(unittest.TestCase):
+    def run_generator(self, **overrides):
+        defaults = {
+            "source_commit": "a" * 40,
+            "build_sequence": "1234567890123456789",
+            "release_id": "9007199254740993",
+            "flatpak_asset_id": "9007199254740995",
+            "flatpak_size": "18446744073709551615",
+            "flatpak_sha256": "b" * 64,
+            "published_at": "2026-07-23T14:25:53Z",
+        }
+        defaults.update(overrides)
+        temporary_directory = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary_directory.cleanup)
+        output = Path(temporary_directory.name) / "update.json"
+        command = [
+            sys.executable,
+            str(UPDATE_MANIFEST_GENERATOR),
+            "--output",
+            str(output),
+            "--source-commit",
+            defaults["source_commit"],
+            "--build-sequence",
+            defaults["build_sequence"],
+            "--release-id",
+            defaults["release_id"],
+            "--flatpak-asset-id",
+            defaults["flatpak_asset_id"],
+            "--flatpak-size",
+            defaults["flatpak_size"],
+            "--flatpak-sha256",
+            defaults["flatpak_sha256"],
+            "--published-at",
+            defaults["published_at"],
+        ]
+        result = subprocess.run(
+            command,
+            cwd=REPOSITORY_ROOT,
+            capture_output=True,
+            check=False,
+            text=True,
+        )
+        return result, output
+
+    def test_generator_writes_exact_sorted_compact_manifest(self):
+        result, output = self.run_generator()
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        expected = {
+            "application_id": "com.artemisdesktop.ArtemisDesktopDev",
+            "build_sequence": "1234567890123456789",
+            "flatpak": {
+                "asset_id": "9007199254740995",
+                "name": "artemis-steam-deck.flatpak",
+                "sha256": "b" * 64,
+                "size": "18446744073709551615",
+            },
+            "published_at": "2026-07-23T14:25:53Z",
+            "release_id": "9007199254740993",
+            "repository": "samelamin/vibertemis",
+            "schema": 1,
+            "source_commit": "a" * 40,
+            "tag": "steam-deck-latest",
+            "tag_commit": "a" * 40,
+        }
+        expected_bytes = (
+            json.dumps(expected, sort_keys=True, separators=(",", ":")) + "\n"
+        ).encode("utf-8")
+        self.assertEqual(expected_bytes, output.read_bytes())
+
+    def test_generator_rejects_noncanonical_or_out_of_range_inputs(self):
+        invalid_inputs = (
+            ("uppercase commit", {"source_commit": "A" * 40}),
+            ("short commit", {"source_commit": "a" * 39}),
+            ("uppercase digest", {"flatpak_sha256": "B" * 64}),
+            ("short digest", {"flatpak_sha256": "b" * 63}),
+            ("zero sequence", {"build_sequence": "0"}),
+            ("leading-zero sequence", {"build_sequence": "01"}),
+            ("negative sequence", {"build_sequence": "-1"}),
+            (
+                "sequence overflow",
+                {"build_sequence": "18446744073709551616"},
+            ),
+            ("zero release id", {"release_id": "0"}),
+            ("fractional release id", {"release_id": "1.5"}),
+            (
+                "release id overflow",
+                {"release_id": "18446744073709551616"},
+            ),
+            ("zero asset id", {"flatpak_asset_id": "0"}),
+            ("unsafe asset id", {"flatpak_asset_id": "1;touch"}),
+            ("zero size", {"flatpak_size": "0"}),
+            ("leading-zero size", {"flatpak_size": "01"}),
+            (
+                "size overflow",
+                {"flatpak_size": "18446744073709551616"},
+            ),
+            (
+                "non-UTC timestamp",
+                {"published_at": "2026-07-23T15:25:53+01:00"},
+            ),
+            (
+                "fractional timestamp",
+                {"published_at": "2026-07-23T14:25:53.123Z"},
+            ),
+            ("invalid date", {"published_at": "2026-02-30T14:25:53Z"}),
+        )
+        for name, overrides in invalid_inputs:
+            with self.subTest(name=name):
+                result, output = self.run_generator(**overrides)
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn("ERROR:", result.stderr)
+                self.assertFalse(output.exists())
 
 
 if __name__ == "__main__":

@@ -6,3 +6,4 @@ _canonical = load_canonical_test(
     "test_updater_packaging.py",
 )
 UpdaterQmlContractTests = _canonical.UpdaterQmlContractTests
+UpdateManifestGeneratorTests = _canonical.UpdateManifestGeneratorTests
