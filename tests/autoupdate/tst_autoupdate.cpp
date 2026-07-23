@@ -2,14 +2,20 @@
 
 #include <cstring>
 
+#include <QCryptographicHash>
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QNetworkReply>
 #include <QProcessEnvironment>
+#include <QTemporaryDir>
 
 #include "backend/autoupdatechecker.h"
 #include "backend/buildinfo.h"
+#include "backend/pendingupdate.h"
 #include "backend/releaseversionselector.h"
 #include "backend/rollingupdateparser.h"
 #include "backend/steamdecksession.h"
@@ -88,6 +94,8 @@ private slots:
     void rollingParserRequiresNewerSequence();
     void steamDeckSessionClassifiesEnvironment_data();
     void steamDeckSessionClassifiesEnvironment();
+    void secureUpdateFiles();
+    void pendingUpdateRecord();
     void rollingParser();
     void steamDeckSession();
 };
@@ -96,6 +104,63 @@ static const QString RollingCommit(40, QLatin1Char('b'));
 static const QString TagObject(40, QLatin1Char('d'));
 static const QString TagCommit(40, QLatin1Char('e'));
 static const QString FlatpakDigest(64, QLatin1Char('c'));
+
+class FakeStorageProbe : public StorageProbe
+{
+public:
+    quint64 available = 0;
+    QDateTime now = QDateTime::fromString(
+        QStringLiteral("2026-07-23T12:00:00Z"), Qt::ISODate);
+
+    quint64 bytesAvailable(const QString &) const override
+    {
+        return available;
+    }
+
+    QDateTime nowUtc() const override
+    {
+        return now;
+    }
+};
+
+static RollingUpdateCandidate storageCandidate(const QByteArray &payload)
+{
+    RollingUpdateCandidate candidate;
+    candidate.releaseId = 24680;
+    candidate.releaseLabel = QStringLiteral("Steam Deck rolling");
+    candidate.releasePage =
+        QUrl(QStringLiteral("https://github.com/samelamin/vibertemis/releases/tag/steam-deck-latest"));
+    candidate.releaseUpdatedAt = QDateTime::fromString(
+        QStringLiteral("2026-07-23T10:00:00Z"), Qt::ISODate);
+    candidate.sourceCommit = QString(40, QLatin1Char('b'));
+    candidate.sequence = 5678;
+    candidate.tagRefObjectId = QString(40, QLatin1Char('d'));
+    candidate.tagObjectId = QString(40, QLatin1Char('e'));
+    candidate.manifestSchema = 1;
+    candidate.publishedAt = QDateTime::fromString(
+        QStringLiteral("2026-07-23T10:00:00Z"), Qt::ISODate);
+    candidate.manifest.id = 11223;
+    candidate.manifest.name = QStringLiteral("artemis-steam-deck-update.json");
+    candidate.manifest.size = 512;
+    candidate.manifest.apiUrl = QUrl(
+        QStringLiteral("https://api.github.com/repos/samelamin/vibertemis/releases/assets/11223"));
+    candidate.manifest.downloadUrl = QUrl(
+        QStringLiteral("https://github.com/samelamin/vibertemis/releases/download/"
+                       "steam-deck-latest/artemis-steam-deck-update.json"));
+    candidate.manifest.updatedAt = candidate.releaseUpdatedAt;
+    candidate.manifest.sha256 = QByteArray(64, 'a');
+    candidate.flatpak.id = 13579;
+    candidate.flatpak.name = QStringLiteral("artemis-steam-deck.flatpak");
+    candidate.flatpak.size = static_cast<quint64>(payload.size());
+    candidate.flatpak.apiUrl = QUrl(
+        QStringLiteral("https://api.github.com/repos/samelamin/vibertemis/releases/assets/13579"));
+    candidate.flatpak.downloadUrl = QUrl(
+        QStringLiteral("https://github-releases.githubusercontent.com/asset/flatpak"));
+    candidate.flatpak.updatedAt = candidate.releaseUpdatedAt;
+    candidate.flatpak.sha256 =
+        QCryptographicHash::hash(payload, QCryptographicHash::Sha256).toHex();
+    return candidate;
+}
 
 static QByteArray validReleaseJson()
 {
@@ -726,6 +791,361 @@ void AutoUpdateTest::steamDeckSessionClassifiesEnvironment()
     QFETCH(QProcessEnvironment, environment);
     QFETCH(SteamDeckSession::Mode, expected);
     QCOMPARE(SteamDeckSession::classify(environment), expected);
+}
+
+void AutoUpdateTest::secureUpdateFiles()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const QString downloads = root.path() + QStringLiteral("/Downloads");
+    const QString privateData = root.path() + QStringLiteral("/private");
+    QVERIFY(QDir().mkpath(downloads));
+    QVERIFY(QDir().mkpath(privateData));
+
+    const QByteArray payload("verified flatpak payload");
+    const RollingUpdateCandidate candidate = storageCandidate(payload);
+    FakeStorageProbe probe;
+    probe.available = candidate.flatpak.size
+        + PendingUpdateStore::safetyMarginBytes() - 1;
+    PendingUpdateStore store(downloads, privateData, &probe);
+
+    const UpdateResult<QSharedPointer<QTemporaryFile>> insufficient =
+        store.createDownload(candidate.flatpak.size);
+    QVERIFY(!insufficient.ok);
+    QCOMPARE(insufficient.error, UpdateError::InsufficientSpace);
+
+    probe.available = candidate.flatpak.size
+        + PendingUpdateStore::safetyMarginBytes();
+    const UpdateResult<QSharedPointer<QTemporaryFile>> created =
+        store.createDownload(candidate.flatpak.size);
+    QVERIFY(created.ok);
+    QVERIFY(created.value);
+    QVERIFY(created.value->isOpen());
+    const QString temporaryPath = QFileInfo(created.value->fileName()).absoluteFilePath();
+    QVERIFY(temporaryPath.startsWith(QFileInfo(downloads).canonicalFilePath()
+                                     + QDir::separator()));
+    QVERIFY(QFileInfo(temporaryPath).fileName().startsWith(
+        QStringLiteral(".vibertemis-update-")));
+    QVERIFY(temporaryPath.endsWith(QStringLiteral(".part")));
+    QCOMPARE(created.value->write(payload), qint64(payload.size()));
+
+    const UpdateResult<UpdateFileStore::OpenVerifiedFile> finalized =
+        store.finalizeAndVerify(created.value, candidate);
+    QVERIFY2(finalized.ok, qPrintable(finalized.message));
+    QVERIFY(finalized.value.file);
+    QVERIFY(finalized.value.file->isOpen());
+    QCOMPARE(finalized.value.size, candidate.flatpak.size);
+    QCOMPARE(finalized.value.sha256, candidate.flatpak.sha256);
+    QCOMPARE(QFileInfo(finalized.value.canonicalPath).fileName(),
+             QStringLiteral("artemis-steam-deck-bbbbbbbbbbbb.flatpak"));
+    QVERIFY(!QFileInfo::exists(temporaryPath));
+
+#ifdef Q_OS_UNIX
+    const QString movedPath = finalized.value.canonicalPath + QStringLiteral(".moved");
+    QVERIFY(QFile::rename(finalized.value.canonicalPath, movedPath));
+    QFile replacement(finalized.value.canonicalPath);
+    QVERIFY(replacement.open(QIODevice::WriteOnly));
+    QCOMPARE(replacement.write("replacement"), qint64(11));
+    replacement.close();
+    QVERIFY(finalized.value.file->seek(0));
+    QCOMPARE(finalized.value.file->readAll(), payload);
+    finalized.value.file->close();
+    QVERIFY(QFile::remove(finalized.value.canonicalPath));
+    QVERIFY(QFile::rename(movedPath, finalized.value.canonicalPath));
+#endif
+
+    auto verifyRejectedPayload = [&](const QByteArray &contents,
+                                     const RollingUpdateCandidate &expected,
+                                     UpdateError error) {
+        QFile::remove(downloads + QStringLiteral("/artemis-steam-deck-bbbbbbbbbbbb.flatpak"));
+        const UpdateResult<QSharedPointer<QTemporaryFile>> part =
+            store.createDownload(expected.flatpak.size);
+        QVERIFY(part.ok);
+        const QString partPath = part.value->fileName();
+        QCOMPARE(part.value->write(contents), qint64(contents.size()));
+        const UpdateResult<UpdateFileStore::OpenVerifiedFile> result =
+            store.finalizeAndVerify(part.value, expected);
+        QVERIFY(!result.ok);
+        QCOMPARE(result.error, error);
+        QVERIFY(!QFileInfo::exists(partPath));
+    };
+
+    verifyRejectedPayload(payload.left(payload.size() - 1),
+                          candidate, UpdateError::SizeMismatch);
+    verifyRejectedPayload(payload + QByteArray("x"),
+                          candidate, UpdateError::SizeMismatch);
+    QByteArray wrongDigestPayload = payload;
+    wrongDigestPayload[0] = 'V';
+    verifyRejectedPayload(wrongDigestPayload,
+                          candidate, UpdateError::DigestMismatch);
+
+    const auto writePart = [&](const QByteArray &contents)
+            -> QSharedPointer<QTemporaryFile> {
+        const UpdateResult<QSharedPointer<QTemporaryFile>> part =
+            store.createDownload(candidate.flatpak.size);
+        if (!part.ok || part.value->write(contents) != contents.size()) {
+            return QSharedPointer<QTemporaryFile>();
+        }
+        return part.value;
+    };
+    QSharedPointer<QTemporaryFile> validPart = writePart(payload);
+    QVERIFY(validPart);
+    UpdateResult<UpdateFileStore::OpenVerifiedFile> first =
+        store.finalizeAndVerify(validPart, candidate);
+    QVERIFY(first.ok);
+    first.value.file->close();
+
+    QSharedPointer<QTemporaryFile> duplicatePart = writePart(QByteArray(payload.size(), 'x'));
+    QVERIFY(duplicatePart);
+    const QString duplicatePath = duplicatePart->fileName();
+    const UpdateResult<UpdateFileStore::OpenVerifiedFile> reused =
+        store.finalizeAndVerify(duplicatePart, candidate);
+    QVERIFY(reused.ok);
+    QVERIFY(!QFileInfo::exists(duplicatePath));
+    QCOMPARE(reused.value.sha256, candidate.flatpak.sha256);
+    reused.value.file->close();
+
+    QFile corruptedFinal(reused.value.canonicalPath);
+    QVERIFY(corruptedFinal.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    QCOMPARE(corruptedFinal.write(QByteArray(payload.size(), 'z')), qint64(payload.size()));
+    corruptedFinal.close();
+    QSharedPointer<QTemporaryFile> replacementPart = writePart(payload);
+    QVERIFY(replacementPart);
+    const UpdateResult<UpdateFileStore::OpenVerifiedFile> replaced =
+        store.finalizeAndVerify(replacementPart, candidate);
+    QVERIFY(replaced.ok);
+    replaced.value.file->close();
+
+#ifdef Q_OS_UNIX
+    QVERIFY(QFile::remove(replaced.value.canonicalPath));
+    const QString symlinkTarget = root.path() + QStringLiteral("/outside.flatpak");
+    QFile outside(symlinkTarget);
+    QVERIFY(outside.open(QIODevice::WriteOnly));
+    QCOMPARE(outside.write(payload), qint64(payload.size()));
+    outside.close();
+    QVERIFY(QFile::link(symlinkTarget, replaced.value.canonicalPath));
+    QSharedPointer<QTemporaryFile> symlinkPart = writePart(payload);
+    QVERIFY(symlinkPart);
+    const UpdateResult<UpdateFileStore::OpenVerifiedFile> symlinkResult =
+        store.finalizeAndVerify(symlinkPart, candidate);
+    QVERIFY(!symlinkResult.ok);
+    QCOMPARE(symlinkResult.error, UpdateError::UnsafePath);
+    QVERIFY(QFileInfo(replaced.value.canonicalPath).isSymLink());
+    QVERIFY(QFile::remove(replaced.value.canonicalPath));
+#endif
+
+    QFile recentOwned(downloads + QStringLiteral("/.vibertemis-update-AbC123.part"));
+    QVERIFY(recentOwned.open(QIODevice::WriteOnly));
+    recentOwned.close();
+    QFile unrelated(downloads + QStringLiteral("/someone-else.part"));
+    QVERIFY(unrelated.open(QIODevice::WriteOnly));
+    unrelated.close();
+    probe.now = QDateTime::currentDateTimeUtc();
+    store.cleanStaleParts();
+    QVERIFY(QFileInfo::exists(recentOwned.fileName()));
+    probe.now = QDateTime::currentDateTimeUtc().addDays(2);
+    store.cleanStaleParts();
+    QVERIFY(!QFileInfo::exists(recentOwned.fileName()));
+    QVERIFY(QFileInfo::exists(unrelated.fileName()));
+}
+
+void AutoUpdateTest::pendingUpdateRecord()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const QString downloads = root.path() + QStringLiteral("/Downloads");
+    const QString privateData = root.path() + QStringLiteral("/private");
+    QVERIFY(QDir().mkpath(downloads));
+    QVERIFY(QDir().mkpath(privateData));
+
+    const QByteArray payload("persistent verified flatpak");
+    const RollingUpdateCandidate candidate = storageCandidate(payload);
+    FakeStorageProbe probe;
+    probe.available = candidate.flatpak.size
+        + PendingUpdateStore::safetyMarginBytes();
+    PendingUpdateStore store(downloads, privateData, &probe);
+
+    const auto makeVerifiedRecord = [&]()
+            -> PendingUpdateRecord {
+        PendingUpdateRecord record;
+        const UpdateResult<QSharedPointer<QTemporaryFile>> part =
+            store.createDownload(candidate.flatpak.size);
+        if (!part.ok || part.value->write(payload) != payload.size()) {
+            return record;
+        }
+        const UpdateResult<UpdateFileStore::OpenVerifiedFile> verified =
+            store.finalizeAndVerify(part.value, candidate);
+        if (!verified.ok) {
+            return record;
+        }
+        record.canonicalPath = verified.value.canonicalPath;
+        record.candidate = candidate;
+        record.verifiedSize = verified.value.size;
+        record.verifiedSha256 = verified.value.sha256;
+        verified.value.file->close();
+        return record;
+    };
+
+    PendingUpdateRecord record = makeVerifiedRecord();
+    QVERIFY(!record.canonicalPath.isEmpty());
+    QVERIFY(store.save(record));
+    const QString recordPath = privateData + QStringLiteral("/pending-update.json");
+    QFile recordFile(recordPath);
+    QVERIFY(recordFile.open(QIODevice::ReadOnly));
+    const QJsonDocument storedDocument = QJsonDocument::fromJson(recordFile.readAll());
+    recordFile.close();
+    QVERIFY(storedDocument.isObject());
+    const QJsonObject stored = storedDocument.object();
+    QCOMPARE(stored.value(QStringLiteral("schema")).toInt(), 1);
+    QCOMPARE(stored.value(QStringLiteral("verified_size")).toString(),
+             QString::number(record.verifiedSize));
+    QCOMPARE(stored.value(QStringLiteral("verified_sha256")).toString(),
+             QString::fromLatin1(record.verifiedSha256));
+    const QJsonObject storedCandidate =
+        stored.value(QStringLiteral("candidate")).toObject();
+    QCOMPARE(storedCandidate.value(QStringLiteral("release_id")).toString(),
+             QStringLiteral("24680"));
+    QCOMPARE(storedCandidate.value(QStringLiteral("release_label")).toString(),
+             candidate.releaseLabel);
+    QCOMPARE(storedCandidate.value(QStringLiteral("release_page")).toString(),
+             candidate.releasePage.toString());
+    QCOMPARE(storedCandidate.value(QStringLiteral("release_updated_at")).toString(),
+             QStringLiteral("2026-07-23T10:00:00Z"));
+    QCOMPARE(storedCandidate.value(QStringLiteral("source_commit")).toString(),
+             candidate.sourceCommit);
+    QCOMPARE(storedCandidate.value(QStringLiteral("build_sequence")).toString(),
+             QStringLiteral("5678"));
+    QCOMPARE(storedCandidate.value(QStringLiteral("tag_ref_object_id")).toString(),
+             candidate.tagRefObjectId);
+    QCOMPARE(storedCandidate.value(QStringLiteral("tag_object_id")).toString(),
+             candidate.tagObjectId);
+    QCOMPARE(storedCandidate.value(QStringLiteral("manifest_schema")).toInt(), 1);
+    QCOMPARE(storedCandidate.value(QStringLiteral("published_at")).toString(),
+             QStringLiteral("2026-07-23T10:00:00Z"));
+    for (const QString &assetName :
+         {QStringLiteral("manifest"), QStringLiteral("flatpak")}) {
+        const QJsonObject asset = storedCandidate.value(assetName).toObject();
+        QVERIFY(!asset.isEmpty());
+        QVERIFY(asset.value(QStringLiteral("id")).isString());
+        QVERIFY(asset.value(QStringLiteral("size")).isString());
+        QVERIFY(asset.value(QStringLiteral("name")).isString());
+        QVERIFY(asset.value(QStringLiteral("api_url")).isString());
+        QVERIFY(asset.value(QStringLiteral("download_url")).isString());
+        QVERIFY(asset.value(QStringLiteral("updated_at")).isString());
+        QVERIFY(asset.value(QStringLiteral("sha256")).isString());
+    }
+
+    const UpdateResult<PendingUpdateRecord> loaded = store.load();
+    QVERIFY2(loaded.ok, qPrintable(loaded.message));
+    QCOMPARE(loaded.value.canonicalPath, record.canonicalPath);
+    QCOMPARE(loaded.value.verifiedSize, record.verifiedSize);
+    QCOMPARE(loaded.value.verifiedSha256, record.verifiedSha256);
+    QVERIFY(RollingUpdateParser::matchesCandidate(
+        record.candidate, loaded.value.candidate).ok);
+    const UpdateResult<UpdateFileStore::OpenVerifiedFile> reopened =
+        store.reopenAndVerify(loaded.value, candidate);
+    QVERIFY2(reopened.ok, qPrintable(reopened.message));
+    reopened.value.file->close();
+
+    RollingUpdateCandidate changedBinding = candidate;
+    ++changedBinding.releaseId;
+    const UpdateResult<UpdateFileStore::OpenVerifiedFile> changed =
+        store.reopenAndVerify(loaded.value, changedBinding);
+    QVERIFY(!changed.ok);
+    QCOMPARE(changed.error, UpdateError::PublisherChanged);
+    QVERIFY(!QFileInfo::exists(recordPath));
+
+    QFile unrelated(downloads + QStringLiteral("/family-photo.flatpak"));
+    QVERIFY(unrelated.open(QIODevice::WriteOnly));
+    QCOMPARE(unrelated.write("do not touch"), qint64(12));
+    unrelated.close();
+
+    auto writeRawRecord = [&](const QByteArray &json) {
+        QFile file(recordPath);
+        if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+            return false;
+        }
+        return file.write(json) == json.size();
+    };
+
+    QVERIFY(writeRawRecord(QByteArray("{")));
+    QVERIFY(!store.load().ok);
+    QVERIFY(!QFileInfo::exists(recordPath));
+    QVERIFY(QFileInfo::exists(unrelated.fileName()));
+
+    record = makeVerifiedRecord();
+    QVERIFY(store.save(record));
+    QVERIFY(recordFile.open(QIODevice::ReadOnly));
+    QJsonObject hostile = QJsonDocument::fromJson(recordFile.readAll()).object();
+    recordFile.close();
+    hostile.insert(QStringLiteral("unexpected"), true);
+    QVERIFY(writeRawRecord(QJsonDocument(hostile).toJson(QJsonDocument::Compact)));
+    QVERIFY(!store.load().ok);
+    QVERIFY(QFileInfo::exists(record.canonicalPath));
+    QVERIFY(QFileInfo::exists(unrelated.fileName()));
+
+    QVERIFY(store.save(record));
+    QVERIFY(recordFile.open(QIODevice::ReadOnly));
+    hostile = QJsonDocument::fromJson(recordFile.readAll()).object();
+    recordFile.close();
+    QJsonObject hostileCandidate =
+        hostile.value(QStringLiteral("candidate")).toObject();
+    QJsonObject hostileManifest =
+        hostileCandidate.value(QStringLiteral("manifest")).toObject();
+    hostileManifest.insert(
+        QStringLiteral("api_url"),
+        QStringLiteral("https://api.github.com:444/repos/samelamin/vibertemis/"
+                       "releases/assets/11223"));
+    hostileCandidate.insert(QStringLiteral("manifest"), hostileManifest);
+    hostile.insert(QStringLiteral("candidate"), hostileCandidate);
+    QVERIFY(writeRawRecord(QJsonDocument(hostile).toJson(QJsonDocument::Compact)));
+    QVERIFY(!store.load().ok);
+    QVERIFY(QFileInfo::exists(record.canonicalPath));
+    QVERIFY(QFileInfo::exists(unrelated.fileName()));
+
+    QVERIFY(store.save(record));
+    QVERIFY(recordFile.open(QIODevice::ReadOnly));
+    hostile = QJsonDocument::fromJson(recordFile.readAll()).object();
+    recordFile.close();
+    hostile.insert(QStringLiteral("canonical_path"), unrelated.fileName());
+    QVERIFY(writeRawRecord(QJsonDocument(hostile).toJson(QJsonDocument::Compact)));
+    QVERIFY(!store.load().ok);
+    QVERIFY(QFileInfo::exists(unrelated.fileName()));
+    QVERIFY(!QFileInfo::exists(recordPath));
+
+    QVERIFY(store.save(record));
+    QVERIFY(QFile::remove(record.canonicalPath));
+    QVERIFY(!store.load().ok);
+    QVERIFY(!QFileInfo::exists(recordPath));
+    QVERIFY(QFileInfo::exists(unrelated.fileName()));
+
+    record = makeVerifiedRecord();
+    QVERIFY(store.save(record));
+    QFile replaced(record.canonicalPath);
+    QVERIFY(replaced.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    QCOMPARE(replaced.write(QByteArray(payload.size(), 'x')), qint64(payload.size()));
+    replaced.close();
+    QVERIFY(!store.load().ok);
+    QVERIFY(!QFileInfo::exists(recordPath));
+    QVERIFY(QFileInfo::exists(unrelated.fileName()));
+
+#ifdef Q_OS_UNIX
+    record = makeVerifiedRecord();
+    QVERIFY(store.save(record));
+    QVERIFY(QFile::remove(record.canonicalPath));
+    QVERIFY(QFile::link(unrelated.fileName(), record.canonicalPath));
+    QVERIFY(!store.load().ok);
+    QVERIFY(QFileInfo::exists(unrelated.fileName()));
+    QVERIFY(!QFileInfo::exists(recordPath));
+    QVERIFY(!QFileInfo::exists(record.canonicalPath));
+#endif
+
+    record = makeVerifiedRecord();
+    QVERIFY(store.save(record));
+    store.clear(true);
+    QVERIFY(!QFileInfo::exists(recordPath));
+    QVERIFY(!QFileInfo::exists(record.canonicalPath));
+    QVERIFY(QFileInfo::exists(unrelated.fileName()));
 }
 
 void AutoUpdateTest::rollingParser()

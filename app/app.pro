@@ -208,6 +208,7 @@ SOURCES += \
     streaming/streamutils.cpp \
     backend/autoupdatechecker.cpp \
     backend/buildinfo.cpp \
+    backend/pendingupdate.cpp \
     backend/releaseversionselector.cpp \
     backend/rollingupdateparser.cpp \
     backend/steamdecksession.cpp \
@@ -256,6 +257,7 @@ HEADERS += \
     streaming/streamutils.h \
     backend/autoupdatechecker.h \
     backend/buildinfo.h \
+    backend/pendingupdate.h \
     backend/releaseversionselector.h \
     backend/updateresult.h \
     backend/rollingupdateparser.h \
