@@ -1,16 +1,34 @@
 #include "steamdecksession.h"
 
+namespace {
+
+bool hasDesktopToken(QString desktop, const QString &expected)
+{
+    desktop.replace(QLatin1Char(';'), QLatin1Char(':'));
+    const QStringList tokens = desktop.split(QLatin1Char(':'));
+    for (const QString &token : tokens) {
+        if (token.trimmed().compare(expected, Qt::CaseInsensitive) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+} // namespace
+
 SteamDeckSession::Mode SteamDeckSession::classify(const QProcessEnvironment &environment)
 {
     const QString desktop = environment.value(QStringLiteral("XDG_CURRENT_DESKTOP"));
-    if (!environment.value(QStringLiteral("GAMESCOPE_WAYLAND_DISPLAY")).isEmpty()
-        || desktop.contains(QStringLiteral("gamescope"), Qt::CaseInsensitive)) {
+    if (!environment.value(QStringLiteral("GAMESCOPE_WAYLAND_DISPLAY")).trimmed().isEmpty()
+        || hasDesktopToken(desktop, QStringLiteral("gamescope"))) {
         return Gaming;
     }
-    if (desktop.contains(QStringLiteral("kde"), Qt::CaseInsensitive)
-        && environment.value(QStringLiteral("KDE_FULL_SESSION")) == QStringLiteral("true")
-        && (environment.value(QStringLiteral("XDG_SESSION_TYPE")) == QStringLiteral("wayland")
-            || environment.value(QStringLiteral("XDG_SESSION_TYPE")) == QStringLiteral("x11"))) {
+    const QString fullSession = environment.value(QStringLiteral("KDE_FULL_SESSION")).trimmed();
+    const QString sessionType = environment.value(QStringLiteral("XDG_SESSION_TYPE")).trimmed();
+    if (hasDesktopToken(desktop, QStringLiteral("kde"))
+        && fullSession.compare(QStringLiteral("true"), Qt::CaseInsensitive) == 0
+        && (sessionType.compare(QStringLiteral("wayland"), Qt::CaseInsensitive) == 0
+            || sessionType.compare(QStringLiteral("x11"), Qt::CaseInsensitive) == 0)) {
         return Desktop;
     }
     return Unknown;

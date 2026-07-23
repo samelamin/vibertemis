@@ -78,6 +78,7 @@ private slots:
     void buildInfoPreflightConsoleAttachment_data();
     void buildInfoPreflightConsoleAttachment();
     void rollingParserAcceptsExactReleaseAndManifest();
+    void rollingParserAcceptsGitHubNumericReleaseFields();
     void rollingParserRejectsInvalidReleaseAndManifest_data();
     void rollingParserRejectsInvalidReleaseAndManifest();
     void rollingParserDetectsCapturedIdentityChanges();
@@ -124,6 +125,17 @@ static QByteArray validManifestJson()
       "flatpak":{"asset_id":"13579","name":"artemis-steam-deck.flatpak","size":"1048576","sha256":"%2"},
       "published_at":"2026-07-23T10:00:00Z"
     })json").arg(RollingCommit, FlatpakDigest).toUtf8();
+}
+
+static QByteArray validGitHubReleaseJson()
+{
+    QByteArray json = validReleaseJson();
+    json.replace("\"id\":\"24680\"", "\"id\":24680");
+    json.replace("\"id\":\"11223\"", "\"id\":11223");
+    json.replace("\"size\":\"512\"", "\"size\":512");
+    json.replace("\"id\":\"13579\"", "\"id\":13579");
+    json.replace("\"size\":\"1048576\"", "\"size\":1048576");
+    return json;
 }
 
 static QByteArray replaceOnce(QByteArray value, const QByteArray &needle, const QByteArray &replacement)
@@ -437,6 +449,18 @@ void AutoUpdateTest::rollingParserAcceptsExactReleaseAndManifest()
              QDateTime::fromString(QStringLiteral("2026-07-23T10:00:00Z"), Qt::ISODate).toUTC());
 }
 
+void AutoUpdateTest::rollingParserAcceptsGitHubNumericReleaseFields()
+{
+    const UpdateResult<RollingUpdateCandidate> release =
+        RollingUpdateParser::parseRelease(validGitHubReleaseJson());
+    QVERIFY2(release.ok, qPrintable(release.message));
+    QCOMPARE(release.value.releaseId, quint64(24680));
+    QCOMPARE(release.value.manifest.id, quint64(11223));
+    QCOMPARE(release.value.manifest.size, quint64(512));
+    QCOMPARE(release.value.flatpak.id, quint64(13579));
+    QCOMPARE(release.value.flatpak.size, quint64(1048576));
+}
+
 void AutoUpdateTest::rollingParserRejectsInvalidReleaseAndManifest_data()
 {
     QTest::addColumn<QByteArray>("release");
@@ -469,6 +493,16 @@ void AutoUpdateTest::rollingParserRejectsInvalidReleaseAndManifest_data()
         << replaceOnce(validReleaseJson(), "github-releases.githubusercontent.com/asset/flatpak", "notgithub-releases.githubusercontent.com/asset/flatpak") << validManifestJson() << true;
     QTest::newRow("unsafe numeric release ID")
         << replaceOnce(validReleaseJson(), "\"24680\"", "9007199254740993") << validManifestJson() << true;
+    QTest::newRow("fractional numeric release ID")
+        << replaceOnce(validReleaseJson(), "\"24680\"", "24680.5") << validManifestJson() << true;
+    QTest::newRow("negative numeric release ID")
+        << replaceOnce(validReleaseJson(), "\"24680\"", "-1") << validManifestJson() << true;
+    QTest::newRow("fractional numeric asset ID")
+        << replaceOnce(validReleaseJson(), "\"11223\"", "11223.5") << validManifestJson() << true;
+    QTest::newRow("negative numeric asset size")
+        << replaceOnce(validReleaseJson(), "\"512\"", "-1") << validManifestJson() << true;
+    QTest::newRow("unsafe numeric asset size")
+        << replaceOnce(validReleaseJson(), "\"512\"", "9007199254740993") << validManifestJson() << true;
     QTest::newRow("release ID overflow")
         << replaceOnce(validReleaseJson(), "\"24680\"", "\"18446744073709551616\"") << validManifestJson() << true;
     QTest::newRow("unknown manifest schema")
@@ -614,6 +648,14 @@ void AutoUpdateTest::rollingParserRejectsInvalidTagGraphs()
     QVERIFY(!RollingUpdateParser::resolveTagCommit(reference, QList<RollingTagObject>()).ok);
     QVERIFY(!RollingUpdateParser::resolveTagCommit(reference,
         QList<RollingTagObject>{RollingTagObject{TagObject, QStringLiteral("tag"), TagObject}}).ok);
+    const RollingTagObject tag{TagObject, QStringLiteral("commit"), RollingCommit};
+    QVERIFY(!RollingUpdateParser::resolveTagCommit(reference,
+        QList<RollingTagObject>{tag, tag}).ok);
+    QVERIFY(!RollingUpdateParser::resolveTagCommit(reference,
+        QList<RollingTagObject>{
+            tag,
+            RollingTagObject{TagObject, QStringLiteral("commit"), QString(40, QLatin1Char('f'))}
+        }).ok);
 }
 
 void AutoUpdateTest::rollingParserClassifiesCommitRelations()
@@ -669,6 +711,14 @@ void AutoUpdateTest::steamDeckSessionClassifiesEnvironment_data()
     unrelated.insert(QStringLiteral("KDE_FULL_SESSION"), QStringLiteral("true"));
     unrelated.insert(QStringLiteral("XDG_SESSION_TYPE"), QStringLiteral("wayland"));
     QTest::newRow("unrelated") << unrelated << SteamDeckSession::Unknown;
+    QProcessEnvironment gamescopeNearMiss;
+    gamescopeNearMiss.insert(QStringLiteral("XDG_CURRENT_DESKTOP"), QStringLiteral("notgamescope"));
+    QTest::newRow("gamescope token near miss") << gamescopeNearMiss << SteamDeckSession::Unknown;
+    QProcessEnvironment kdeNearMiss;
+    kdeNearMiss.insert(QStringLiteral("XDG_CURRENT_DESKTOP"), QStringLiteral("fakekde"));
+    kdeNearMiss.insert(QStringLiteral("KDE_FULL_SESSION"), QStringLiteral("true"));
+    kdeNearMiss.insert(QStringLiteral("XDG_SESSION_TYPE"), QStringLiteral("wayland"));
+    QTest::newRow("KDE token near miss") << kdeNearMiss << SteamDeckSession::Unknown;
 }
 
 void AutoUpdateTest::steamDeckSessionClassifiesEnvironment()
@@ -680,7 +730,7 @@ void AutoUpdateTest::steamDeckSessionClassifiesEnvironment()
 
 void AutoUpdateTest::rollingParser()
 {
-    const UpdateResult<RollingUpdateCandidate> release = RollingUpdateParser::parseRelease(validReleaseJson());
+    const UpdateResult<RollingUpdateCandidate> release = RollingUpdateParser::parseRelease(validGitHubReleaseJson());
     QVERIFY(release.ok);
     const UpdateResult<RollingUpdateCandidate> candidate =
         RollingUpdateParser::parseManifest(validManifestJson(), release.value);
@@ -701,6 +751,9 @@ void AutoUpdateTest::steamDeckSession()
     desktop.insert(QStringLiteral("KDE_FULL_SESSION"), QStringLiteral("true"));
     desktop.insert(QStringLiteral("XDG_SESSION_TYPE"), QStringLiteral("wayland"));
     QCOMPARE(SteamDeckSession::classify(desktop), SteamDeckSession::Desktop);
+
+    desktop.insert(QStringLiteral("XDG_CURRENT_DESKTOP"), QStringLiteral("fakekde"));
+    QCOMPARE(SteamDeckSession::classify(desktop), SteamDeckSession::Unknown);
 }
 
 QTEST_MAIN(AutoUpdateTest)

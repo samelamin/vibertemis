@@ -7,6 +7,8 @@
 #include <QRegularExpression>
 #include <QSet>
 
+#include <cmath>
+
 namespace {
 
 const char Repository[] = "samelamin/vibertemis";
@@ -44,6 +46,26 @@ bool decimalString(const QJsonValue &value, quint64 *number)
         return false;
     }
     *number = parsed;
+    return true;
+}
+
+bool githubUnsignedInteger(const QJsonValue &value, quint64 *number)
+{
+    if (value.isString()) {
+        return decimalString(value, number);
+    }
+    if (!value.isDouble()) {
+        return false;
+    }
+    const double parsed = value.toDouble();
+    const double maximumSafeJsonInteger = 9007199254740991.0;
+    if (!std::isfinite(parsed)
+        || parsed < 0.0
+        || parsed > maximumSafeJsonInteger
+        || std::floor(parsed) != parsed) {
+        return false;
+    }
+    *number = static_cast<quint64>(parsed);
     return true;
 }
 
@@ -128,11 +150,11 @@ bool approvedReleaseDownloadUrl(const QUrl &url, const QString &name)
 UpdateResult<RollingAssetIdentity> parseAsset(const QJsonObject &asset)
 {
     RollingAssetIdentity result;
-    if (!decimalString(asset.value(QStringLiteral("id")), &result.id)
+    if (!githubUnsignedInteger(asset.value(QStringLiteral("id")), &result.id)
         || result.id == 0
         || !asset.value(QStringLiteral("name")).isString()
         || asset.value(QStringLiteral("name")).toString().isEmpty()
-        || !decimalString(asset.value(QStringLiteral("size")), &result.size)
+        || !githubUnsignedInteger(asset.value(QStringLiteral("size")), &result.size)
         || !asset.value(QStringLiteral("url")).isString()
         || !asset.value(QStringLiteral("browser_download_url")).isString()
         || !utcTimestamp(asset.value(QStringLiteral("updated_at")), &result.updatedAt)) {
@@ -213,7 +235,7 @@ UpdateResult<RollingUpdateCandidate> RollingUpdateParser::parseRelease(const QBy
     }
     const QJsonObject json = parsed.value;
     RollingUpdateCandidate candidate;
-    if (!decimalString(json.value(QStringLiteral("id")), &candidate.releaseId)
+    if (!githubUnsignedInteger(json.value(QStringLiteral("id")), &candidate.releaseId)
         || candidate.releaseId == 0
         || json.value(QStringLiteral("tag_name")).toString() != QString::fromLatin1(RollingTag)
         || !json.value(QStringLiteral("html_url")).isString()
@@ -358,9 +380,22 @@ UpdateResult<TagResolution> RollingUpdateParser::resolveTagCommit(
     const RollingTagObject &reference, const QList<RollingTagObject> &objects)
 {
     if ((reference.type != QStringLiteral("tag") && reference.type != QStringLiteral("commit"))
+        || !fullLowerHex(reference.id, 40)
         || !fullLowerHex(reference.targetId, 40)) {
         return failure<TagResolution>(UpdateError::InvalidMetadata,
                                       QStringLiteral("Tag reference is invalid."));
+    }
+
+    QSet<QString> objectIds;
+    for (const RollingTagObject &object : objects) {
+        if (!fullLowerHex(object.id, 40)
+            || !fullLowerHex(object.targetId, 40)
+            || (object.type != QStringLiteral("tag") && object.type != QStringLiteral("commit"))
+            || objectIds.contains(object.id)) {
+            return failure<TagResolution>(UpdateError::InvalidMetadata,
+                                          QStringLiteral("Tag object graph is ambiguous."));
+        }
+        objectIds.insert(object.id);
     }
     if (reference.type == QStringLiteral("commit")) {
         UpdateResult<TagResolution> result;
