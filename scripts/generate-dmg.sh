@@ -5,6 +5,7 @@ set -euo pipefail
 
 BUILD_CONFIG=${1:-}
 OVERRIDE_VERSION=${2:-}
+BUILD_PHASE=${3:-full}
 SIGNING_PROVIDER_SHORTNAME=${SIGNING_PROVIDER_SHORTNAME:-}
 SIGNING_IDENTITY=${SIGNING_IDENTITY:-}
 NOTARY_KEYCHAIN_PROFILE=${NOTARY_KEYCHAIN_PROFILE:-}
@@ -20,12 +21,18 @@ fail()
 if [[ "$BUILD_CONFIG" != "Debug" ]] && [[ "$BUILD_CONFIG" != "Release" ]]; then
   fail "Invalid build configuration - expected 'Debug' or 'Release'"
 fi
+if [[ "$BUILD_PHASE" != "full" ]] && \
+   [[ "$BUILD_PHASE" != "build-only" ]] && \
+   [[ "$BUILD_PHASE" != "package-only" ]]; then
+  fail "Invalid build phase - expected 'full', 'build-only', or 'package-only'"
+fi
 
 SOURCE_ROOT=$PWD
 BUILD_ROOT="$SOURCE_ROOT/build"
 BUILD_FOLDER="$BUILD_ROOT/build-$BUILD_CONFIG"
 INSTALLER_FOLDER="$BUILD_ROOT/installer-$BUILD_CONFIG"
 BUILT_APP_PATH="$BUILD_FOLDER/app/Artemis.app"
+BUILT_APP_EXECUTABLE="$BUILT_APP_PATH/Contents/MacOS/Artemis"
 APP_PATH="$BUILD_FOLDER/app/Vibertemis.app"
 APP_EXECUTABLE="$APP_PATH/Contents/MacOS/Artemis"
 
@@ -45,21 +52,32 @@ fi
 
 [[ -z "$SIGNING_IDENTITY" ]] || git diff-index --quiet HEAD -- || fail "Signed release builds must not have unstaged changes!"
 
-echo "Cleaning output directories"
-rm -rf "$BUILD_FOLDER" "$INSTALLER_FOLDER"
-mkdir -p "$BUILD_FOLDER" "$INSTALLER_FOLDER"
+if [[ "$BUILD_PHASE" != "package-only" ]]; then
+  echo "Cleaning output directories"
+  rm -rf "$BUILD_FOLDER" "$INSTALLER_FOLDER"
+  mkdir -p "$BUILD_FOLDER" "$INSTALLER_FOLDER"
 
-echo "Configuring the project for: $ARTEMIS_MAC_ARCHS"
-pushd "$BUILD_FOLDER" >/dev/null
-qmake "$SOURCE_ROOT/artemis.pro" \
-  "QMAKE_APPLE_DEVICE_ARCHS=$ARTEMIS_MAC_ARCHS" \
-  "QMAKE_MACOSX_DEPLOYMENT_TARGET=$MACOSX_DEPLOYMENT_TARGET" || fail "Qmake failed!"
-popd >/dev/null
+  echo "Configuring the project for: $ARTEMIS_MAC_ARCHS"
+  pushd "$BUILD_FOLDER" >/dev/null
+  qmake "$SOURCE_ROOT/artemis.pro" \
+    "QMAKE_APPLE_DEVICE_ARCHS=$ARTEMIS_MAC_ARCHS" \
+    "QMAKE_MACOSX_DEPLOYMENT_TARGET=$MACOSX_DEPLOYMENT_TARGET" || fail "Qmake failed!"
+  popd >/dev/null
 
-echo "Compiling Artemis in $BUILD_CONFIG configuration"
-pushd "$BUILD_FOLDER" >/dev/null
-make -j"$(sysctl -n hw.logicalcpu)" "$(echo "$BUILD_CONFIG" | tr '[:upper:]' '[:lower:]')" || fail "Make failed!"
-popd >/dev/null
+  echo "Compiling Artemis in $BUILD_CONFIG configuration"
+  pushd "$BUILD_FOLDER" >/dev/null
+  make -j"$(sysctl -n hw.logicalcpu)" "$(echo "$BUILD_CONFIG" | tr '[:upper:]' '[:lower:]')" || fail "Make failed!"
+  popd >/dev/null
+
+  if [[ "$BUILD_PHASE" == "build-only" ]]; then
+    [[ -x "$BUILT_APP_EXECUTABLE" ]] || fail "Built executable is missing: $BUILT_APP_EXECUTABLE"
+    echo "Executable build phase completed successfully: $BUILT_APP_EXECUTABLE"
+    exit 0
+  fi
+else
+  [[ -x "$BUILT_APP_EXECUTABLE" ]] || fail "Cannot package because the verified executable is missing: $BUILT_APP_EXECUTABLE"
+  mkdir -p "$INSTALLER_FOLDER"
+fi
 
 echo "Publishing Vibertemis app bundle"
 mv "$BUILT_APP_PATH" "$APP_PATH"

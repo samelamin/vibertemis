@@ -12,6 +12,7 @@ import tempfile
 MANIFEST_NAME = "com.artemisdesktop.ArtemisDesktopDev.json"
 CI_MANIFEST_NAME = "com.artemisdesktop.ArtemisDesktopDev.ci.json"
 APPLICATION_ID = "com.artemisdesktop.ArtemisDesktopDev"
+UINT64_MAX = 18446744073709551615
 IDENTITY_KEYS = (
     "VIBERTEMIS_BUILD_COMMIT",
     "VIBERTEMIS_UPDATE_CHANNEL",
@@ -93,6 +94,8 @@ def validate_identity(arguments):
         fail(f"--application-id must be exactly {APPLICATION_ID}")
 
     sequence = int(arguments.sequence, 10)
+    if sequence > UINT64_MAX:
+        fail(f"--sequence must not exceed {UINT64_MAX}")
     if arguments.channel == "rolling" and sequence <= 0:
         fail("rolling channel requires a positive sequence")
     if arguments.channel != "rolling" and sequence != 0:

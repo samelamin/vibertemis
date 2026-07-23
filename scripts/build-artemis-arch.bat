@@ -8,6 +8,14 @@ echo DEBUG: SCRIPT START - Current directory: %cd%
 rem Run from Qt command prompt with working directory set to root of repo
 
 set BUILD_CONFIG=%1
+set BUILD_PHASE=%2
+if "%BUILD_PHASE%"=="" set BUILD_PHASE=full
+
+if /I "%BUILD_PHASE%" NEQ "full" if /I "%BUILD_PHASE%" NEQ "build-only" if /I "%BUILD_PHASE%" NEQ "package-only" (
+    echo Invalid build phase - expected 'full', 'build-only', or 'package-only'
+    echo Usage: scripts\build-artemis-arch.bat ^(release^|debug^) [full^|build-only^|package-only]
+    exit /b 1
+)
 
 rem Convert to lower case for windeployqt
 if /I "%BUILD_CONFIG%"=="debug" (
@@ -157,6 +165,8 @@ if /I "%ARCH%" NEQ "arm64" (
 
 rem Find VC redistributable DLLs
 for /f "usebackq delims=" %%i in (`%VSWHERE% -latest -find VC\Redist\MSVC\*\%ARCH%\Microsoft.VC*.CRT`) do set VC_REDIST_DLL_PATH=%%i
+
+if /I "%BUILD_PHASE%"=="package-only" goto Packaging
 
 echo Cleaning output directories
 rmdir /s /q %DEPLOY_FOLDER%
@@ -328,6 +338,17 @@ if exist "app\%BUILD_CONFIG%\Artemis.exe" (
     if !ERRORLEVEL! NEQ 0 echo No files in app directory
 )
 popd
+
+if /I "%BUILD_PHASE%"=="build-only" (
+    echo Executable build phase completed successfully
+    exit /b 0
+)
+
+:Packaging
+if not exist "%BUILD_FOLDER%\app\%BUILD_CONFIG%\Artemis.exe" (
+    echo ERROR: Cannot package because the verified executable is missing
+    exit /b 1
+)
 
 echo Saving PDBs
 for /r "%BUILD_FOLDER%" %%f in (*.pdb) do (

@@ -8,6 +8,7 @@ SOURCE_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 MOUNT_DIR=
 LAUNCH_LOG=
 LAUNCH_PID=
+BUILD_INFO_FILE=
 EXPECTED_BUNDLE_VERSION=
 
 if [[ ${ARTEMIS_EXPECTED_BUNDLE_VERSION+x} == x ]]; then
@@ -49,6 +50,10 @@ cleanup()
     rm -f "$LAUNCH_LOG"
     LAUNCH_LOG=
   fi
+  if [[ -n "$BUILD_INFO_FILE" ]]; then
+    rm -f "$BUILD_INFO_FILE"
+    BUILD_INFO_FILE=
+  fi
   if [[ -n "$MOUNT_DIR" ]]; then
     hdiutil detach "$MOUNT_DIR" >/dev/null 2>&1 || true
   fi
@@ -74,6 +79,34 @@ verify_app()
 
   [[ -x "$executable" ]] || fail "missing executable: $executable"
   [[ -f "$info_plist" ]] || fail "missing bundle metadata: $info_plist"
+
+  BUILD_INFO_FILE=$(mktemp "${TMPDIR:-/tmp}/artemis-build-info.XXXXXX")
+  "$executable" --build-info >"$BUILD_INFO_FILE" || \
+    fail "unable to read native build identity from $executable"
+  python3 - "$BUILD_INFO_FILE" "$EXPECTED_BUNDLE_VERSION" <<'PY'
+import json
+import os
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as build_info_file:
+    data = json.load(build_info_file)
+
+assert data["schema"] == 1
+assert data["applicationId"] == os.environ.get(
+    "VIBERTEMIS_APPLICATION_ID", "com.artemis_desktop.Artemis"
+)
+if "VIBERTEMIS_BUILD_COMMIT" in os.environ:
+    assert data["commit"] == os.environ["VIBERTEMIS_BUILD_COMMIT"]
+if "VIBERTEMIS_UPDATE_CHANNEL" in os.environ:
+    assert data["channel"] == os.environ["VIBERTEMIS_UPDATE_CHANNEL"]
+if "VIBERTEMIS_BUILD_SEQUENCE" in os.environ:
+    assert data["sequence"] == os.environ["VIBERTEMIS_BUILD_SEQUENCE"]
+if sys.argv[2]:
+    assert data["version"] == sys.argv[2]
+assert data["internallyConsistent"] is True
+PY
+  rm -f "$BUILD_INFO_FILE"
+  BUILD_INFO_FILE=
 
   bundle_display_name=$(/usr/libexec/PlistBuddy -c 'Print:CFBundleDisplayName' "$info_plist") || \
     fail "unable to read CFBundleDisplayName from $info_plist"

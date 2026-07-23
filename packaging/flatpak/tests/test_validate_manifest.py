@@ -260,6 +260,32 @@ class ManifestValidatorTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertTrue(output_path.exists())
 
+    def test_ci_manifest_preparer_enforces_uint64_sequence_bounds(self):
+        uint64_max = "18446744073709551615"
+        for name, sequence, expected_success in (
+            ("maximum uint64", uint64_max, True),
+            ("uint64 overflow", "18446744073709551616", False),
+            ("much larger than uint64", "9" * 200, False),
+        ):
+            with self.subTest(name=name):
+                result, _, output_path, _ = self.run_manifest_preparer(
+                    valid_manifest(),
+                    channel="rolling",
+                    sequence=sequence,
+                )
+                if expected_success:
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    prepared = json.loads(
+                        output_path.read_text(encoding="utf-8")
+                    )
+                    self.assertIn(
+                        f"VIBERTEMIS_BUILD_SEQUENCE={uint64_max}",
+                        prepared["modules"][2]["config-opts"],
+                    )
+                else:
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertFalse(output_path.exists())
+
     def test_ci_manifest_preparer_rejects_ambiguous_or_unsafe_manifest(self):
         duplicate_module = valid_manifest()
         duplicate_module["modules"].append(

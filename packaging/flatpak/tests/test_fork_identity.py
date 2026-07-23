@@ -688,7 +688,7 @@ class ForkIdentityTests(unittest.TestCase):
             REPOSITORY_ROOT / ".github/workflows/dev-build.yml"
         ).read_text(encoding="utf-8")
         for obsolete_public_package_reference in (
-            "build/build-Release/app/Artemis.app",
+            "path: build/build-Release/app/Artemis.app",
             '"build/installer-Release/Artemis-$VERSION.dmg"',
             "name: artemis-macos-",
             "path: build/installer-Release/Artemis-",

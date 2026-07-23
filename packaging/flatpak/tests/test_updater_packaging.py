@@ -11,6 +11,10 @@ MAIN_QML = REPOSITORY_ROOT / "app" / "gui" / "main.qml"
 SETTINGS_QML = REPOSITORY_ROOT / "app" / "gui" / "SettingsView.qml"
 UPDATE_DIALOG_QML = REPOSITORY_ROOT / "app" / "gui" / "UpdateDialog.qml"
 WORKFLOW = REPOSITORY_ROOT / ".github" / "workflows" / "dev-build.yml"
+WINDOWS_BUILD_SCRIPT = REPOSITORY_ROOT / "scripts" / "build-artemis-arch.bat"
+MACOS_DMG_SCRIPT = REPOSITORY_ROOT / "scripts" / "generate-dmg.sh"
+MACOS_VERIFY_SCRIPT = REPOSITORY_ROOT / "scripts" / "verify-macos-bundle.sh"
+WINDOWS_WIX_PRODUCT = REPOSITORY_ROOT / "wix" / "Artemis" / "Product.wxs"
 
 
 class UpdaterQmlContractTests(unittest.TestCase):
@@ -25,6 +29,16 @@ class UpdaterQmlContractTests(unittest.TestCase):
             else ""
         )
         cls.workflow = WORKFLOW.read_text(encoding="utf-8")
+        cls.windows_build_script = WINDOWS_BUILD_SCRIPT.read_text(
+            encoding="utf-8"
+        )
+        cls.macos_dmg_script = MACOS_DMG_SCRIPT.read_text(encoding="utf-8")
+        cls.macos_verify_script = MACOS_VERIFY_SCRIPT.read_text(
+            encoding="utf-8"
+        )
+        cls.windows_wix_product = WINDOWS_WIX_PRODUCT.read_text(
+            encoding="utf-8"
+        )
 
     def test_update_dialog_is_packaged_as_a_qml_resource(self):
         self.assertTrue(UPDATE_DIALOG_QML.is_file())
@@ -519,6 +533,214 @@ class UpdaterQmlContractTests(unittest.TestCase):
         self.assertNotIn(
             r'build\build-arm64-release\app\release\Artemis.exe',
             universal_job,
+        )
+
+    def test_native_workflow_verifies_build_info_before_packaging(self):
+        x64_job = self.workflow[
+            self.workflow.index("  build-windows-x64-portable:") :
+            self.workflow.index("\n  build-windows-arm64-portable:")
+        ]
+        arm64_job = self.workflow[
+            self.workflow.index("  build-windows-arm64-portable:") :
+            self.workflow.index("\n  build-windows-msi-components:")
+        ]
+        msi_job = self.workflow[
+            self.workflow.index("  build-windows-msi-components:") :
+            self.workflow.index("\n  build-windows-universal-installer:")
+        ]
+        macos_job = self.workflow[
+            self.workflow.index("  build-macos-dev:") :
+            self.workflow.index("\n  build-linux-dev:")
+        ]
+
+        required_tokens = (
+            "release build-only",
+            "release package-only",
+            "- name: Package verified x64 executable",
+            "- name: Package verified ARM64 executable",
+            "- name: Verify MSI component identity",
+            "- name: Package verified MSI component",
+            './scripts/generate-dmg.sh Release "$VERSION" build-only',
+            './scripts/generate-dmg.sh Release "$VERSION" package-only',
+        )
+        self.assertEqual(
+            [],
+            [token for token in required_tokens if token not in self.workflow],
+        )
+
+        for name, job, verification_step, packaging_step in (
+            (
+                "x64 portable",
+                x64_job,
+                "- name: Verify x64 native build identity",
+                "- name: Package verified x64 executable",
+            ),
+            (
+                "ARM64 portable",
+                arm64_job,
+                "- name: Verify ARM64 native build identity",
+                "- name: Package verified ARM64 executable",
+            ),
+        ):
+            with self.subTest(job=name):
+                build = job.index(
+                    'cmd /c "scripts\\build-artemis-arch.bat '
+                    'release build-only"'
+                )
+                verify = job.index(verification_step)
+                package_step = job.index(packaging_step)
+                package = job.index(
+                    'cmd /c "scripts\\build-artemis-arch.bat '
+                    'release package-only"'
+                )
+                rename = job.index("- name: Rename", package)
+                self.assertLess(build, verify)
+                self.assertLess(verify, package_step)
+                self.assertLess(package_step, package)
+                self.assertLess(package, rename)
+
+        msi_build = msi_job.index(
+            'cmd /c "scripts\\build-artemis-arch.bat release build-only"'
+        )
+        msi_verify = msi_job.index("- name: Verify MSI component identity")
+        msi_package_step = msi_job.index(
+            "- name: Package verified MSI component"
+        )
+        msi_package = msi_job.index(
+            'cmd /c "scripts\\build-artemis-arch.bat release package-only"'
+        )
+        msi_handoff = msi_job.index("Copy-Item $msiFile.FullName")
+        msi_upload = msi_job.index("- name: Upload verified MSI component")
+        self.assertLess(msi_build, msi_verify)
+        self.assertLess(msi_verify, msi_package_step)
+        self.assertLess(msi_package_step, msi_package)
+        self.assertLess(msi_package, msi_handoff)
+        self.assertLess(msi_handoff, msi_upload)
+
+        macos_build = macos_job.index(
+            './scripts/generate-dmg.sh Release "$VERSION" build-only'
+        )
+        macos_preflight = macos_job.index(
+            "build/build-Release/app/Artemis.app/Contents/MacOS/Artemis"
+        )
+        macos_package = macos_job.index(
+            './scripts/generate-dmg.sh Release "$VERSION" package-only'
+        )
+        macos_postflight = macos_job.index(
+            "build/build-Release/app/Vibertemis.app/Contents/MacOS/Artemis",
+            macos_package,
+        )
+        mounted_verification = macos_job.index(
+            "./scripts/verify-macos-bundle.sh",
+            macos_postflight,
+        )
+        upload = macos_job.index("- name: Upload macOS DMG")
+        self.assertLess(macos_build, macos_preflight)
+        self.assertLess(macos_preflight, macos_package)
+        self.assertLess(macos_package, macos_postflight)
+        self.assertLess(macos_postflight, mounted_verification)
+        self.assertLess(mounted_verification, upload)
+
+    def test_packaging_scripts_preserve_default_and_split_phase_binding(self):
+        self.assertIn("build-only", self.windows_build_script)
+        self.assertIn("package-only", self.windows_build_script)
+        self.assertIn("build-only", self.macos_dmg_script)
+        self.assertIn("package-only", self.macos_dmg_script)
+        for phase in ("full", "build-only", "package-only"):
+            with self.subTest(windows_phase=phase):
+                self.assertIn(phase, self.windows_build_script)
+            with self.subTest(macos_phase=phase):
+                self.assertIn(phase, self.macos_dmg_script)
+
+        self.assertIn(
+            'if /I "%BUILD_PHASE%"=="package-only" goto Packaging',
+            self.windows_build_script,
+        )
+        self.assertIn(
+            'if /I "%BUILD_PHASE%"=="build-only"',
+            self.windows_build_script,
+        )
+        windows_package_jump = self.windows_build_script.index(
+            'if /I "%BUILD_PHASE%"=="package-only" goto Packaging'
+        )
+        windows_clean = self.windows_build_script.index(
+            "echo Cleaning output directories"
+        )
+        windows_build_only = self.windows_build_script.index(
+            'if /I "%BUILD_PHASE%"=="build-only"'
+        )
+        windows_package_label = self.windows_build_script.index(":Packaging")
+        windows_package = self.windows_build_script.index("echo Building MSI")
+        self.assertLess(windows_package_jump, windows_clean)
+        self.assertLess(windows_clean, windows_build_only)
+        self.assertLess(windows_build_only, windows_package_label)
+        self.assertLess(windows_package_label, windows_package)
+        self.assertRegex(
+            self.windows_build_script,
+            re.compile(
+                r'if not exist "%BUILD_FOLDER%\\app\\%BUILD_CONFIG%'
+                r'\\Artemis\.exe" \(\s*'
+                r"echo ERROR: Cannot package because the verified executable "
+                r"is missing\s*"
+                r"exit /b 1\s*"
+                r"\)",
+            ),
+        )
+
+        verified_executable = (
+            r"%BUILD_FOLDER%\app\%BUILD_CONFIG%\Artemis.exe"
+        )
+        self.assertIn(
+            f"copy {verified_executable} %DEPLOY_FOLDER%\\Artemis.exe",
+            self.windows_build_script,
+        )
+        self.assertIn(
+            'Source="$(var.BuildDir)\\app\\$(var.Configuration)'
+            '\\Artemis.exe"',
+            self.windows_wix_product,
+        )
+
+        self.assertIn(
+            'if [[ "$BUILD_PHASE" != "package-only" ]]',
+            self.macos_dmg_script,
+        )
+        self.assertIn(
+            'if [[ "$BUILD_PHASE" == "build-only" ]]',
+            self.macos_dmg_script,
+        )
+        macos_package_guard = self.macos_dmg_script.index(
+            'if [[ "$BUILD_PHASE" != "package-only" ]]'
+        )
+        macos_clean = self.macos_dmg_script.index(
+            'rm -rf "$BUILD_FOLDER" "$INSTALLER_FOLDER"'
+        )
+        macos_build_only = self.macos_dmg_script.index(
+            'if [[ "$BUILD_PHASE" == "build-only" ]]'
+        )
+        macos_move = self.macos_dmg_script.index(
+            'mv "$BUILT_APP_PATH" "$APP_PATH"'
+        )
+        self.assertLess(macos_package_guard, macos_clean)
+        self.assertLess(macos_clean, macos_build_only)
+        self.assertLess(macos_build_only, macos_move)
+
+    def test_macos_verifier_inspects_source_and_mounted_build_identity(self):
+        self.assertIn('"$executable" --build-info', self.macos_verify_script)
+        for field in (
+            "schema",
+            "applicationId",
+            "commit",
+            "channel",
+            "sequence",
+            "version",
+            "internallyConsistent",
+        ):
+            with self.subTest(field=field):
+                self.assertIn(f'data["{field}"]', self.macos_verify_script)
+        self.assertIn('verify_app "$APP_PATH"', self.macos_verify_script)
+        self.assertIn(
+            'verify_app "$MOUNT_DIR/Vibertemis.app"',
+            self.macos_verify_script,
         )
 
 

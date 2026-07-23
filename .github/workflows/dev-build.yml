@@ -295,8 +295,8 @@ jobs:
         # Add Qt to PATH for the build script
         $env:PATH = "$env:Qt6_DIR\bin;$env:PATH"
         
-        # Run the compatibility-named Vibertemis build script that handles everything
-        cmd /c "scripts\build-artemis-arch.bat release"
+        # Build the executable first so its stamped identity can be verified.
+        cmd /c "scripts\build-artemis-arch.bat release build-only"
         
         if ($LASTEXITCODE -ne 0) {
           echo "Build failed with exit code $LASTEXITCODE"
@@ -319,6 +319,12 @@ jobs:
             $buildInfo.internallyConsistent -ne $true) {
           throw "Unexpected x64 build identity: $($buildInfo | ConvertTo-Json -Compress)"
         }
+
+    - name: Package verified x64 executable
+      run: |
+        $env:PATH = "$env:Qt6_DIR\bin;$env:PATH"
+        cmd /c "scripts\build-artemis-arch.bat release package-only"
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     
     - name: Rename portable ZIP
       env:
@@ -434,7 +440,7 @@ jobs:
         
         # Run the build script
         echo "Running build script for ARM64..."
-        cmd /c "scripts\build-artemis-arch.bat release"
+        cmd /c "scripts\build-artemis-arch.bat release build-only"
         
         $buildExitCode = $LASTEXITCODE
         echo "Build script completed with exit code: $buildExitCode"
@@ -460,6 +466,15 @@ jobs:
             $buildInfo.internallyConsistent -ne $true) {
           throw "Unexpected ARM64 build identity: $($buildInfo | ConvertTo-Json -Compress)"
         }
+
+    - name: Package verified ARM64 executable
+      run: |
+        $qtVersionRoot = Join-Path $env:RUNNER_WORKSPACE "Qt\$env:QT_VERSION"
+        $qtArm64Path = Join-Path $qtVersionRoot "msvc2022_arm64"
+        $env:Qt6_DIR = $qtArm64Path
+        $env:PATH = "$qtArm64Path\bin;$env:PATH"
+        cmd /c "scripts\build-artemis-arch.bat release package-only"
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     
     - name: Rename ARM64 portable ZIP
       env:
@@ -554,27 +569,29 @@ jobs:
         arch: ${{ matrix.architecture == 'arm64' && 'arm64' || 'x64' }}
 
     - name: Update version file
+      shell: pwsh
       env:
         NUMERIC_VERSION: ${{ needs.setup-version.outputs.numeric_version }}
       run: echo $env:NUMERIC_VERSION > app\version.txt
 
-    - name: Build and verify MSI component
+    - name: Build MSI component executable
+      shell: pwsh
       env:
         SEMANTIC_VERSION: ${{ needs.setup-version.outputs.version }}
-        TARGET_ARCH: ${{ matrix.architecture }}
       run: |
         $env:PATH = "$env:Qt6_DIR\bin;$env:PATH"
-        cmd /c "scripts\build-artemis-arch.bat release"
+        cmd /c "scripts\build-artemis-arch.bat release build-only"
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+    - name: Verify MSI component identity
+      shell: pwsh
+      env:
+        TARGET_ARCH: ${{ matrix.architecture }}
+      run: |
         if ($env:TARGET_ARCH -eq "arm64") {
           $binary = "build\build-arm64-release\app\release\Artemis.exe"
-          $installerDirectory = "build\installer-arm64-release"
-          $handoffDirectory = "build\build-arm64-release"
         } else {
           $binary = "build\build-x64-release\app\release\Artemis.exe"
-          $installerDirectory = "build\installer-x64-release"
-          $handoffDirectory = "build\build-x64-release"
         }
         $buildInfo = (& $binary --build-info | ConvertFrom-Json)
         if ($LASTEXITCODE -ne 0) { throw "$binary --build-info failed" }
@@ -589,6 +606,22 @@ jobs:
           throw "Unexpected $env:TARGET_ARCH MSI build identity: $($buildInfo | ConvertTo-Json -Compress)"
         }
 
+    - name: Package verified MSI component
+      shell: pwsh
+      env:
+        TARGET_ARCH: ${{ matrix.architecture }}
+      run: |
+        $env:PATH = "$env:Qt6_DIR\bin;$env:PATH"
+        cmd /c "scripts\build-artemis-arch.bat release package-only"
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+        if ($env:TARGET_ARCH -eq "arm64") {
+          $installerDirectory = "build\installer-arm64-release"
+          $handoffDirectory = "build\build-arm64-release"
+        } else {
+          $installerDirectory = "build\installer-x64-release"
+          $handoffDirectory = "build\build-x64-release"
+        }
         $msiFile = Get-ChildItem -Path $installerDirectory -Filter "*.msi" |
           Select-Object -First 1
         if (-not $msiFile) {
@@ -763,9 +796,7 @@ jobs:
       run: |
         brew install create-dmg ffmpeg opus sdl2 sdl2_ttf
 
-    - name: Test, build, package, and verify macOS development build
-      env:
-        VERSION: ${{ needs.setup-version.outputs.version }}
+    - name: Test macOS refresh rate support
       run: |
         export PATH="$Qt6_DIR/bin:$PATH"
         mkdir -p build/tests-refreshrate
@@ -773,17 +804,53 @@ jobs:
         qmake6 ../../tests/refreshrate/refreshrate.pro
         make -j"$(sysctl -n hw.logicalcpu)"
         ./tst_refreshrate
-        cd "$GITHUB_WORKSPACE"
+
+    - name: Build macOS executable
+      env:
+        VERSION: ${{ needs.setup-version.outputs.version }}
+      run: |
+        export PATH="$Qt6_DIR/bin:$PATH"
         echo "::warning::This macOS development build is unsigned and may trigger Gatekeeper warnings."
-        ARTEMIS_MAC_ARCHS="$(uname -m)" ./scripts/generate-dmg.sh Release "$VERSION"
-        build/build-Release/app/Vibertemis.app/Contents/MacOS/Artemis \
+        ARTEMIS_MAC_ARCHS="$(uname -m)" \
+          ./scripts/generate-dmg.sh Release "$VERSION" build-only
+
+    - name: Verify macOS executable identity before packaging
+      run: |
+        build/build-Release/app/Artemis.app/Contents/MacOS/Artemis \
           --build-info > native-build-info.json
-        export EXPECTED_VERSION="$(tr -d '\r\n' < app/version.txt)"
+        EXPECTED_VERSION="$(tr -d '\r\n' < app/version.txt)"
+        export EXPECTED_VERSION
         python3 - <<'PY'
         import json
         import os
 
         with open("native-build-info.json", encoding="utf-8") as build_info_file:
+            data = json.load(build_info_file)
+        assert data["schema"] == 1
+        assert data["applicationId"] == os.environ["VIBERTEMIS_APPLICATION_ID"]
+        assert data["commit"] == os.environ["VIBERTEMIS_BUILD_COMMIT"]
+        assert data["channel"] == os.environ["VIBERTEMIS_UPDATE_CHANNEL"]
+        assert data["sequence"] == "0"
+        assert data["version"] == os.environ["EXPECTED_VERSION"]
+        assert data["internallyConsistent"] is True
+        PY
+
+    - name: Package and verify macOS development build
+      env:
+        VERSION: ${{ needs.setup-version.outputs.version }}
+      run: |
+        export PATH="$Qt6_DIR/bin:$PATH"
+        ARTEMIS_MAC_ARCHS="$(uname -m)" \
+          ./scripts/generate-dmg.sh Release "$VERSION" package-only
+        build/build-Release/app/Vibertemis.app/Contents/MacOS/Artemis \
+          --build-info > packaged-native-build-info.json
+        EXPECTED_VERSION="$(tr -d '\r\n' < app/version.txt)"
+        export EXPECTED_VERSION
+        python3 - <<'PY'
+        import json
+        import os
+
+        with open("packaged-native-build-info.json", encoding="utf-8") as build_info_file:
             data = json.load(build_info_file)
         assert data["schema"] == 1
         assert data["applicationId"] == os.environ["VIBERTEMIS_APPLICATION_ID"]
