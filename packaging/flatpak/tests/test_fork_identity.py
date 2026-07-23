@@ -1365,6 +1365,37 @@ class ForkIdentityTests(unittest.TestCase):
         )
         self.assertLess(second_guard, tag_move)
 
+    def test_steam_deck_publisher_has_final_adjacent_main_guard_before_tag_move(self):
+        workflow = (
+            REPOSITORY_ROOT / ".github/workflows/dev-build.yml"
+        ).read_text(encoding="utf-8")
+        job = workflow_job_block(workflow, "publish-steam-deck-release")
+
+        tag_move = job.index(
+            'gh api --method PATCH '
+            '"repos/$GH_REPO/git/refs/tags/steam-deck-latest"'
+        )
+        final_guard = job.index(
+            'final_main_head="$(gh api '
+            '"repos/$GH_REPO/git/ref/heads/main" --jq \'.object.sha\')"'
+        )
+        last_existing_tag_validation = job.rindex(
+            "validate_preexisting_tag_sha",
+            0,
+            tag_move,
+        )
+        self.assertLess(last_existing_tag_validation, final_guard)
+        self.assertLess(final_guard, tag_move)
+        self.assertIn(
+            'if [ "$final_main_head" != "$SOURCE_COMMIT" ]; then',
+            job[final_guard:tag_move],
+        )
+
+        guard_to_move = job[final_guard:tag_move]
+        self.assertEqual(1, guard_to_move.count("gh api"))
+        for network_command in ("curl ", "wget ", "gh release "):
+            self.assertNotIn(network_command, guard_to_move)
+
     def test_steam_deck_publisher_deletes_only_confirmed_existing_assets(self):
         workflow = (
             REPOSITORY_ROOT / ".github/workflows/dev-build.yml"

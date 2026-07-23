@@ -1927,6 +1927,11 @@ jobs:
             esac
           done
 
+          final_main_head="$(gh api "repos/$GH_REPO/git/ref/heads/main" --jq '.object.sha')"
+          if [ "$final_main_head" != "$SOURCE_COMMIT" ]; then
+            echo "Refusing to move rolling tag: main advanced to $final_main_head"
+            exit 1
+          fi
           gh api --method PATCH "repos/$GH_REPO/git/refs/tags/steam-deck-latest" \
             -f sha="$SOURCE_COMMIT" \
             -F force=true
