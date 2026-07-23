@@ -205,7 +205,7 @@ NavigableDialog {
 
     Connections {
         target: AutoUpdateChecker
-        function onStateChanged() {
+        onStateChanged: {
             if (updateDialog.visible) {
                 focusStateAction.restart()
             }

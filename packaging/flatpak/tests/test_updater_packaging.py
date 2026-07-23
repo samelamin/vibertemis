@@ -244,8 +244,13 @@ class UpdaterQmlContractTests(unittest.TestCase):
             self.dialog,
             r"Connections\s*\{[\s\S]{0,300}"
             r"target:\s*AutoUpdateChecker[\s\S]{0,500}"
-            r"(?:onStateChanged:|function\s+onStateChanged\(\))"
-            r"[\s\S]{0,300}focus",
+            r"onStateChanged:[\s\S]{0,300}focus",
+        )
+        self.assertNotRegex(
+            self.dialog,
+            r"Connections\s*\{[\s\S]{0,300}"
+            r"target:\s*AutoUpdateChecker[\s\S]{0,500}"
+            r"function\s+onStateChanged\(\)",
         )
         self.assertIn(
             "nextItemInFocusChain(true).forceActiveFocus(Qt.TabFocus)",
