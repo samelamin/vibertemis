@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Single launcher icon for Vibertemis XR Preview.
+
+  We override the upstream ic_launcher.xml by placing an identical-name file
+  in quest/overlay/src/main/res/mipmap-anydpi-v26/. The Android Gradle merge
+  picks the overlay file. Upstream PNGs (mipmap-*dpi/ic_launcher.png) are
+  left in place so non-adaptive OSes still have a fallback.
+-->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/ic_launcher_background"/>
+    <foreground android:drawable="@drawable/ic_vibertemis_preview"/>
+    <monochrome android:drawable="@drawable/ic_vibertemis_preview"/>
+</adaptive-icon>

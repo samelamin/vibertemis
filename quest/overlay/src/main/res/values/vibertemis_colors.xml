@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Overlay colours used by the hub UI. Only includes the colours that are
+  strictly new — the existing ic_launcher_background lives upstream.
+-->
+<resources>
+    <color name="hub_panel_bg">#0E1116</color>
+    <color name="hub_panel_fg">#E6EAF0</color>
+    <color name="hub_panel_subtle">#7A8392</color>
+    <color name="hub_panel_warn">#F2A65A</color>
+</resources>

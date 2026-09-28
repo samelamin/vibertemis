@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="hub_title">Vibertemis XR Preview</string>
+    <string name="hub_subtitle_default">Choose a launch mode</string>
+    <string name="hub_subtitle_companion_required">A companion must be running on the PC for either mode. See Streaming settings for the setup URLs.</string>
+
+    <string name="hub_btn_screen">Screen gaming</string>
+    <string name="hub_btn_screen_summary">Flat / 3D / cinema streaming from your Apollo or Sunshine PC.</string>
+
+    <string name="hub_btn_steamvr">SteamVR (PCVR)</string>
+    <string name="hub_steamvr_unsupported">PCVR is only available on a VR headset with an OpenXR runtime installed.</string>
+    <string name="hub_steamvr_companion_reminder">PCVR requires the ALVR v20.14.1 companion on the PC that runs SteamVR. The PC setup guide is included in this APK.</string>
+    <string name="hub_mic_denied">Microphone permission is required for PCVR voice chat. PCVR not started.</string>
+
+    <string name="hub_btn_settings">Streaming settings</string>
+
+    <string name="hub_companion_dialog_title">PCVR companion setup</string>
+    <string name="hub_companion_dialog_msg">PCVR requires ALVR v20.14.1 server installed on the same PC that runs SteamVR. The PC setup guide is included in this APK. We do not detect the PC from the headset.</string>
+    <string name="hub_companion_dialog_dismiss">Don\'t show again</string>
+
+    <string name="profile_category_title">Screen streaming presets</string>
+    <string name="profile_category_summary">Apply one of the bundled Home / Travel screen-streaming presets to the existing Moonlight streaming preferences, or use Custom to preserve whatever is currently set. Tapping Apply writes the upstream preference keys; opening this screen does not apply anything.</string>
+
+    <string name="profile_home_title">Home preset</string>
+    <string name="profile_home_summary">2560x1440 @ 72 fps, ~40 Mbps, codec auto. For a quiet wired or Wi-Fi 6 LAN.</string>
+    <string name="profile_travel_title">Travel preset</string>
+    <string name="profile_travel_summary">1920x1080 @ 60 fps, ~17 Mbps, codec auto. Conservative defaults for cellular or hotel Wi-Fi; raw bandwidth is not the only factor.</string>
+    <string name="profile_custom_title">Custom preset</string>
+    <string name="profile_custom_summary">Saves the choice \"Custom\" only. Your currently configured streaming settings (resolution, fps, bitrate, codec) are not touched.</string>
+
+    <string name="profile_apply_btn">Apply preset</string>
+    <string name="profile_reset_btn">Reset to upstream defaults</string>
+
+    <string name="pcvr_host_section_title">PCVR (host-owned) settings</string>
+    <string name="pcvr_host_section_summary">PCVR quality, fixed foveated ENCODING, codec, refresh and resolution are owned by the ALVR server on the PC, NOT by this app. There are no working local sliders here.</string>
+    <string name="pcvr_host_item_adaptive_bitrate">Adaptive bitrate — on by default in ALVR; lets the server drop bitrate on packet loss.</string>
+    <string name="pcvr_host_item_fixed_foveation">Fixed foveated ENCODING — ALVR\'s per-tile encoder quality, not local rendering. Reduces encoder load; can save 15–25%% bitrate at slight quality cost at the periphery.</string>
+    <string name="pcvr_host_item_codec">Codec — ALVR defaults to HEVC; AV1 available when the host GPU supports it; H.264 fallback for older GPUs.</string>
+    <string name="pcvr_host_item_refresh">Refresh rate — set on the ALVR dashboard. Quest3 hardware supports 60/72/90/120 Hz modes.</string>
+    <string name="pcvr_host_item_resolution">Resolution — set on the ALVR dashboard. Per-eye 1.5x–2.0x overshoot over the headset panel is typical.</string>
+
+    <string name="vr_category_headset_only_title">VR settings (headset only)</string>
+    <string name="vr_category_headset_only_summary">Hidden on phones and TVs. Tapping here expands the same VR settings Moonlight exposes upstream; tapping a child preference behaves exactly like the upstream app.</string>
+
+    <string name="setup_help_section_title">Companion setup</string>
+    <string name="setup_help_section_summary">Setup URLs and notes for the two PC companions.</string>
+    <string name="setup_help_apollo_url">Apollo: https://github.com/ClassicOldSong/Apollo</string>
+    <string name="setup_help_sunshine_url">Sunshine: https://github.com/LizardByte/Sunshine</string>
+    <string name="setup_help_alvr_url">ALVR v20.14.1: https://github.com/alvr-org/ALVR/releases/tag/v20.14.1</string>
+</resources>

@@ -86,3 +86,19 @@ config.log
 *.a
 config.log
 **/qml_qmlcache.qrc
+
+# Quest3 VR preview (quest/) — build-only artefacts and secrets.
+# The generated build tree is build/quest/ (ignored above). quest/build/
+# contains tracked recipes (the *.sh helpers) that an archive user runs
+# to rebuild from source. The negation rules below re-include
+# quest/build/*.sh and quest/tests/* while keeping all generated build
+# output (build/quest/upstream/, alvr_client_android_*.apk, .gradle
+# caches, etc.) ignored.
+quest/build/*
+!quest/build/*.sh
+!quest/build/*.sh.in
+!quest/build/
+quest/dist/
+*.keystore
+keystore.properties
+quest/keystore.properties

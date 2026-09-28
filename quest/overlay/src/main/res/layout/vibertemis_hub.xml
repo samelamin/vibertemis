@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Hub panel layout. Plain LinearLayout, no OpenXR, no special theme requirements.
+  All strings come from the overlay strings.xml so we can keep the upstream
+  strings.xml untouched.
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="24dp">
+
+    <TextView
+        android:id="@+id/hub_title"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:textSize="28sp"
+        android:textStyle="bold"
+        android:text="@string/hub_title" />
+
+    <TextView
+        android:id="@+id/hub_subtitle"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:textSize="14sp"
+        android:text="@string/hub_subtitle_default" />
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:layout_marginTop="16dp"
+        android:layout_marginBottom="16dp"
+        android:background="#33FFFFFF" />
+
+    <Button
+        android:id="@+id/hub_btn_screen"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/hub_btn_screen" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:layout_marginBottom="12dp"
+        android:textSize="12sp"
+        android:text="@string/hub_btn_screen_summary" />
+
+    <Button
+        android:id="@+id/hub_btn_steamvr"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/hub_btn_steamvr" />
+
+    <TextView
+        android:id="@+id/hub_steamvr_note"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:textSize="12sp"
+        android:visibility="gone"
+        android:text="@string/hub_steamvr_unsupported" />
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1" />
+
+    <Button
+        android:id="@+id/hub_btn_settings"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/hub_btn_settings" />
+
+</LinearLayout>

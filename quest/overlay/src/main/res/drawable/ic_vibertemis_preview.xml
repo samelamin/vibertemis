@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Vibertemis XR Preview vector icon. 108x108 dp inside the adaptive-icon safe
+  area (66x66 dp centred). Pure vector so it is reproducible from text.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Inner mark: stylised "V" with a circle, representing the Vibertemis
+         badge. Designed for the 66x66 dp safe area inside an adaptive icon. -->
+    <group android:translateX="22" android:translateY="22">
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M32,4 L48,4 L36,40 L24,40 L20,22 L28,22 Z" />
+        <path
+            android:fillColor="#FFFFFF"
+            android:strokeColor="#FFFFFF"
+            android:strokeWidth="3"
+            android:pathData="M32,52 m-14,0 a14,14 0 1,0 28,0 a14,14 0 1,0 -28,0" />
+        <path
+            android:fillColor="#0E1116"
+            android:pathData="M32,52 m-7,0 a7,7 0 1,0 14,0 a7,7 0 1,0 -14,0" />
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M32,52 m-3,0 a3,3 0 1,0 6,0 a3,3 0 1,0 -6,0" />
+    </group>
+</vector>
