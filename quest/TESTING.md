@@ -2,13 +2,62 @@
 
 ## Automated tests (build host)
 
-`./gradlew testNonRootDebugUnitTest` runs the unit suite. The 37 tests
-covering prefs, routing, mic, and guard logic do not load native code;
-`ShadowMoonBridge` skips JNI init only. All 37 passed before the final
-manifest delta; a current rerun will refresh the count.
+`./gradlew testNonRootDebugUnitTest` runs the unit suite. The build
+host runs 99 tests, 0 failures. Tests cover prefs, routing, mic,
+capability gating, per-instance SettingsController wiring, top status
+preference observer refresh, hub launch / request / permission guards,
+PackageManager launcher-category resolution, the inflated
+SettingsFragment depth-source list, and Robolectric XML inflation.
+They do not load native code; `ShadowMoonBridge` skips JNI init only.
+All tests must pass before the build is considered green.
 
 The signed preview APK was statically verified for package, libs, and
 entrypoint. Headset and host hardware were not available.
+
+## Robolectric rendering screenshots
+
+The build host also runs Robolectric with `GraphicsMode.NATIVE` to
+produce PNG screenshots of the hub, Setup, and Streaming settings
+screens. PNGs land at
+`build/quest/upstream/app/build/reports/quest-ui/` with the following
+filenames (all written at the exact requested pixel viewport, all
+non-blank per the test's full-bitmap distinct-color scan):
+
+- `hub_phone_360x640.png`
+- `hub_phone_fontscale_1_6_360x640.png`
+- `hub_phone_landscape_640x360.png`
+- `hub_headset_1000x700.png`
+- `hub_headset_fontscale_1_6_1000x700.png`
+- `setup_phone_360x640.png`
+- `setup_phone_fontscale_1_6_360x640.png`
+- `setup_headset_1000x700.png`
+- `settings_top_1000x700.png`
+- `settings_presets_1000x700.png`
+- `settings_vr_1000x700.png`
+
+The hub layouts come from `vibertemis_hub.xml` (inflated via
+`setContentView` in `MainHubActivity.onCreate`); the Streaming
+settings screens come from `app/src/main/res/xml/preferences.xml`
+(inflated via `addPreferencesFromResource` in the upstream
+`StreamSettings.SettingsFragment`); the Setup screen is built
+programmatically from `LinearLayout`/`TextView`/`Button` views in
+`SetupActivity.onCreate` and is not driven from a layout XML — the
+tests snapshot the actual rendered `View` tree either way.
+
+These render the actual Android views through the framework's normal
+inflation path with the Skia-backed NATIVE graphics mode. They are
+not a substitute for headset hardware testing — they prove the
+views inflate, lay out, and draw without crashing, and that the
+visible text fits at fontScale 1.6 and in landscape; they cannot
+prove runtime behaviour on the device.
+
+The test asserts the bitmap's exact dimensions, that the distinct-
+color count exceeds 16, and that more than 500 pixels differ from
+the top-left background corner; PNG compression must also succeed
+(`writePng` returns / file is non-zero size). The non-blank check
+scans every pixel of the rendered bitmap — a sparse 8x8 sample grid
+was found to miss rendered text on near-black backgrounds; the full
+scan catches actual rendered rows.
 
 ## Hardware checklist (user must execute)
 

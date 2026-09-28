@@ -1,76 +1,118 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Hub panel layout. Plain LinearLayout, no OpenXR, no special theme requirements.
-  All strings come from the overlay strings.xml so we can keep the upstream
-  strings.xml untouched.
+  Hub panel layout. Plain ScrollView / LinearLayout. No OpenXR, no special
+  theme requirements. Buttons use the platform theme's selectable
+  background (native focus / ripple) and are sized for headset ray-cast
+  targets (56dp minHeight). We deliberately do NOT set
+  android:textColor on the buttons: the platform theme chooses
+  foreground/background together so we never paint white text on a
+  light native button.
 -->
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:orientation="vertical"
-    android:padding="24dp">
+    android:background="@color/hub_panel_bg"
+    android:fillViewport="true">
 
-    <TextView
-        android:id="@+id/hub_title"
+    <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:textSize="28sp"
-        android:textStyle="bold"
-        android:text="@string/hub_title" />
+        android:orientation="vertical"
+        android:paddingStart="24dp"
+        android:paddingEnd="24dp"
+        android:paddingTop="24dp"
+        android:paddingBottom="32dp">
 
-    <TextView
-        android:id="@+id/hub_subtitle"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="4dp"
-        android:textSize="14sp"
-        android:text="@string/hub_subtitle_default" />
+        <TextView
+            android:id="@+id/hub_title"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textSize="28sp"
+            android:textStyle="bold"
+            android:textColor="@color/hub_panel_fg"
+            android:text="@string/hub_title" />
 
-    <View
-        android:layout_width="match_parent"
-        android:layout_height="1dp"
-        android:layout_marginTop="16dp"
-        android:layout_marginBottom="16dp"
-        android:background="#33FFFFFF" />
+        <TextView
+            android:id="@+id/hub_subtitle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:textSize="16sp"
+            android:textColor="@color/hub_panel_subtle"
+            android:text="@string/hub_subtitle_default" />
 
-    <Button
-        android:id="@+id/hub_btn_screen"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="@string/hub_btn_screen" />
+        <TextView
+            android:id="@+id/hub_status"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:textSize="16sp"
+            android:textColor="@color/hub_panel_fg"
+            android:text="@string/hub_status_unknown" />
 
-    <TextView
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="4dp"
-        android:layout_marginBottom="12dp"
-        android:textSize="12sp"
-        android:text="@string/hub_btn_screen_summary" />
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:layout_marginTop="16dp"
+            android:layout_marginBottom="16dp"
+            android:background="#33FFFFFF" />
 
-    <Button
-        android:id="@+id/hub_btn_steamvr"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="@string/hub_btn_steamvr" />
+        <Button
+            android:id="@+id/hub_btn_screen"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:minHeight="56dp"
+            android:textSize="18sp"
+            android:text="@string/hub_btn_screen"
+            android:contentDescription="@string/hub_btn_screen" />
 
-    <TextView
-        android:id="@+id/hub_steamvr_note"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="4dp"
-        android:textSize="12sp"
-        android:visibility="gone"
-        android:text="@string/hub_steamvr_unsupported" />
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:layout_marginBottom="12dp"
+            android:textSize="16sp"
+            android:textColor="@color/hub_panel_subtle"
+            android:text="@string/hub_btn_screen_summary" />
 
-    <View
-        android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_weight="1" />
+        <Button
+            android:id="@+id/hub_btn_steamvr"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:minHeight="56dp"
+            android:textSize="18sp"
+            android:text="@string/hub_btn_steamvr"
+            android:contentDescription="@string/hub_btn_steamvr" />
 
-    <Button
-        android:id="@+id/hub_btn_settings"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="@string/hub_btn_settings" />
+        <TextView
+            android:id="@+id/hub_steamvr_note"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:layout_marginBottom="12dp"
+            android:textSize="16sp"
+            android:textColor="@color/hub_panel_subtle"
+            android:visibility="gone"
+            android:text="@string/hub_steamvr_unsupported" />
 
-</LinearLayout>
+        <Button
+            android:id="@+id/hub_btn_settings"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:minHeight="56dp"
+            android:textSize="18sp"
+            android:text="@string/hub_btn_settings"
+            android:contentDescription="@string/hub_btn_settings" />
+
+        <Button
+            android:id="@+id/hub_btn_setup"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:minHeight="56dp"
+            android:textSize="18sp"
+            android:text="@string/hub_btn_setup"
+            android:contentDescription="@string/hub_btn_setup" />
+
+    </LinearLayout>
+</ScrollView>

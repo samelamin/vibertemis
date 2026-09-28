@@ -1,50 +1,168 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+
+    <!-- Hub panel -->
     <string name="hub_title">Vibertemis XR Preview</string>
     <string name="hub_subtitle_default">Choose a launch mode</string>
-    <string name="hub_subtitle_companion_required">A companion must be running on the PC for either mode. See Streaming settings for the setup URLs.</string>
+    <string name="hub_subtitle_companion_required">A companion program must be running on the PC for either mode. Tap Setup for instructions.</string>
+    <string name="hub_status_no_profile">Streaming settings not yet configured.</string>
+    <string name="hub_status_screen_summary">Screen streaming: %1$s @ %2$s fps, %3$s Mbps, codec %4$s.</string>
+    <string name="hub_status_unknown">Screen streaming: open Streaming settings to choose values.</string>
 
     <string name="hub_btn_screen">Screen gaming</string>
-    <string name="hub_btn_screen_summary">Flat / 3D / cinema streaming from your Apollo or Sunshine PC.</string>
+    <string name="hub_btn_screen_summary">Stream PC games to a virtual screen on the headset or phone. Optional synthetic 3D on headsets.</string>
 
     <string name="hub_btn_steamvr">SteamVR (PCVR)</string>
-    <string name="hub_steamvr_unsupported">PCVR is only available on a VR headset with an OpenXR runtime installed.</string>
-    <string name="hub_steamvr_companion_reminder">PCVR requires the ALVR v20.14.1 companion on the PC that runs SteamVR. The PC setup guide is included in this APK.</string>
-    <string name="hub_mic_denied">Microphone permission is required for PCVR voice chat. PCVR not started.</string>
+    <string name="hub_steamvr_unsupported">PCVR requires a VR headset.</string>
+    <string name="hub_steamvr_companion_reminder">PCVR requires the ALVR v20.14.1 companion running on the PC that runs SteamVR. See Setup on this screen.</string>
+    <string name="hub_mic_denied">Microphone permission is required to start SteamVR. PCVR not started.</string>
 
     <string name="hub_btn_settings">Streaming settings</string>
+    <string name="hub_btn_setup">Setup</string>
 
-    <string name="hub_companion_dialog_title">PCVR companion setup</string>
-    <string name="hub_companion_dialog_msg">PCVR requires ALVR v20.14.1 server installed on the same PC that runs SteamVR. The PC setup guide is included in this APK. We do not detect the PC from the headset.</string>
-    <string name="hub_companion_dialog_dismiss">Don\'t show again</string>
+    <!-- Back row in nested settings / setup. -->
+    <string name="back_row_title">Back</string>
+    <string name="back_row_summary">Return to the previous screen.</string>
 
+    <!-- Setup screen -->
+    <string name="setup_title">Setup</string>
+    <string name="setup_intro">Two streaming modes share this build. Both need a companion program running on the PC the headset or phone talks to. Pick the mode that matches your use case; the section below covers both.</string>
+
+    <string name="setup_screen_mode_title">Screen gaming (Sunshine, Apollo)</string>
+    <string name="setup_screen_mode_body">Screen gaming streams PC games to a virtual screen on the headset or phone. The PC runs Sunshine (or Apollo, an alternative Sunshine-based host). The headset client pairs with the host over the local network.</string>
+    <string name="setup_screen_mode_steps_pc">Steps on the PC:</string>
+    <string name="setup_screen_mode_step1">Install Sunshine (or Apollo) on the PC and launch it.</string>
+    <string name="setup_screen_mode_step2">The host is now discoverable over the local network.</string>
+    <string name="setup_screen_mode_steps_headset">Steps on the headset:</string>
+    <string name="setup_screen_mode_headset_step1">Run Screen gaming on the headset.</string>
+    <string name="setup_screen_mode_headset_step2">Pick the discovered PC (or Add PC by address).</string>
+    <string name="setup_screen_mode_headset_step3">The headset shows a PIN. Open the Sunshine (or Apollo) web UI on the PC and enter that PIN to pair.</string>
+    <string name="setup_screen_mode_headset_step4">Pick the game or Desktop entry in the app list to start streaming.</string>
+
+    <string name="setup_pcvr_mode_title">PCVR (ALVR v20.14.1)</string>
+    <string name="setup_pcvr_mode_body">PCVR streams SteamVR to the headset with full head and controller tracking. The PC host runs ALVR v20.14.1; the headset client is this app.</string>
+    <string name="setup_pcvr_steps_pc">Steps on the PC:</string>
+    <string name="setup_pcvr_step1">Install Steam and SteamVR.</string>
+    <string name="setup_pcvr_step2">Download ALVR v20.14.1 streamer (Windows or Linux) and launch the ALVR Dashboard.</string>
+    <string name="setup_pcvr_step3">Let the ALVR wizard register its SteamVR driver.</string>
+    <string name="setup_pcvr_step4">Run SteamVR on the PC.</string>
+    <string name="setup_pcvr_steps_headset">Steps on the headset:</string>
+    <string name="setup_pcvr_headset_step1">Run SteamVR (PCVR) on the headset. Grant microphone permission when prompted.</string>
+    <string name="setup_pcvr_headset_step2">In the ALVR dashboard on your PC, trust the discovered headset.</string>
+    <string name="setup_pcvr_headset_step3">Launch a VR game from SteamVR on your PC or from the SteamVR library in the headset.</string>
+
+    <string name="setup_pcvr_mic_note">This preview build requires microphone permission to start SteamVR. You can control voice chat in the ALVR dashboard.</string>
+    <string name="setup_pcvr_wan_note">PCVR over the public Internet requires a VPN that passes UDP. The headset has no built-in port-forwarding or relay; enter the peer\'s VPN-side IP in the ALVR dashboard.</string>
+    <string name="setup_pcvr_tuning_note">For best results over LAN: 5 GHz Wi-Fi or wired, a 90–120 Hz headset refresh rate, and disable other high-bandwidth traffic during a session. WAN: expect higher latency and jitter — session quality is dominated by RTT and loss, not raw bandwidth.</string>
+    <string name="setup_pcvr_troubleshoot_note">If PCVR will not connect: confirm the ALVR dashboard is running on the PC, that the headset and PC are on the same network, that SteamVR is running, and that no firewall is blocking UDP between them. The dashboard log shows the negotiated headset client.</string>
+
+    <string name="setup_open_link">Open</string>
+    <string name="setup_copy_link">Copy link</string>
+    <string name="setup_link_copied">Link copied to clipboard.</string>
+    <string name="setup_link_no_browser">No browser available. Link copied.</string>
+    <string name="setup_link_copy_failed">Copy failed: no clipboard service available.</string>
+    <string name="setup_downloads_title">Downloads</string>
+    <string name="setup_url_alvr_windows">ALVR streamer (Windows)</string>
+    <string name="setup_url_alvr_linux">ALVR streamer (Linux)</string>
+    <string name="setup_url_sunshine">Sunshine</string>
+    <string name="setup_url_apollo">Apollo</string>
+    <string name="setup_url_requirements">ALVR PC requirements (CPU, GPU, network)</string>
+
+    <!-- Mic rationale dialog -->
+    <string name="mic_rationale_title">Microphone permission is required for SteamVR</string>
+    <string name="mic_rationale_msg">This preview requires microphone permission to start SteamVR. You can control voice chat in the ALVR dashboard.</string>
+    <string name="mic_recovery_title">PCVR not started</string>
+    <string name="mic_recovery_msg">Microphone access is required before PCVR can start. If the system permission dialog no longer appears, open this app\'s system settings to grant Microphone permission, then tap SteamVR (PCVR) again.</string>
+    <string name="mic_recovery_retry">Retry</string>
+    <string name="mic_recovery_open_settings">Open app settings</string>
+    <string name="mic_recovery_dismiss">Dismiss</string>
+    <string name="mic_recovery_settings_failed">Could not open app settings.</string>
+
+    <!-- Nested Back row. Reused by every nested PreferenceScreen and by
+         SetupActivity. -->
+    <string name="nested_back_row_title">Back</string>
+    <string name="nested_back_row_summary">Return to the previous screen.</string>
+
+    <!-- Profile presets -->
     <string name="profile_category_title">Screen streaming presets</string>
-    <string name="profile_category_summary">Apply one of the bundled Home / Travel screen-streaming presets to the existing Moonlight streaming preferences, or use Custom to preserve whatever is currently set. Tapping Apply writes the upstream preference keys; opening this screen does not apply anything.</string>
+    <string name="profile_category_summary">Apply one of the bundled Home, Travel, or High quality LAN screen-streaming presets. Each preset only changes resolution, fps, bitrate, and codec. Other settings (depth, frame pacing, inputs) stay where they are. Custom preserves your current values.</string>
 
-    <string name="profile_home_title">Home preset</string>
-    <string name="profile_home_summary">2560x1440 @ 72 fps, ~40 Mbps, codec auto. For a quiet wired or Wi-Fi 6 LAN.</string>
-    <string name="profile_travel_title">Travel preset</string>
-    <string name="profile_travel_summary">1920x1080 @ 60 fps, ~17 Mbps, codec auto. Conservative defaults for cellular or hotel Wi-Fi; raw bandwidth is not the only factor.</string>
-    <string name="profile_custom_title">Custom preset</string>
-    <string name="profile_custom_summary">Saves the choice \"Custom\" only. Your currently configured streaming settings (resolution, fps, bitrate, codec) are not touched.</string>
+    <string name="profile_home_title">Home</string>
+    <string name="profile_home_summary">2560x1440 @ 72 fps, 40 Mbps, codec Auto. A reasonable starting point for a quiet wired or Wi-Fi 6 LAN.</string>
+    <string name="profile_travel_title">Travel</string>
+    <string name="profile_travel_summary">1920x1080 @ 60 fps, 17 Mbps, codec Auto. Conservative values for cellular or hotel Wi-Fi; raw bandwidth is not the only factor.</string>
+    <string name="profile_hq_title">High quality LAN</string>
+    <string name="profile_hq_summary">3840x2160 @ 60 fps, 80 Mbps, codec Auto. For very fast wired LANs. Higher bitrates are available manually; 80 Mbps does not guarantee a stutter-free stream.</string>
+    <string name="profile_custom_title">Custom</string>
+    <string name="profile_custom_summary">Saves the selection \"Custom\" only. Your currently configured streaming settings (resolution, fps, bitrate, codec) are not touched.</string>
 
+    <string name="profile_label_home">Home</string>
+    <string name="profile_label_travel">Travel</string>
+    <string name="profile_label_hq">High quality LAN</string>
+    <string name="profile_label_custom">Custom</string>
+
+    <!-- Per-profile action titles so screen-reader announcements are
+         distinct, not all "Apply". -->
+    <string name="profile_apply_home_btn">Apply Home preset</string>
+    <string name="profile_apply_travel_btn">Apply Travel preset</string>
+    <string name="profile_apply_hq_btn">Apply High quality LAN preset</string>
+    <string name="profile_apply_custom_btn">Save selection as Custom</string>
+
+    <!-- Legacy key retained for layout compatibility; new buttons
+         use the per-profile titles above. -->
     <string name="profile_apply_btn">Apply preset</string>
-    <string name="profile_reset_btn">Reset to upstream defaults</string>
 
-    <string name="pcvr_host_section_title">PCVR (host-owned) settings</string>
-    <string name="pcvr_host_section_summary">PCVR quality, fixed foveated ENCODING, codec, refresh and resolution are owned by the ALVR server on the PC, NOT by this app. There are no working local sliders here.</string>
-    <string name="pcvr_host_item_adaptive_bitrate">Adaptive bitrate — on by default in ALVR; lets the server drop bitrate on packet loss.</string>
-    <string name="pcvr_host_item_fixed_foveation">Fixed foveated ENCODING — ALVR\'s per-tile encoder quality, not local rendering. Reduces encoder load; can save 15–25%% bitrate at slight quality cost at the periphery.</string>
-    <string name="pcvr_host_item_codec">Codec — ALVR defaults to HEVC; AV1 available when the host GPU supports it; H.264 fallback for older GPUs.</string>
-    <string name="pcvr_host_item_refresh">Refresh rate — set on the ALVR dashboard. Quest3 hardware supports 60/72/90/120 Hz modes.</string>
-    <string name="pcvr_host_item_resolution">Resolution — set on the ALVR dashboard. Per-eye 1.5x–2.0x overshoot over the headset panel is typical.</string>
+    <!-- Apply confirmation dialog -->
+    <string name="profile_apply_confirm_title">Apply preset</string>
+    <string name="profile_apply_confirm_msg">This replaces resolution, fps, bitrate, and codec with:\n\n%1$s\n\nOther streaming settings are not changed. Continue?</string>
+    <string name="profile_apply_confirm_replace">Replace</string>
+    <string name="profile_apply_confirm_cancel">Cancel</string>
 
+    <!-- Apply unsupported dialog -->
+    <string name="profile_apply_unsupported_title">Preset not available on this device</string>
+    <string name="profile_apply_unsupported_msg">The %1$s preset needs %2$s @ %3$s fps. This device does not include that resolution or refresh rate in the streaming settings list, so the preset cannot be applied. No values were written.</string>
+
+    <string name="profile_apply_toast_replaced">Replaced with %1$s.</string>
+    <string name="profile_apply_toast_custom">Custom selected. Current values preserved.</string>
+    <string name="profile_apply_toast_unsupported">Preset not applied. Open Streaming settings to choose manually.</string>
+
+    <!-- PCVR (host-owned) settings, honest copy. -->
+    <string name="pcvr_host_section_title">SteamVR (PC) settings</string>
+    <string name="pcvr_host_section_summary">Codec, refresh rate, resolution, fixed-foveated encoding and adaptive bitrate for PCVR are configured on the ALVR dashboard running on the PC. The headset cannot change these.</string>
+
+    <string name="pcvr_host_item_adaptive_bitrate_title">Adaptive bitrate</string>
+    <string name="pcvr_host_item_adaptive_bitrate_summary">Toggle on the ALVR dashboard. The v20.14.1 default is constant 30 Mbps; adaptive is opt-in.</string>
+    <string name="pcvr_host_item_fixed_foveation_title">Fixed-foveated encoding</string>
+    <string name="pcvr_host_item_fixed_foveation_summary">Downscales the periphery of each frame before encoding. Centre detail is preserved; peripheral detail is reduced. There is no measured savings guarantee.</string>
+    <string name="pcvr_host_item_codec_title">Codec</string>
+    <string name="pcvr_host_item_codec_summary">ALVR v20.14.1 defaults to H.264, constant 30 Mbps, 72 Hz. HEVC and AV1 are available on the dashboard when the host GPU supports them.</string>
+    <string name="pcvr_host_item_refresh_title">Refresh rate</string>
+    <string name="pcvr_host_item_refresh_summary">Set on the ALVR dashboard. The actual headset refresh the runtime uses depends on the dashboard setting and the headset firmware.</string>
+    <string name="pcvr_host_item_resolution_title">Resolution</string>
+    <string name="pcvr_host_item_resolution_summary">Set on the ALVR dashboard. The render target is the per-eye desktop resolution the streamer is asked for, not a fixed overshoot of the headset panel.</string>
+
+    <string name="pcvr_host_item_eye_tracking_title">Eye tracking</string>
+    <string name="pcvr_host_item_eye_tracking_summary">Quest 3 has no eye-tracking hardware. Gaze-driven foveation is not available; only fixed-foveated encoding is.</string>
+
+    <!-- VR settings (headset only) -->
     <string name="vr_category_headset_only_title">VR settings (headset only)</string>
-    <string name="vr_category_headset_only_summary">Hidden on phones and TVs. Tapping here expands the same VR settings Moonlight exposes upstream; tapping a child preference behaves exactly like the upstream app.</string>
+    <string name="vr_category_headset_only_summary">Hidden on phones and TVs. The settings here are the same ones Moonlight exposes upstream.</string>
 
-    <string name="setup_help_section_title">Companion setup</string>
-    <string name="setup_help_section_summary">Setup URLs and notes for the two PC companions.</string>
-    <string name="setup_help_apollo_url">Apollo: https://github.com/ClassicOldSong/Apollo</string>
-    <string name="setup_help_sunshine_url">Sunshine: https://github.com/LizardByte/Sunshine</string>
-    <string name="setup_help_alvr_url">ALVR v20.14.1: https://github.com/alvr-org/ALVR/releases/tag/v20.14.1</string>
+    <!-- Depth source list (Synthetic 3D). Unique vq_ names so the
+         overlay does not redefine upstream's title_vr_depth_source /
+         summary_vr_depth_source strings. -->
+    <string name="vq_depth_source_title">Synthetic 3D</string>
+    <string name="vq_depth_source_summary">Optional depth effect for screen gaming.</string>
+
+    <!-- Top config status row. -->
+    <string name="top_config_status_label">Current screen settings</string>
+    <string name="top_config_status_value">%1$s @ %2$s fps · %3$s Mbps · codec %4$s</string>
+    <string name="top_config_status_empty">Open a preset or Streaming settings to choose values.</string>
+    <string name="top_config_status_matched_profile">Preset matched: %1$s.</string>
+
+    <string name="top_section_screen_vr_title">Screen VR settings</string>
+    <string name="top_section_screen_vr_summary">Synthetic 3D, depth model and the other settings in the headset-only VR category. Hidden on phones and TVs.</string>
+    <string name="top_section_pcvr_title">SteamVR (PC) settings</string>
+    <string name="top_section_pcvr_summary">Read-only summary of the ALVR dashboard settings that control PCVR. The headset cannot change these.</string>
+
 </resources>

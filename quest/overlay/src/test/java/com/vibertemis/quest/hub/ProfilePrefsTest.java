@@ -38,7 +38,7 @@ public class ProfilePrefsTest {
 
     @Test
     public void applyHome_writesUpstreamKeys() {
-        ProfileApplier.applyProfile(ctx, HubPrefs.PROFILE_HOME);
+        ProfileApplier.applyPureTransaction(ctx, HubPrefs.PROFILE_HOME);
         assertEquals("2560x1440",
                 PreferenceManager.getDefaultSharedPreferences(ctx)
                         .getString(ProfileApplier.K_RES, ""));
@@ -55,7 +55,7 @@ public class ProfilePrefsTest {
 
     @Test
     public void applyTravel_writesUpstreamKeys() {
-        ProfileApplier.applyProfile(ctx, HubPrefs.PROFILE_TRAVEL);
+        ProfileApplier.applyPureTransaction(ctx, HubPrefs.PROFILE_TRAVEL);
         assertEquals("1920x1080",
                 PreferenceManager.getDefaultSharedPreferences(ctx)
                         .getString(ProfileApplier.K_RES, ""));
@@ -75,7 +75,7 @@ public class ProfilePrefsTest {
         PreferenceManager.getDefaultSharedPreferences(ctx).edit()
                 .putString(ProfileApplier.K_LEGACY_RES_FPS, "1280x720x30")
                 .commit();
-        ProfileApplier.applyProfile(ctx, HubPrefs.PROFILE_HOME);
+        ProfileApplier.applyPureTransaction(ctx, HubPrefs.PROFILE_HOME);
         assertFalse(PreferenceManager.getDefaultSharedPreferences(ctx)
                 .contains(ProfileApplier.K_LEGACY_RES_FPS));
     }
@@ -85,7 +85,7 @@ public class ProfilePrefsTest {
         PreferenceManager.getDefaultSharedPreferences(ctx).edit()
                 .putString(ProfileApplier.K_LEGACY_RES_FPS, "1920x1080x60")
                 .commit();
-        ProfileApplier.applyProfile(ctx, HubPrefs.PROFILE_TRAVEL);
+        ProfileApplier.applyPureTransaction(ctx, HubPrefs.PROFILE_TRAVEL);
         assertFalse(PreferenceManager.getDefaultSharedPreferences(ctx)
                 .contains(ProfileApplier.K_LEGACY_RES_FPS));
     }
@@ -174,7 +174,7 @@ public class ProfilePrefsTest {
      */
     @Test
     public void applyHome_thenReadByUpstreamPreferenceConfiguration() {
-        ProfileApplier.applyProfile(ctx, HubPrefs.PROFILE_HOME);
+        ProfileApplier.applyPureTransaction(ctx, HubPrefs.PROFILE_HOME);
         PreferenceConfiguration s = PreferenceConfiguration.readPreferences(ctx);
         assertEquals(2560, s.width);
         assertEquals(1440, s.height);
@@ -185,7 +185,7 @@ public class ProfilePrefsTest {
 
     @Test
     public void applyTravel_thenReadByUpstreamPreferenceConfiguration() {
-        ProfileApplier.applyProfile(ctx, HubPrefs.PROFILE_TRAVEL);
+        ProfileApplier.applyPureTransaction(ctx, HubPrefs.PROFILE_TRAVEL);
         PreferenceConfiguration s = PreferenceConfiguration.readPreferences(ctx);
         assertEquals(1920, s.width);
         assertEquals(1080, s.height);

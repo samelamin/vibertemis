@@ -1,5 +1,5 @@
 diff --git a/app/build.gradle b/app/build.gradle
-index f5bdc022..75c51953 100644
+index f5bdc022..38ced430 100644
 --- a/app/build.gradle
 +++ b/app/build.gradle
 @@ -18,14 +18,30 @@ android {
@@ -19,8 +19,8 @@ index f5bdc022..75c51953 100644
 +        // Vibertemis XR Preview test build identity. versionCode is the
 +        // gradle-internal integer; the versionName string is the one
 +        // surfaced to the user in the launcher.
-+        versionName "0.1.0-quest-preview.1"
-+        versionCode = 1
++        versionName "0.1.0-quest-preview.2"
++        versionCode = 2
  
          // Generate native debug symbols to allow Google Play to symbolicate our native crashes
          ndk.debugSymbolLevel = 'FULL'
@@ -101,7 +101,7 @@ index f5bdc022..75c51953 100644
 +    testImplementation 'androidx.test:core:1.5.0'
  }
 diff --git a/app/src/main/AndroidManifest.xml b/app/src/main/AndroidManifest.xml
-index 8fb03b32..161b2ad8 100644
+index 8fb03b32..e1a630f0 100644
 --- a/app/src/main/AndroidManifest.xml
 +++ b/app/src/main/AndroidManifest.xml
 @@ -19,6 +19,7 @@
@@ -127,19 +127,20 @@ index 8fb03b32..161b2ad8 100644
  
          <provider
              android:name=".PosterContentProvider"
-@@ -152,13 +161,51 @@
-             <intent-filter>
-                 <action android:name="android.intent.action.MAIN" />
+@@ -149,9 +158,25 @@
+             <meta-data android:name="WindowManagerPreference:FreeformWindowSize" android:value="system-default" />
+             <meta-data android:name="WindowManagerPreference:FreeformWindowOrientation" android:value="landscape" />
  
--                <category android:name="android.intent.category.LAUNCHER" />
-                 <category android:name="android.intent.category.MULTIWINDOW_LAUNCHER" />
-                 <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
-                 <category android:name="tv.ouya.intent.category.APP" />
-             </intent-filter>
-             <meta-data android:name="pvr.app.type" android:value="2d" />
-         </activity>
-+        <!-- Vibertemis XR Preview hub panel. Single LAUNCHER entry point.
-+             Not itself immersive / not an OpenXR activity. -->
++            <!-- PcView is reached only via explicit ComponentName from
++                 MainHubActivity; no launcher-related intent-filter. -->
++            <meta-data android:name="pvr.app.type" android:value="2d" />
++        </activity>
++        <!-- Vibertemis XR Preview hub panel. The sole launcher entry
++             point: PcView is reached only via explicit ComponentName
++             from MainHubActivity. The LAUNCHER + MULTIWINDOW_LAUNCHER
++             + LEANBACK_LAUNCHER + tv.ouya categories that upstream
++             placed on PcView all live here. Not itself immersive /
++             not an OpenXR activity. -->
 +        <activity
 +            android:name="com.vibertemis.quest.hub.MainHubActivity"
 +            android:exported="true"
@@ -147,10 +148,25 @@ index 8fb03b32..161b2ad8 100644
 +            android:enableOnBackInvokedCallback="true"
 +            android:configChanges="mcc|mnc|touchscreen|keyboard|keyboardHidden|navigation|screenLayout|fontScale|uiMode|orientation|screenSize|smallestScreenSize|layoutDirection"
 +            android:label="@string/app_label">
-+            <intent-filter>
-+                <action android:name="android.intent.action.MAIN" />
-+                <category android:name="android.intent.category.LAUNCHER" />
-+            </intent-filter>
+             <intent-filter>
+                 <action android:name="android.intent.action.MAIN" />
+-
+                 <category android:name="android.intent.category.LAUNCHER" />
+                 <category android:name="android.intent.category.MULTIWINDOW_LAUNCHER" />
+                 <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+@@ -159,6 +184,40 @@
+             </intent-filter>
+             <meta-data android:name="pvr.app.type" android:value="2d" />
+         </activity>
++        <!-- Vibertemis XR Preview: in-app setup screen. Not exported.
++             Accessible only from MainHubActivity. -->
++        <activity
++            android:name="com.vibertemis.quest.hub.SetupActivity"
++            android:exported="false"
++            android:resizeableActivity="true"
++            android:enableOnBackInvokedCallback="true"
++            android:configChanges="mcc|mnc|touchscreen|keyboard|keyboardHidden|navigation|screenLayout|fontScale|uiMode|orientation|screenSize|smallestScreenSize|layoutDirection"
++            android:label="@string/setup_title">
 +            <meta-data android:name="pvr.app.type" android:value="2d" />
 +        </activity>
 +        <!-- ALVR v20.14.1 OpenXR client entry point. NativeActivity subclass,
@@ -161,7 +177,6 @@ index 8fb03b32..161b2ad8 100644
 +            android:exported="false"
 +            android:launchMode="singleTask"
 +            android:taskAffinity="${applicationId}.pcvr"
-+            android:noHistory="true"
 +            android:screenOrientation="landscape"
 +            android:configChanges="density|keyboard|keyboardHidden|navigation|orientation|screenLayout|screenSize|uiMode"
 +            android:process=":pcvr"
@@ -181,7 +196,7 @@ index 8fb03b32..161b2ad8 100644
          <activity
              android:name=".ShortcutTrampoline"
 diff --git a/app/src/main/java/com/limelight/preferences/PreferenceConfiguration.java b/app/src/main/java/com/limelight/preferences/PreferenceConfiguration.java
-index e88bca0e..0e59c945 100644
+index e88bca0e..53e5ca91 100644
 --- a/app/src/main/java/com/limelight/preferences/PreferenceConfiguration.java
 +++ b/app/src/main/java/com/limelight/preferences/PreferenceConfiguration.java
 @@ -9,6 +9,7 @@ import android.view.Display;
@@ -201,7 +216,7 @@ index e88bca0e..0e59c945 100644
      // Standard everywhere, which caps the room at a size every headset here can
      // hold. Gen 1 headsets are seeded onto low instead, see seedGen1PerfProfile.
      private static final String DEFAULT_VR_ENV_RES = "standard";
-@@ -795,7 +796,8 @@ public class PreferenceConfiguration {
+@@ -795,28 +796,19 @@ public class PreferenceConfiguration {
          config.enablePip = prefs.getBoolean(ENABLE_PIP_PREF_STRING, DEFAULT_ENABLE_PIP);
          config.enablePerfOverlay = prefs.getBoolean(ENABLE_PERF_OVERLAY_STRING, DEFAULT_ENABLE_PERF_OVERLAY);
          config.enableGlRenderPath = prefs.getBoolean(ENABLE_GL_RENDER_PATH_PREF_STRING, DEFAULT_ENABLE_GL_RENDER_PATH);
@@ -211,19 +226,103 @@ index e88bca0e..0e59c945 100644
          config.vrHeadLocked = prefs.getBoolean(VR_HEAD_LOCKED_PREF_STRING, DEFAULT_VR_HEAD_LOCKED);
          config.vrDistance = prefs.getInt(VR_DISTANCE_PREF_STRING, DEFAULT_VR_DISTANCE);
          config.vrScreenSize = prefs.getInt(VR_SCREEN_SIZE_PREF_STRING, DEFAULT_VR_SCREEN_SIZE);
+         config.vrCurvature = prefs.getInt(VR_CURVATURE_PREF_STRING, DEFAULT_VR_CURVATURE);
+         String depthSource = prefs.getString(VR_DEPTH_SOURCE_PREF_STRING, DEFAULT_VR_DEPTH_SOURCE);
+-        if (depthSource.equals("flat")) {
+-            config.vrDepthMode = 1;
+-        }
+-        else if (depthSource.equals("ramp")) {
+-            config.vrDepthMode = 2;
+-        }
+-        else if (depthSource.equals("blob")) {
+-            config.vrDepthMode = 3;
+-        }
+-        else if (depthSource.equals("eyetest")) {
+-            config.vrDepthMode = 4;
+-        }
+-        else if (depthSource.equals("shifttest")) {
+-            config.vrDepthMode = 5;
+-        }
+-        else if (depthSource.equals("model")) {
++        // Vibertemis XR Preview: synthetic test patterns (flat, ramp,
++        // blob, eyetest, shifttest) are filtered out of the inflated
++        // list at SettingsFragment.onCreate. Only "model" and the
++        // default "off" reach here, so the depth-source switch collapses
++        // to a single "model" -> 6 vs everything-else -> 0 branch.
++        if ("model".equals(depthSource)) {
+             config.vrDepthMode = 6;
+         }
+         else {
 diff --git a/app/src/main/java/com/limelight/preferences/StreamSettings.java b/app/src/main/java/com/limelight/preferences/StreamSettings.java
-index 3bc8220e..29874d73 100644
+index 3bc8220e..336dc626 100644
 --- a/app/src/main/java/com/limelight/preferences/StreamSettings.java
 +++ b/app/src/main/java/com/limelight/preferences/StreamSettings.java
-@@ -35,6 +35,7 @@ import com.limelight.R;
+@@ -35,6 +35,10 @@ import com.limelight.R;
  import com.limelight.binding.video.MediaCodecHelper;
  import com.limelight.utils.Dialog;
  import com.limelight.utils.UiHelper;
++import com.vibertemis.quest.hub.ProfileApplier;
++import com.vibertemis.quest.hub.SettingsController;
++import com.vibertemis.quest.hub.TopStatusPreference;
 +import com.vibertemis.quest.hub.VrCapabilities;
  
  import java.lang.reflect.Method;
  import java.util.ArrayList;
-@@ -406,6 +407,24 @@ public class StreamSettings extends Activity {
+@@ -136,6 +140,16 @@ public class StreamSettings extends Activity {
+         private int nativeResolutionStartIndex = Integer.MAX_VALUE;
+         private boolean nativeFramerateShown = false;
+ 
++        // Vibertemis XR Preview: per-instance SettingsController bound
++        // at the END of onCreate (after the upstream decoder / display
++        // filter has run and the inflated ListPreferences reflect the
++        // device's actual capability set). The controller is registered
++        // in onResume and unregistered in onPause, and refresh() is
++        // called on resume + after explicit Apply so the cached
++        // current-settings snapshot stays in sync without rebuilding
++        // the activity.
++        private SettingsController settingsController;
++
+         private void setValue(String preferenceKey, String value) {
+             ListPreference pref = (ListPreference) findPreference(preferenceKey);
+ 
+@@ -324,20 +338,22 @@ public class StreamSettings extends Activity {
+                 category.removePreference(findPreference("checkbox_absolute_mouse_mode"));
+             }
+ 
+-            // The synthetic depth patterns are development tools. They only
+-            // confuse in a release build, so the list keeps the two real
+-            // choices there.
+-            if (!BuildConfig.DEBUG) {
+-                ListPreference depthPref = (ListPreference) findPreference(
+-                        PreferenceConfiguration.VR_DEPTH_SOURCE_PREF_STRING);
+-                String[] keep = { "off", "model" };
+-                keepPreferenceEntries(depthPref, keep);
+-                // Only reachable by setting it from outside the app, since the
+-                // two builds do not share preferences, but a value that is no
+-                // longer in the list shows as a blank selection
+-                if (!Arrays.asList(keep).contains(depthPref.getValue())) {
+-                    depthPref.setValue("model");
+-                }
++            // Vibertemis XR Preview: synthetic-depth patterns (flat,
++            // ramp, blob, eyetest, shifttest) are filtered out of the
++            // inflated list in BOTH debug and release builds. An
++            // invalid stored value falls back to "off" so the depth
++            // model is never silently enabled.
++            ListPreference depthPref = (ListPreference) findPreference(
++                    PreferenceConfiguration.VR_DEPTH_SOURCE_PREF_STRING);
++            String[] keep = { "off", "model" };
++            keepPreferenceEntries(depthPref, keep);
++            // Only reachable by setting it from outside the app, since the
++            // two builds do not share preferences, but a value that is no
++            // longer in the list shows as a blank selection. Fall back to
++            // "off" so an invalid value never silently enables the
++            // depth model.
++            if (!Arrays.asList(keep).contains(depthPref.getValue())) {
++                depthPref.setValue("off");
+             }
+ 
+             // Where the log actually is, which is the first thing anyone
+@@ -406,6 +422,24 @@ public class StreamSettings extends Activity {
                  category_gamepad_settings.removePreference(findPreference("seekbar_vibrate_fallback_strength"));
              }
  
@@ -248,6 +347,104 @@ index 3bc8220e..29874d73 100644
              Display display = getActivity().getWindowManager().getDefaultDisplay();
              float maxSupportedFps = display.getRefreshRate();
  
+@@ -732,6 +766,97 @@ public class StreamSettings extends Activity {
+                     return true;
+                 }
+             });
++
++            // Vibertemis XR Preview: END of onCreate (post-filter).
++            // Bind the per-instance SettingsController now that the
++            // inflated ListPreferences reflect the actual capability
++            // set. The observer fires after each relevant upstream
++            // key change and refreshes the top status preference AND
++            // any cached ListPreference / SeekBarPreference widgets,
++            // so a preset Apply inside the same screen shows up
++            // immediately without dismissing the nested dialog.
++            settingsController = new SettingsController(getActivity());
++            settingsController.addObserver(new SettingsController.Observer() {
++                @Override
++                public void onUpstreamPreferenceChanged(String key,
++                                                         ProfileApplier.CurrentSettings snapshot) {
++                    refreshTopStatus();
++                    refreshCachedWidgets(snapshot);
++                }
++            });
++            refreshTopStatus();
++        }
++
++        @Override
++        public void onResume() {
++            super.onResume();
++            if (settingsController != null) {
++                settingsController.register();
++                settingsController.refresh();
++                refreshTopStatus();
++            }
++        }
++
++        @Override
++        public void onPause() {
++            if (settingsController != null) {
++                settingsController.unregister();
++            }
++            super.onPause();
++        }
++
++        private void refreshTopStatus() {
++            if (settingsController == null) return;
++            Preference top = findPreference("vq_top_status");
++            if (top instanceof TopStatusPreference) {
++                ((TopStatusPreference) top).refreshSummary();
++            }
++            try {
++                ProfileApplier.CurrentSettings s = settingsController.current();
++                LimeLog.info("vq status: " + s.resolution + "@" + s.fps
++                        + " " + ProfileApplier.formatMbps(s.bitrateKbps)
++                        + " Mbps " + s.videoFormat
++                        + " profile=" + s.profile);
++            } catch (Throwable t) {
++                LimeLog.warning("vq status refresh failed: " + t.getMessage());
++            }
++        }
++
++        /**
++         * Refresh the in-screen ListPreference / SeekBarPreference
++         * widgets from the snapshot the controller just read. The
++         * ListPreference.setValue() call does NOT trigger the
++         * OnPreferenceChangeListener (which would write back through
++         * prefs and recurse), so this is safe to call from inside
++         * the controller's listener.
++         */
++        private void refreshCachedWidgets(ProfileApplier.CurrentSettings s) {
++            if (s == null) return;
++            try {
++                ListPreference res = (ListPreference) findPreference(
++                        PreferenceConfiguration.RESOLUTION_PREF_STRING);
++                if (res != null) {
++                    res.setValue(s.resolution);
++                }
++                ListPreference fps = (ListPreference) findPreference(
++                        PreferenceConfiguration.FPS_PREF_STRING);
++                if (fps != null) {
++                    fps.setValue(s.fps);
++                }
++                ListPreference vf = (ListPreference) findPreference(
++                        ProfileApplier.K_VIDEO_FORMAT);
++                if (vf != null && s.videoFormatRaw != null) {
++                    vf.setValue(s.videoFormatRaw);
++                }
++                com.limelight.preferences.SeekBarPreference bitrate =
++                        (com.limelight.preferences.SeekBarPreference) findPreference(
++                                PreferenceConfiguration.BITRATE_PREF_STRING);
++                if (bitrate != null) {
++                    bitrate.setProgress(s.bitrateKbps);
++                }
++            } catch (Throwable t) {
++                LimeLog.warning("vq cached widget refresh failed: " + t.getMessage());
++            }
+         }
+     }
+ }
 diff --git a/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml b/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml
 index 65291b96..2f3b77a4 100644
 --- a/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml
@@ -271,13 +468,31 @@ index 65291b96..2f3b77a4 100644
  </adaptive-icon>
 \ No newline at end of file
 diff --git a/app/src/main/res/xml/preferences.xml b/app/src/main/res/xml/preferences.xml
-index 1891f2c1..6f0746e8 100644
+index 1891f2c1..6f85980b 100644
 --- a/app/src/main/res/xml/preferences.xml
 +++ b/app/src/main/res/xml/preferences.xml
-@@ -2,6 +2,15 @@
+@@ -2,6 +2,37 @@
  <PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android"
      xmlns:seekbar="http://schemas.moonlight-stream.com/apk/res/seekbar">
  
++    <!-- Vibertemis XR Preview: top status row. Shows the current
++         streaming settings (resolution, fps, Mbps, codec) and, when
++         those values match a preset, the preset name. The summary is
++         recomputed at the end of SettingsFragment.onCreate (and on
++         Resume) so it tracks the live upstream values. -->
++    <com.vibertemis.quest.hub.TopStatusPreference
++        android:key="vq_top_status"
++        android:title="@string/top_config_status_label"
++        android:selectable="false"/>
++
++    <!-- Vibertemis XR Preview: shortcut into the offline Setup screen
++         (PIN pairing, ALVR downloads, PCVR requirements). Reachable
++         from the hub AND from Streaming settings. -->
++    <com.vibertemis.quest.hub.SetupEntryPreference
++        android:key="vq_open_setup"
++        android:title="@string/setup_title"
++        android:summary="@string/setup_intro"/>
++
 +    <!-- Vibertemis XR Preview: VR settings live inside a collapsible
 +         PreferenceScreen child so they nest cleanly on phones (which never
 +         see this section because the headtracking feature is absent) and
@@ -287,19 +502,29 @@ index 1891f2c1..6f0746e8 100644
 +        android:title="@string/vr_category_headset_only_title"
 +        android:summary="@string/vr_category_headset_only_summary"
 +        android:key="vq_screen_vr_settings_headset_only">
++        <com.vibertemis.quest.hub.BackPreference
++            android:key="vq_vr_back"
++            android:title="@string/nested_back_row_title"
++            android:summary="@string/nested_back_row_summary"/>
      <PreferenceCategory android:title="@string/category_vr_settings"
          android:key="category_vr_settings">
          <CheckBoxPreference
-@@ -35,7 +44,7 @@
+@@ -31,11 +62,11 @@
+             android:defaultValue="false"/>
+         <ListPreference
+             android:key="list_vr_depth_source"
+-            android:title="@string/title_vr_depth_source"
++            android:title="@string/vq_depth_source_title"
              android:entries="@array/vr_depth_source_names"
              android:entryValues="@array/vr_depth_source_values"
-             android:summary="@string/summary_vr_depth_source"
+-            android:summary="@string/summary_vr_depth_source"
 -            android:defaultValue="model" />
++            android:summary="@string/vq_depth_source_summary"
 +            android:defaultValue="off" />
          <ListPreference
              android:key="list_vr_env_res"
              android:title="@string/title_vr_env_res"
-@@ -72,6 +81,7 @@
+@@ -72,6 +103,7 @@
              android:summary="@string/summary_vr_file_log"
              android:defaultValue="basic" />
      </PreferenceCategory>
@@ -307,7 +532,16 @@ index 1891f2c1..6f0746e8 100644
      <PreferenceCategory android:title="@string/category_basic_settings"
          android:key="category_basic_settings">
          <ListPreference
-@@ -359,4 +369,80 @@
+@@ -92,7 +124,7 @@
+             android:key="seekbar_bitrate_kbps"
+             android:dialogMessage="@string/summary_seekbar_bitrate"
+             seekbar:min="500"
+-            android:max="150000"
++            android:max="200000"
+             seekbar:step="500"
+             seekbar:keyStep="1000"
+             seekbar:divisor="1000"
+@@ -359,4 +391,106 @@
              android:summary="@string/summary_privacy_policy"
              url="https://moonlight-stream.org/privacy.html"/>
      </PreferenceCategory-->
@@ -325,11 +559,15 @@ index 1891f2c1..6f0746e8 100644
 +        android:title="@string/profile_category_title"
 +        android:summary="@string/profile_category_summary"
 +        android:key="vq_screen_presets">
++        <com.vibertemis.quest.hub.BackPreference
++            android:key="vq_presets_back"
++            android:title="@string/nested_back_row_title"
++            android:summary="@string/nested_back_row_summary"/>
 +        <PreferenceCategory android:title="@string/profile_home_title"
 +            android:key="vq_profile_home">
 +            <com.vibertemis.quest.hub.ProfileApplyPreference
 +                android:key="vq_profile_home_apply"
-+                android:title="@string/profile_apply_btn"
++                android:title="@string/profile_apply_home_btn"
 +                android:summary="@string/profile_home_summary"
 +                profile="home"/>
 +        </PreferenceCategory>
@@ -337,7 +575,7 @@ index 1891f2c1..6f0746e8 100644
 +            android:key="vq_profile_travel">
 +            <com.vibertemis.quest.hub.ProfileApplyPreference
 +                android:key="vq_profile_travel_apply"
-+                android:title="@string/profile_apply_btn"
++                android:title="@string/profile_apply_travel_btn"
 +                android:summary="@string/profile_travel_summary"
 +                profile="travel"/>
 +        </PreferenceCategory>
@@ -345,9 +583,17 @@ index 1891f2c1..6f0746e8 100644
 +            android:key="vq_profile_custom">
 +            <com.vibertemis.quest.hub.ProfileApplyPreference
 +                android:key="vq_profile_custom_apply"
-+                android:title="@string/profile_apply_btn"
++                android:title="@string/profile_apply_custom_btn"
 +                android:summary="@string/profile_custom_summary"
 +                profile="custom"/>
++        </PreferenceCategory>
++        <PreferenceCategory android:title="@string/profile_hq_title"
++            android:key="vq_profile_hq">
++            <com.vibertemis.quest.hub.ProfileApplyPreference
++                android:key="vq_profile_hq_apply"
++                android:title="@string/profile_apply_hq_btn"
++                android:summary="@string/profile_hq_summary"
++                profile="hq"/>
 +        </PreferenceCategory>
 +    </PreferenceScreen>
 +
@@ -363,27 +609,41 @@ index 1891f2c1..6f0746e8 100644
 +        android:title="@string/pcvr_host_section_title"
 +        android:summary="@string/pcvr_host_section_summary"
 +        android:key="vq_screen_pcvr_host">
++        <com.vibertemis.quest.hub.BackPreference
++            android:key="vq_pcvr_back"
++            android:title="@string/nested_back_row_title"
++            android:summary="@string/nested_back_row_summary"/>
 +        <PreferenceCategory android:title="@string/pcvr_host_section_title"
 +            android:key="vq_pcvr_host">
 +            <Preference
-+                android:title="@string/pcvr_host_item_adaptive_bitrate"
++                android:title="@string/pcvr_host_item_adaptive_bitrate_title"
++                android:summary="@string/pcvr_host_item_adaptive_bitrate_summary"
 +                android:key="vq_pcvr_adaptive_bitrate"
 +                android:selectable="false"/>
 +            <Preference
-+                android:title="@string/pcvr_host_item_fixed_foveation"
++                android:title="@string/pcvr_host_item_fixed_foveation_title"
++                android:summary="@string/pcvr_host_item_fixed_foveation_summary"
 +                android:key="vq_pcvr_fixed_foveation"
 +                android:selectable="false"/>
 +            <Preference
-+                android:title="@string/pcvr_host_item_codec"
++                android:title="@string/pcvr_host_item_codec_title"
++                android:summary="@string/pcvr_host_item_codec_summary"
 +                android:key="vq_pcvr_codec"
 +                android:selectable="false"/>
 +            <Preference
-+                android:title="@string/pcvr_host_item_refresh"
++                android:title="@string/pcvr_host_item_refresh_title"
++                android:summary="@string/pcvr_host_item_refresh_summary"
 +                android:key="vq_pcvr_refresh"
 +                android:selectable="false"/>
 +            <Preference
-+                android:title="@string/pcvr_host_item_resolution"
++                android:title="@string/pcvr_host_item_resolution_title"
++                android:summary="@string/pcvr_host_item_resolution_summary"
 +                android:key="vq_pcvr_resolution"
++                android:selectable="false"/>
++            <Preference
++                android:title="@string/pcvr_host_item_eye_tracking_title"
++                android:summary="@string/pcvr_host_item_eye_tracking_summary"
++                android:key="vq_pcvr_eye_tracking"
 +                android:selectable="false"/>
 +        </PreferenceCategory>
 +    </PreferenceScreen>
