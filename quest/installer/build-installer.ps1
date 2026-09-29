@@ -29,7 +29,7 @@ if (-not (Test-Path $zip) -or (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower
 if ((Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant() -ne $zipSha) { throw 'Native ZIP digest mismatch' }
 $fingerprint = & python "$RepoRoot/quest/native/fingerprint.py"
 Check-Exit 'Native fingerprint'
-if ($fingerprint -ne $nativeFingerprint) { throw 'Native sources differ from bundled runtime' }
+if ($fingerprint -ne $nativeFingerprint) { throw "Native sources differ from bundled runtime: got $fingerprint expected $nativeFingerprint" }
 Expand-Archive -Path $zip -DestinationPath "$StagingRoot/runtime"
 Remove-Item "$StagingRoot/runtime/vibertemis-host-companion.exe"
 
