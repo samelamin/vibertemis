@@ -63,6 +63,30 @@ New-Item -ItemType Directory -Force -Path (Split-Path $resource) | Out-Null
 & dotnet publish "$RepoRoot/quest/windows/VibertemisManager.App/VibertemisManager.App.csproj" -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true -p:Version=0.1.0.4 -o "$OutRoot/manager"
 Check-Exit 'Manager publish'
 Copy-Item "$OutRoot/manager/VibertemisManager.App.exe" "$StagingRoot/manager/"
+# Include redistributable notices for the new host manager and discovery stack.
+$licenseDir = "$StagingRoot/runtime/licenses"
+Push-Location "$RepoRoot/quest/host"
+try {
+    $modules = & go list -m -f '{{.Path}}|{{.Version}}|{{.Dir}}' all
+    Check-Exit 'Dependency license inventory'
+    foreach ($line in $modules) {
+        $parts = $line.Split('|')
+        if ($parts.Length -eq 3 -and $parts[1] -ne '' -and (Test-Path "$($parts[2])/LICENSE")) {
+            $name = ($parts[0] -replace '[^a-zA-Z0-9.-]', '_') + '-' + $parts[1] + '-LICENSE.txt'
+            Copy-Item "$($parts[2])/LICENSE" (Join-Path $licenseDir $name)
+        }
+    }
+    $goRoot = & go env GOROOT
+    Check-Exit 'Go runtime license location'
+    Copy-Item "$goRoot/LICENSE" "$licenseDir/Go-LICENSE.txt"
+} finally { Pop-Location }
+foreach ($package in @('microsoft.netcore.app.runtime.win-x64', 'microsoft.windowsdesktop.app.runtime.win-x64')) {
+    foreach ($notice in Get-ChildItem "$env:USERPROFILE/.nuget/packages/$package/*/*.TXT" -ErrorAction SilentlyContinue) {
+        if ($notice.Name -match 'LICENSE|NOTICE') {
+            Copy-Item $notice.FullName "$licenseDir/$package-$($notice.Directory.Name)-$($notice.Name)"
+        }
+    }
+}
 if (-not $SkipInno) {
     & $InnoCompiler "/dMyStagingRoot=$StagingRoot" "/O$OutRoot" "$RepoRoot/quest/installer/installer.iss"
     Check-Exit 'Installer compile'
