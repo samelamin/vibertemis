@@ -1,0 +1,105 @@
+name: Quest Host Control CI
+
+# CI workflow for the quest/host/ companion.
+#
+# Scope: compile and test the Go host companion on Linux
+# (race suite) and on Windows (real advapi32 path:
+# SecurityDescriptorFromString, SetNamedSecurityInfo,
+# GetNamedSecurityInfo, ProcessIdToSessionId). The Windows
+# job uploads the resulting companion executable as a
+# build artifact for downstream inspection. There is NO
+# release publish, NO tag push, and NO release creation in
+# this workflow.
+#
+# Triggers:
+#   - push to branch `quest/codec-control-ci`
+#   - workflow_dispatch (manual rerun)
+#
+# Permissions: contents: read only. No write permissions
+# beyond the implicit actions/checkout and
+# actions/upload-artifact scopes for the workflow job.
+#
+# Pinned action SHAs are recorded in
+# the commit SHA in each uses line; adjacent comments identify the release.
+
+on:
+  push:
+    branches:
+      - quest/codec-control-ci
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux-race:
+    name: Linux go test -race
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go 1.26
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.26.0'
+          cache-dependency-path: quest/host/go.sum
+          check-latest: false
+
+      - name: go vet
+        working-directory: quest/host
+        run: go vet ./...
+
+      - name: go test -race
+        working-directory: quest/host
+        run: go test -race -count=1 ./...
+
+  windows-runtime:
+    name: Windows go test / vet / build
+    runs-on: windows-2022
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go 1.26
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.26.0'
+          cache-dependency-path: quest/host/go.sum
+          check-latest: false
+
+      - name: go vet (windows GOOS)
+        working-directory: quest/host
+        shell: bash
+        run: GOOS=windows GOARCH=amd64 go vet ./...
+
+      - name: go test (windows GOOS, full test compile)
+        working-directory: quest/host
+        shell: bash
+        run: |
+          set -euo pipefail
+          for pkg in $(go list ./...); do
+            echo "compiling tests for $pkg"
+            GOOS=windows GOARCH=amd64 go test -c -o /tmp/$(basename "$pkg").test.exe "$pkg"
+          done
+
+      - name: go test (real windows runtime)
+        working-directory: quest/host
+        run: go test -count=1 -v ./...
+
+      - name: go build companion EXE
+        working-directory: quest/host
+        shell: bash
+        run: GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o vibertemis-host-companion.exe ./cmd/vibertemis-host-companion
+
+      - name: Upload companion EXE
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: vibertemis-host-companion-windows-amd64
+          path: quest/host/vibertemis-host-companion.exe
+          if-no-files-found: error
+          retention-days: 14

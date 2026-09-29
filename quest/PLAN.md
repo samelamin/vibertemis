@@ -1,79 +1,93 @@
-# Plan — final implementation
+# Quest VR implementation plan and review status
 
-Two streaming modes share one APK. Screen mode pairs with Sunshine or
-Apollo on the host; PCVR mode pairs with ALVR v20.14.1 on the PC host.
-Quest3 runs the bundled headset client; Moonlight is never used as a
-server. Phone is screen-only. The OpenXR loader is the Maven
-`openxr_loader_for_android` artifact; only the ALVR `.so` is packed
-from the upstream APK.
+Target: Meta Quest 3; Windows 11 with RTX 4090. User authorized Codex to take
+ over code fixes and VR integration after repeated MiniMax review failures.
+Agy remains the second reviewer. No Claude consultation in this phase.
 
-## Source pins
+## Preserved baseline
 
-- Moonlight: `ae173a4966bb68af749d45ed87c8b9737a0ce570`.
-- ALVR: `a9f6542fa507a841f40ab4f3fcb531427cd02550`.
-- Additional pins and submodules live in `quest/pins/pins.txt`;
-  exact upstream READMEs ship in the source archive.
+Preview 0.1.0.2 uses pinned Moonlight XR 0.3 and ALVR 20.14.1. It provides
+Screen gaming and a separate OpenXR PCVR activity, with headset detection,
+Touch input through ALVR, microphone/launch guards, nested VR preferences,
+Screen bitrate up to 200 Mbps, and synthetic depth disabled by default.
+Existing package/signing identity and the single OpenXR loader must survive.
+See README.md, TESTING.md, RESEARCH.md and pins/pins.txt for provenance.
 
-## Preview 2 identity
+## Host control phase
 
-- `versionCode = 2`
-- `versionName = "0.1.0-quest-preview.2"`
-- Package and signer unchanged: `com.vibertemis.quest.preview.debug`
-  with the AGP debug keystore.
+Files: quest/host (Go), .github/workflows/quest-host-control.yml.
+- Per-user Windows companion; interactive desktop required to launch SteamVR.
+- Imported certificate pin plus HMAC-authenticated HTTPS requests. All reads
+  authenticated; bounded requests, replay cache, separate read/start budgets.
+- Only explicit role=headset, mode=pcvr start requests launch SteamVR.
+  Phone, Screen gaming, settings, discovery and status do not start VR.
+- Stock ALVR configuration is read-only. Codec mismatch reports reconnect /
+  host configuration required; saved preference is never called negotiated.
+- Startup transaction ownership uses unique pointers. Status resolves only
+  dispatched requests, preserving ID/payload receipts. Preflight cannot lose
+  its gate to lease expiry; stale completion cannot unlock a new owner.
+- Dispatched and uncertain launches retain a 60-second lease. Completed
+  results are bounded and reserved before side effects.
+- Windows pairing secrets use protected owner/System DACLs.
 
-## Test surface
+Validation: Codex independently passed full Linux race suite, vet, and Windows
+cross-build. Targeted regressions cover observation/retry identity, expired
+owner reuse, cache capacity, nonce expiry, polling budgets and Session0.
+Actual Windows runtime CI remains required before delivery.
 
-The unit suite covers prefs, routing, mic, capability gating, the
-per-instance `SettingsController` observer wiring, the top status
-preference refresh path, the hub launch / request / permission
-guards, PackageManager launcher-category resolution, the inflated
-SettingsFragment depth-source list, and Robolectric XML inflation.
-The build host runs 99 tests with 0 failures, 0 errors, 0 skipped,
-plus Robolectric with `GraphicsMode.NATIVE` to render 11 PNG
-screenshots (hub, Setup, and Streaming settings) into
-`app/build/reports/quest-ui/`. The build host verified: clean fetch,
-`apply-overlays.sh` run twice, full build, tests pass, screenshots
-written at exact viewport dimensions, full-bitmap distinct-color
-scan (replaces the prior sparse 8x8 sample grid that missed rendered
-text on near-black backgrounds). No hardware test was performed; the
-hardware gap is the user's checklist in `TESTING.md`.
+Agy Gemini 3.1 Pro (High) reviewed the plan and implementations. Earlier
+ownership/history flaws were rejected and fixed by Codex. Final host review
+found no P0/P1 issues and approved this phase conditional on Windows CI.
+The consultation does not approve the unfinished Android/native phases.
 
-## Review and lifecycle
+## Android control phase (in progress)
 
-Initial Claude ideas review held; findings were checked against
-source. Codex interim review caught string and capability-check
-defects; those were fixed before ship. Final Agy review covered
-manifest launcher categories, the permission-result launch-guard
-race, the depth debug conditional, and the ALVR setup copy — i.e.
-the runtime code; Agy did not review the screenshot harness.
-Claude final review recorded no confirmed P0/P1 after the launch
-fix. Agy Gemini 3.8 Flash High final review supplied runtime
-sign-off — 0 P0/P1 outstanding. Codex independently confirmed
-99 tests / 0 failures / 0 errors / 0 skipped, the same APK signer
-(AGP debug keystore), `zipalign` succeeded, and the bundled ALVR
-`.so` hash matches the pinned value in `quest/pins/pins.txt`. Final
-source-package build is running; Codex final package validation
-is held pending until the commit message records completion. The
-build host verifies the unit suite and the APK assembles cleanly.
+Files: quest/overlay, consolidated seven-file upstream patch.
+- Pair with one bounded JSON import/paste; AndroidKeyStore AES-GCM key,
+  authenticated ciphertext in no-backup storage; no plaintext fallback.
+- Instance-scoped pinned TLS, HMAC contract matching Go, redirects disabled.
+- Async explicit PCVR connection; fresh nonces and stable retry request ID;
+  lifecycle/permission checks, cancellation, actionable errors, manual route.
+- Separate PCVR Standard codec and Travel override; preserve PyroWave choice.
+- Requested settings are distinct from active stream. Unsupported PyroWave
+  remains disabled until matching native artifacts exist.
+- Keep existing 99 Android tests; add network/pairing/lifecycle regressions
+  and large-font / headset-panel screenshots.
 
-The focus-aware implementation matches the official ALVR Cargo
-config. Native libraries and the headset process pin are unchanged
-from upstream.
+Agy reviewed this plan. Accepted: pinned leaf identity, request idempotency,
+truthful connection labels and lifecycle gates. Clarified storage uses keys
+in AndroidKeyStore and ciphertext outside backup; no global trust bypass.
 
-## Refusals (review items not adopted)
+## Native codec phase (not integrated yet)
 
-- Per-tile encoder quality claims about ALVR's fixed-foveated
-  encoding: rejected. FFE downscales the periphery before encoding;
-  it is not per-tile.
-- `noHistory` is not every focus loss: rejected. Stock ALVR manifest
-  does not set it, and we do not set it either.
-- "Every ALVR connection must fail without mic" claim: rejected. We
-  say the preview build asks for mic permission before launching
-  PCVR because unmodified ALVR retries can fail on hosts with host-
-  side mic enabled; not a universal ALVR failure mode.
-- 80 Mbps is not a measured optimum for the HQ preset: stated
-  explicitly in user copy. No claim of a stutter-free stream.
-- Convenience-overload fail-closed contract: retained as an
-  intentional safety property. The UI must not call the pure
-  transaction path; the guard fails closed on a null allowed
-  snapshot.
+Selective port onto pinned ALVR20.14.1, retaining AV1/HEVC/H264 and Quest
+OpenXR/Touch/haptics. Build matching custom Windows driver and Android client
+with an explicit prerelease protocol identity. Do not import Galaxy-specific
+presets, eye-tracking assumptions, hidden standard codecs or UDP experiments.
+
+Native handshake carries requested codec, standard fallback and bounded
+restart consent. Actual decoder/encoder capabilities select the codec; the
+existing decoder config identifies what is really in use. ALVR owns its
+configuration; the Go companion must not race its session.json writes.
+
+PyroWave uses actual GPU encoder/decoder integration, bounded frame lifetime,
+format/size validation and GPU waits. Probe Vulkan features, including
+extension-based alternatives to Vulkan1.3 where supported. Missing features
+or initialization failures must preserve standard codecs and report why.
+Quest3 supports fixed foveation; do not offer nonexistent eye tracking.
+
+Both upstream ALVR Android client and upstream PyroWave Android library have
+compiled independently. This is NOT an integrated codec or hardware result.
+Windows MSVC CI, source/license artifacts, one-loader APK checks and Agy review
+are still required. LAN target is 200 Mbps; Travel preserves standard codec
+preferences and requires actual remote reachability (e.g. an existing VPN).
+Do not claim download speed alone guarantees latency or stream quality.
+
+## Delivery gate
+
+No P0/P1 or incomplete feature may be presented as working. No new release
+has been published in this phase. Verify matching Windows/APK artifacts,
+checksums, source archive and installation instructions before notifying the
+owner. Real Quest/4090 latency, visual quality and tracking need owner testing.
+Telegram notification requires the owner's configured destination; no token
+should be pasted into chat or logs.
