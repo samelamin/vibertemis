@@ -313,7 +313,13 @@ func SaveExport(dir string, state *State, address string) (string, error) {
 	if err := os.Rename(temporary, final); err != nil {
 		return "", err
 	}
+	// Reassert privacy on the final name, then remove an unverifiable export.
+	if err := protectFile(final); err != nil {
+		_ = os.Remove(final)
+		return "", fmt.Errorf("protect export: %w", err)
+	}
 	if err := verifyFileIsPrivate(final); err != nil {
+		_ = os.Remove(final)
 		return "", err
 	}
 	return final, nil

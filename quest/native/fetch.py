@@ -13,8 +13,12 @@ def run(*args, cwd=None):
 
 def checkout(name, destination):
     pin = PINS[name]
-    if not destination.exists():
-        destination.mkdir(parents=True)
+    if not (destination / ".git").exists():
+        # CI may restore only ALVR target/ before fetching the source tree.
+        allowed = {"target"} if name == "alvr" else set()
+        if destination.exists() and any(p.name not in allowed for p in destination.iterdir()):
+            raise SystemExit(f"Unrecognized existing source directory: {destination}")
+        destination.mkdir(parents=True, exist_ok=True)
         run("git", "init", str(destination))
         run("git", "-C", str(destination), "config", "core.autocrlf", "false")
         run("git", "-C", str(destination), "remote", "add", "origin", pin["url"])

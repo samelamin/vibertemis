@@ -21,6 +21,6 @@ try {
 # Derive actual driver directory rather than assume the platform layout name.
 $driver = Get-ChildItem "$alvr/build" -Filter 'driver_alvr_server.dll' -Recurse | Select-Object -First 1
 if (!$driver) { throw 'ALVR driver output missing' }
-Copy-Item "$pyro/build-windows/Release/pyrowave-shared.dll" $driver.DirectoryName
+Copy-Item "$pyro/build-windows/Release/libpyrowave-shared-0.dll" (Join-Path $driver.DirectoryName "pyrowave-shared.dll")
 Get-FileHash "$($driver.DirectoryName)/pyrowave-shared.dll" -Algorithm SHA256
 Get-FileHash $driver.FullName -Algorithm SHA256

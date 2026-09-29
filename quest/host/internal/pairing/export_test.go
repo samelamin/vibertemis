@@ -41,3 +41,25 @@ func TestExportFileIsPrivateUTF8AndOmitsPrivateKey(t *testing.T) {
 		}
 	}
 }
+
+func TestExportRepairsPreviouslyRelaxedPermissions(t *testing.T) {
+	dir := t.TempDir()
+	state, err := Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	path, err := SaveExport(dir, state, "192.168.1.2:28540")
+	if err != nil {
+		t.Fatal(err)
+	}
+	makeWorldReadable(t, path)
+	if err := verifyFileIsPrivate(path); err == nil {
+		t.Fatal("fixture should be public")
+	}
+	if _, err := SaveExport(dir, state, "192.168.1.2:28540"); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyFileIsPrivate(path); err != nil {
+		t.Fatal(err)
+	}
+}
