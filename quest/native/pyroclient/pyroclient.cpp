@@ -452,10 +452,15 @@ bool pyroclient::record_and_submit(Slot &s, pyroclient_frame_info *info) {
     const VkImageLayout outLayout = storage_on_ahb ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
     const VkAccessFlags outAccess = storage_on_ahb ? VK_ACCESS_SHADER_WRITE_BIT : VK_ACCESS_TRANSFER_WRITE_BIT;
     const VkPipelineStageFlags outStage = storage_on_ahb ? VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT : VK_PIPELINE_STAGE_TRANSFER_BIT;
-    image_barrier(cmd, s.image, VK_IMAGE_LAYOUT_UNDEFINED, outLayout, 0, outAccess,
-                  VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, outStage,
+    // Reacquire the foreign image in GENERAL, then transition on our queue.
+    // Initial contents are discarded; subsequent transfers preserve a consistent layout.
+    image_barrier(cmd, s.image, s.first_use ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_GENERAL,
+                  VK_IMAGE_LAYOUT_GENERAL, 0, 0, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                  VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
                   s.first_use ? VK_QUEUE_FAMILY_IGNORED : VK_QUEUE_FAMILY_FOREIGN_EXT,
                   s.first_use ? VK_QUEUE_FAMILY_IGNORED : family);
+    image_barrier(cmd, s.image, VK_IMAGE_LAYOUT_GENERAL, outLayout, 0, outAccess,
+                  VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, outStage);
     s.first_use = false;
 
     const int32_t limited = full_range ? 0 : 1;

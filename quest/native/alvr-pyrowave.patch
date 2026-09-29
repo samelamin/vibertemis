@@ -214,22 +214,23 @@ index d471a4a..75189e7 100644
  rust-version = "1.82"
  authors = ["alvr-org"]
 diff --git a/alvr/client_core/build.rs b/alvr/client_core/build.rs
-index 5b9dcfe..4e641c1 100644
+index 5b9dcfe..f2bea91 100644
 --- a/alvr/client_core/build.rs
 +++ b/alvr/client_core/build.rs
-@@ -2,6 +2,10 @@ fn main() {
+@@ -2,6 +2,11 @@ fn main() {
      let platform_name = std::env::var("CARGO_CFG_TARGET_OS").unwrap();
  
      if platform_name == "android" {
 +        println!("cargo:rerun-if-env-changed=PYROCLIENT_LIB_DIR");
-+        let bridge = std::env::var("PYROCLIENT_LIB_DIR").expect("PYROCLIENT_LIB_DIR is required for the custom client");
++        let bridge = std::env::var("PYROCLIENT_LIB_DIR")
++            .expect("PYROCLIENT_LIB_DIR is required for the custom client");
 +        println!("cargo:rustc-link-search=native={bridge}");
 +        println!("cargo:rustc-link-lib=pyroclient");
          println!("cargo:rustc-link-lib=log");
          println!("cargo:rustc-link-lib=EGL");
          println!("cargo:rustc-link-lib=GLESv3");
 diff --git a/alvr/client_core/src/c_api.rs b/alvr/client_core/src/c_api.rs
-index b69f7e9..534f534 100644
+index b69f7e9..2b0d4ec 100644
 --- a/alvr/client_core/src/c_api.rs
 +++ b/alvr/client_core/src/c_api.rs
 @@ -57,6 +57,7 @@ pub struct AlvrClientCapabilities {
@@ -265,23 +266,33 @@ index b69f7e9..534f534 100644
          },
          force_software_decoder: config.force_software_decoder,
          max_buffering_frames: config.max_buffering_frames,
-@@ -989,7 +994,7 @@ pub extern "C" fn alvr_create_decoder(config: AlvrDecoderConfig) {
+@@ -989,16 +994,24 @@ pub extern "C" fn alvr_create_decoder(config: AlvrDecoderConfig) {
          },
      };
  
 -    let (mut sink, source) =
-+    let result =
-         video_decoder::create_decoder(config, |maybe_timestamp: Result<Duration>| {
-             if let Some(context) = &*CLIENT_CORE_CONTEXT.lock() {
-                 match maybe_timestamp {
-@@ -999,6 +1004,13 @@ pub extern "C" fn alvr_create_decoder(config: AlvrDecoderConfig) {
+-        video_decoder::create_decoder(config, |maybe_timestamp: Result<Duration>| {
+-            if let Some(context) = &*CLIENT_CORE_CONTEXT.lock() {
+-                match maybe_timestamp {
+-                    Ok(timestamp) => context.report_frame_decoded(timestamp),
+-                    Err(e) => context.report_fatal_decoder_error(&e.to_string()),
+-                }
++    let result = video_decoder::create_decoder(config, |maybe_timestamp: Result<Duration>| {
++        if let Some(context) = &*CLIENT_CORE_CONTEXT.lock() {
++            match maybe_timestamp {
++                Ok(timestamp) => context.report_frame_decoded(timestamp),
++                Err(e) => context.report_fatal_decoder_error(&e.to_string()),
              }
-         });
+-        });
++        }
++    });
  
 +    let (mut sink, source) = match result {
 +        Ok(decoder) => decoder,
 +        Err(error) => {
-+            if let Some(context) = &*CLIENT_CORE_CONTEXT.lock() { context.report_fatal_decoder_error(&error.to_string()); }
++            if let Some(context) = &*CLIENT_CORE_CONTEXT.lock() {
++                context.report_fatal_decoder_error(&error.to_string());
++            }
 +            return;
 +        }
 +    };
@@ -289,24 +300,39 @@ index b69f7e9..534f534 100644
  
      if let Some(context) = &*CLIENT_CORE_CONTEXT.lock() {
 diff --git a/alvr/client_core/src/connection.rs b/alvr/client_core/src/connection.rs
-index 357bd43..26e9cda 100644
+index 357bd43..49f83b8 100644
 --- a/alvr/client_core/src/connection.rs
 +++ b/alvr/client_core/src/connection.rs
-@@ -200,6 +200,13 @@ fn connection_pipeline(
+@@ -200,6 +200,17 @@ fn connection_pipeline(
              server_ip,
              streaming_capabilities: Some(
                  alvr_packets::encode_video_streaming_capabilities(&VideoStreamingCapabilities {
-+                    decoder_pyrowave: capabilities.pcvr_request.codec == Some(alvr_session::CodecType::PyroWave)
-+                        && !capabilities.pcvr_request.travel && crate::video_decoder::pyrowave_supported(),
++                    decoder_pyrowave: capabilities.pcvr_request.codec
++                        == Some(alvr_session::CodecType::PyroWave)
++                        && !capabilities.pcvr_request.travel
++                        && crate::video_decoder::pyrowave_supported(),
 +                    pcvr_request: alvr_packets::PcvrRequest {
-+                        allow_restart: capabilities.restart_deadline.is_some_and(|deadline| Instant::now() < deadline)
++                        allow_restart: capabilities
++                            .restart_deadline
++                            .is_some_and(|deadline| Instant::now() < deadline)
 +                            && capabilities.pcvr_request.allow_restart,
 +                        ..capabilities.pcvr_request.clone()
 +                    },
                      default_view_resolution: capabilities.default_view_resolution,
                      supported_refresh_rates: capabilities.refresh_rates,
                      microphone_sample_rate,
-@@ -517,6 +524,11 @@ fn connection_pipeline(
+@@ -253,6 +264,10 @@ fn connection_pipeline(
+             info!("Stream starting");
+             set_hud_message(&event_queue, STREAM_STARTING_MESSAGE);
+         }
++        Ok(ServerControlPacket::Reserved(reason)) if reason == "vq_restart_consent_required" => {
++            set_hud_message(&event_queue, "Return to the Vibertemis hub and connect again to approve the SteamVR settings restart.");
++            return Ok(());
++        }
+         Ok(ServerControlPacket::Restarting) => {
+             info!("Server restarting");
+             set_hud_message(&event_queue, SERVER_RESTART_MESSAGE);
+@@ -517,6 +532,11 @@ fn connection_pipeline(
                          set_hud_message(&event_queue, SERVER_RESTART_MESSAGE);
                          disconnect_notif.notify_one();
                      }
@@ -376,10 +402,10 @@ index a8e70c2..480fe85 100644
      let mut format = MediaFormat::new();
      format.set_str("mime", mime);
 diff --git a/alvr/client_core/src/video_decoder/mod.rs b/alvr/client_core/src/video_decoder/mod.rs
-index 3a1555c..1c69a56 100644
+index 3a1555c..fe8c52a 100644
 --- a/alvr/client_core/src/video_decoder/mod.rs
 +++ b/alvr/client_core/src/video_decoder/mod.rs
-@@ -1,5 +1,17 @@
+@@ -1,5 +1,20 @@
  #[cfg(target_os = "android")]
  mod android;
 +#[cfg(target_os = "android")]
@@ -389,15 +415,18 @@ index 3a1555c..1c69a56 100644
 +
 +pub fn pyrowave_supported() -> bool {
 +    #[cfg(target_os = "android")]
-+    { pyrowave::supported() }
++    {
++        pyrowave::supported()
++    }
 +    #[cfg(not(target_os = "android"))]
-+    { false }
++    {
++        false
++    }
 +}
-+
  
  use alvr_common::anyhow::Result;
  use alvr_session::{CodecType, MediacodecProperty};
-@@ -17,7 +29,7 @@ pub struct VideoDecoderConfig {
+@@ -17,7 +32,7 @@ pub struct VideoDecoderConfig {
  
  pub struct VideoDecoderSink {
      #[cfg(target_os = "android")]
@@ -406,7 +435,7 @@ index 3a1555c..1c69a56 100644
  }
  
  impl VideoDecoderSink {
-@@ -26,7 +38,10 @@ impl VideoDecoderSink {
+@@ -26,7 +41,11 @@ impl VideoDecoderSink {
      pub fn push_nal(&mut self, timestamp: Duration, nal: &[u8]) -> bool {
          #[cfg(target_os = "android")]
          {
@@ -414,11 +443,12 @@ index 3a1555c..1c69a56 100644
 +            alvr_common::show_err(match &mut self.inner {
 +                Sink::MediaCodec(sink) => sink.push_frame_nal(timestamp, nal),
 +                Sink::PyroWave(sink) => sink.push_frame_nal(timestamp, nal),
-+            }).unwrap_or(false)
++            })
++            .unwrap_or(false)
          }
          #[cfg(not(target_os = "android"))]
          false
-@@ -35,7 +50,7 @@ impl VideoDecoderSink {
+@@ -35,7 +54,7 @@ impl VideoDecoderSink {
  
  pub struct VideoDecoderSource {
      #[cfg(target_os = "android")]
@@ -427,7 +457,7 @@ index 3a1555c..1c69a56 100644
  }
  
  impl VideoDecoderSource {
-@@ -43,7 +58,10 @@ impl VideoDecoderSource {
+@@ -43,7 +62,10 @@ impl VideoDecoderSource {
      pub fn get_frame(&mut self) -> Option<(Duration, *mut std::ffi::c_void)> {
          #[cfg(target_os = "android")]
          {
@@ -439,7 +469,7 @@ index 3a1555c..1c69a56 100644
          }
          #[cfg(not(target_os = "android"))]
          None
-@@ -55,21 +73,36 @@ impl VideoDecoderSource {
+@@ -55,21 +77,51 @@ impl VideoDecoderSource {
  pub fn create_decoder(
      config: VideoDecoderConfig,
      report_frame_decoded: impl Fn(Result<Duration>) + Send + Sync + 'static,
@@ -449,24 +479,34 @@ index 3a1555c..1c69a56 100644
      {
 +        if config.codec == CodecType::PyroWave {
 +            let (sink, source) = pyrowave::video_decoder_split(config, report_frame_decoded)?;
-+            return Ok((VideoDecoderSink { inner: Sink::PyroWave(sink) },
-+                       VideoDecoderSource { inner: Source::PyroWave(source) }));
++            return Ok((
++                VideoDecoderSink {
++                    inner: Sink::PyroWave(sink),
++                },
++                VideoDecoderSource {
++                    inner: Source::PyroWave(source),
++                },
++            ));
 +        }
          let (sink, source) = android::video_decoder_split(
              config.clone(),
              config.config_buffer,
              report_frame_decoded,
-         )
+-        )
 -        .unwrap();
-+        ?;
++        )?;
  
 -        (
 -            VideoDecoderSink { inner: sink },
 -            VideoDecoderSource { inner: source },
 -        )
 +        Ok((
-+            VideoDecoderSink { inner: Sink::MediaCodec(sink) },
-+            VideoDecoderSource { inner: Source::MediaCodec(source) },
++            VideoDecoderSink {
++                inner: Sink::MediaCodec(sink),
++            },
++            VideoDecoderSource {
++                inner: Source::MediaCodec(source),
++            },
 +        ))
      }
      #[cfg(not(target_os = "android"))]
@@ -475,9 +515,15 @@ index 3a1555c..1c69a56 100644
 +}
 +
 +#[cfg(target_os = "android")]
-+enum Sink { MediaCodec(android::VideoDecoderSink), PyroWave(pyrowave::VideoDecoderSink) }
++enum Sink {
++    MediaCodec(android::VideoDecoderSink),
++    PyroWave(pyrowave::VideoDecoderSink),
++}
 +#[cfg(target_os = "android")]
-+enum Source { MediaCodec(android::VideoDecoderSource), PyroWave(pyrowave::VideoDecoderSource) }
++enum Source {
++    MediaCodec(android::VideoDecoderSource),
++    PyroWave(pyrowave::VideoDecoderSource),
++}
 +
 +pub fn disable_pyrowave() {
 +    #[cfg(target_os = "android")]
@@ -485,21 +531,37 @@ index 3a1555c..1c69a56 100644
  }
 diff --git a/alvr/client_core/src/video_decoder/pyrowave.rs b/alvr/client_core/src/video_decoder/pyrowave.rs
 new file mode 100644
-index 0000000..3bcc6fc
+index 0000000..f77e180
 --- /dev/null
 +++ b/alvr/client_core/src/video_decoder/pyrowave.rs
-@@ -0,0 +1,128 @@
+@@ -0,0 +1,212 @@
 +//! Intra-only latest-frame decoder. A decoded AHardwareBuffer stays leased until
 +//! the renderer's NEXT dequeue (the same lifetime contract as MediaCodec).
 +use super::{parse_pyrowave_config, VideoDecoderConfig};
-+use alvr_common::{anyhow::{anyhow, bail, Result}, parking_lot::{Condvar, Mutex}};
-+use std::{ffi::c_void, sync::{atomic::{AtomicBool, Ordering}, Arc, OnceLock}, thread::{self, JoinHandle}, time::Duration};
++use alvr_common::{
++    anyhow::{anyhow, bail, Result},
++    parking_lot::{Condvar, Mutex},
++};
++use std::{
++    ffi::c_void,
++    sync::{
++        atomic::{AtomicBool, Ordering},
++        Arc, OnceLock,
++    },
++    thread::{self, JoinHandle},
++    time::Duration,
++};
 +
 +static FAILED: AtomicBool = AtomicBool::new(false);
 +static PROBED: OnceLock<bool> = OnceLock::new();
 +#[repr(C)]
 +#[derive(Default)]
-+struct FrameInfo { decode_ms: f64, convert_ms: f64, total_ms: f64, complete: i32 }
++struct FrameInfo {
++    decode_ms: f64,
++    convert_ms: f64,
++    total_ms: f64,
++    complete: i32,
++}
 +extern "C" {
 +    fn pyroclient_probe() -> i32;
 +    fn pyroclient_create(w: u32, h: u32, chroma: i32, full: i32, ring: u32) -> *mut c_void;
@@ -510,7 +572,9 @@ index 0000000..3bcc6fc
 +    fn pyroclient_destroy(c: *mut c_void);
 +}
 +
-+pub fn disable() { FAILED.store(true, Ordering::Release); }
++pub fn disable() {
++    FAILED.store(true, Ordering::Release);
++}
 +
 +pub fn supported() -> bool {
 +    !FAILED.load(Ordering::Acquire) && *PROBED.get_or_init(|| unsafe { pyroclient_probe() == 1 })
@@ -521,36 +585,59 @@ index 0000000..3bcc6fc
 +    ready: Condvar,
 +    running: AtomicBool,
 +}
-+struct Frames { decoded: Option<(Duration, usize)>, in_use: Option<usize> }
-+struct Decoder { ptr: usize, frames: Mutex<Frames> }
++struct Frames {
++    decoded: Option<(Duration, usize)>,
++    in_use: Option<usize>,
++}
++struct Decoder {
++    ptr: usize,
++    frames: Mutex<Frames>,
++}
 +// Only the worker performs decode/queue operations. Release merely takes the
 +// bridge's lease mutex. Drop runs after the worker joins and renderer releases.
 +impl Decoder {
-+    fn ptr(&self) -> *mut c_void { self.ptr as *mut c_void }
-+    fn release(&self, ptr: usize) { unsafe { pyroclient_release(self.ptr(), ptr as *mut c_void) } }
++    fn ptr(&self) -> *mut c_void {
++        self.ptr as *mut c_void
++    }
++    fn release(&self, ptr: usize) {
++        unsafe { pyroclient_release(self.ptr(), ptr as *mut c_void) }
++    }
 +}
 +impl Drop for Decoder {
-+    fn drop(&mut self) { unsafe { pyroclient_destroy(self.ptr()) } }
++    fn drop(&mut self) {
++        unsafe { pyroclient_destroy(self.ptr()) }
++    }
 +}
 +
-+pub struct VideoDecoderSink { pending: Arc<Pending> }
++pub struct VideoDecoderSink {
++    pending: Arc<Pending>,
++}
 +impl VideoDecoderSink {
 +    pub fn push_frame_nal(&mut self, timestamp: Duration, data: &[u8]) -> Result<bool> {
-+        if data.is_empty() || data.len() > 8 * 1024 * 1024 { bail!("PyroWave frame exceeds limit"); }
++        if data.is_empty() || data.len() > 8 * 1024 * 1024 {
++            bail!("PyroWave frame exceeds limit");
++        }
 +        let mut slot = self.pending.frame.lock();
-+        if !self.pending.running.load(Ordering::Acquire) { return Ok(false); }
++        if !self.pending.running.load(Ordering::Acquire) {
++            return Ok(false);
++        }
 +        *slot = Some((timestamp, data.to_vec()));
 +        self.pending.ready.notify_one();
 +        Ok(true)
 +    }
 +}
-+pub struct VideoDecoderSource { pending: Arc<Pending>, decoder: Arc<Decoder>, thread: Option<JoinHandle<()>> }
++pub struct VideoDecoderSource {
++    pending: Arc<Pending>,
++    decoder: Arc<Decoder>,
++    thread: Option<JoinHandle<()>>,
++}
 +impl VideoDecoderSource {
 +    pub fn dequeue_frame(&mut self) -> Option<(Duration, *mut c_void)> {
 +        let mut frames = self.decoder.frames.lock();
-+        if let Some(previous) = frames.in_use.take() { self.decoder.release(previous); }
 +        let (timestamp, ptr) = frames.decoded.take()?;
-+        frames.in_use = Some(ptr);
++        if let Some(previous) = frames.in_use.replace(ptr) {
++            self.decoder.release(previous);
++        }
 +        Some((timestamp, ptr as *mut c_void))
 +    }
 +}
@@ -562,162 +649,352 @@ index 0000000..3bcc6fc
 +            *pending = None;
 +            self.pending.ready.notify_all();
 +        }
-+        if let Some(thread) = self.thread.take() { let _ = thread.join(); }
++        if let Some(thread) = self.thread.take() {
++            let _ = thread.join();
++        }
 +        let mut frames = self.decoder.frames.lock();
-+        if let Some(ptr) = frames.in_use.take() { self.decoder.release(ptr); }
-+        if let Some((_, ptr)) = frames.decoded.take() { self.decoder.release(ptr); }
++        if let Some(ptr) = frames.in_use.take() {
++            self.decoder.release(ptr);
++        }
++        if let Some((_, ptr)) = frames.decoded.take() {
++            self.decoder.release(ptr);
++        }
 +    }
 +}
 +
-+pub fn video_decoder_split(config: VideoDecoderConfig,
++pub fn video_decoder_split(
++    config: VideoDecoderConfig,
 +    report: impl Fn(Result<Duration>) + Send + Sync + 'static,
 +) -> Result<(VideoDecoderSink, VideoDecoderSource)> {
 +    let cfg = parse_pyrowave_config(&config.config_buffer)?;
-+    if !supported() { bail!("PyroWave unavailable; reconnect using the standard codec"); }
++    if !supported() {
++        bail!("PyroWave unavailable; reconnect using the standard codec");
++    }
 +    let ptr = unsafe { pyroclient_create(cfg.width, cfg.height, 1, cfg.full_range as i32, 3) };
 +    if ptr.is_null() {
 +        FAILED.store(true, Ordering::Release);
 +        bail!("PyroWave initialization failed; reconnecting with the standard codec");
 +    }
-+    let decoder = Arc::new(Decoder { ptr: ptr as usize, frames: Mutex::new(Frames { decoded: None, in_use: None }) });
-+    let pending = Arc::new(Pending { frame: Mutex::new(None), ready: Condvar::new(), running: AtomicBool::new(true) });
-+    let thread = thread::Builder::new().name("PyroWave decoder".into()).spawn({
-+        let decoder = Arc::clone(&decoder);
-+        let pending = Arc::clone(&pending);
-+        move || {
-+            while pending.running.load(Ordering::Acquire) {
-+                let next = {
-+                    let mut slot = pending.frame.lock();
-+                    while slot.is_none() && pending.running.load(Ordering::Acquire) { pending.ready.wait(&mut slot); }
-+                    slot.take()
-+                };
-+                let Some((timestamp, data)) = next else { continue; };
-+                let mut out = std::ptr::null_mut();
-+                let mut info = FrameInfo::default();
-+                let result = unsafe {
-+                    // ALVR delivers an assembled intra frame, never mix partial frames.
-+                    pyroclient_clear(decoder.ptr());
-+                    if pyroclient_push_packet(decoder.ptr(), data.as_ptr(), data.len()) != 1 { -1 }
-+                    else { pyroclient_decode(decoder.ptr(), &mut out, &mut info) }
-+                };
-+                if result == 1 { continue; } // all output slots leased: drop without blocking receive
-+                if result != 0 || out.is_null() || info.complete != 1 {
-+                    FAILED.store(true, Ordering::Release);
-+                    pending.running.store(false, Ordering::Release);
-+                    report(Err(anyhow!("PyroWave decoding failed; reconnecting with the standard codec")));
-+                    break;
++    let decoder = Arc::new(Decoder {
++        ptr: ptr as usize,
++        frames: Mutex::new(Frames {
++            decoded: None,
++            in_use: None,
++        }),
++    });
++    let pending = Arc::new(Pending {
++        frame: Mutex::new(None),
++        ready: Condvar::new(),
++        running: AtomicBool::new(true),
++    });
++    let thread = thread::Builder::new()
++        .name("PyroWave decoder".into())
++        .spawn({
++            let decoder = Arc::clone(&decoder);
++            let pending = Arc::clone(&pending);
++            move || {
++                while pending.running.load(Ordering::Acquire) {
++                    let next = {
++                        let mut slot = pending.frame.lock();
++                        while slot.is_none() && pending.running.load(Ordering::Acquire) {
++                            pending.ready.wait(&mut slot);
++                        }
++                        slot.take()
++                    };
++                    let Some((timestamp, data)) = next else {
++                        continue;
++                    };
++                    let mut out = std::ptr::null_mut();
++                    let mut info = FrameInfo::default();
++                    let result = unsafe {
++                        // ALVR delivers an assembled intra frame, never mix partial frames.
++                        pyroclient_clear(decoder.ptr());
++                        if pyroclient_push_packet(decoder.ptr(), data.as_ptr(), data.len()) != 1 {
++                            -1
++                        } else {
++                            pyroclient_decode(decoder.ptr(), &mut out, &mut info)
++                        }
++                    };
++                    if result == 1 {
++                        continue;
++                    } // all output slots leased: drop without blocking receive
++                    if result != 0 || out.is_null() || info.complete != 1 {
++                        FAILED.store(true, Ordering::Release);
++                        pending.running.store(false, Ordering::Release);
++                        report(Err(anyhow!(
++                            "PyroWave decoding failed; reconnecting with the standard codec"
++                        )));
++                        break;
++                    }
++                    {
++                        let mut frames = decoder.frames.lock();
++                        if let Some((_, old)) = frames.decoded.replace((timestamp, out as usize)) {
++                            decoder.release(old);
++                        }
++                    }
++                    report(Ok(timestamp));
 +                }
-+                {
-+                    let mut frames = decoder.frames.lock();
-+                    if let Some((_, old)) = frames.decoded.replace((timestamp, out as usize)) { decoder.release(old); }
-+                }
-+                report(Ok(timestamp));
 +            }
-+        }
-+    })?;
-+    Ok((VideoDecoderSink { pending: Arc::clone(&pending) }, VideoDecoderSource { pending, decoder, thread: Some(thread) }))
++        })?;
++    Ok((
++        VideoDecoderSink {
++            pending: Arc::clone(&pending),
++        },
++        VideoDecoderSource {
++            pending,
++            decoder,
++            thread: Some(thread),
++        },
++    ))
 +}
 diff --git a/alvr/client_core/src/video_decoder/pyrowave_config.rs b/alvr/client_core/src/video_decoder/pyrowave_config.rs
 new file mode 100644
-index 0000000..4943a11
+index 0000000..b46ad02
 --- /dev/null
 +++ b/alvr/client_core/src/video_decoder/pyrowave_config.rs
-@@ -0,0 +1,38 @@
+@@ -0,0 +1,72 @@
 +use alvr_common::anyhow::{bail, Result};
 +
 +#[derive(Debug, PartialEq)]
-+pub struct PyroWaveConfig { pub width: u32, pub height: u32, pub full_range: bool }
++pub struct PyroWaveConfig {
++    pub width: u32,
++    pub height: u32,
++    pub full_range: bool,
++}
 +
 +// Custom protocol v1: LE u32 width/height, 4:4:4 flag, full-range flag.
 +// Validate before any allocation or native call. Only upstream CDF 9/7 is supported.
 +pub fn parse_pyrowave_config(bytes: &[u8]) -> Result<PyroWaveConfig> {
-+    if bytes.len() != 10 { bail!("Invalid PyroWave config length"); }
++    if bytes.len() != 10 {
++        bail!("Invalid PyroWave config length");
++    }
 +    let width = u32::from_le_bytes(bytes[0..4].try_into()?);
 +    let height = u32::from_le_bytes(bytes[4..8].try_into()?);
-+    if !(64..=8192).contains(&width) || !(64..=8192).contains(&height)
++    if !(64..=8192).contains(&width)
++        || !(64..=8192).contains(&height)
 +        || u64::from(width) * u64::from(height) > 40_000_000
-+        || bytes[8] != 1 || bytes[9] > 1 {
++        || bytes[8] != 1
++        || bytes[9] > 1
++    {
 +        bail!("Unsupported PyroWave geometry or pixel format");
 +    }
-+    Ok(PyroWaveConfig { width, height, full_range: bytes[9] == 1 })
++    Ok(PyroWaveConfig {
++        width,
++        height,
++        full_range: bytes[9] == 1,
++    })
 +}
 +
 +#[cfg(test)]
 +mod tests {
 +    use super::*;
 +    fn config(w: u32, h: u32) -> Vec<u8> {
-+        [w.to_le_bytes().as_slice(), h.to_le_bytes().as_slice(), &[1, 1]].concat()
++        [
++            w.to_le_bytes().as_slice(),
++            h.to_le_bytes().as_slice(),
++            &[1, 1],
++        ]
++        .concat()
 +    }
 +    #[test]
 +    fn validates_before_native_allocation() {
-+        assert_eq!(parse_pyrowave_config(&config(4096, 2048)).unwrap().width, 4096);
-+        for (w, h) in [(0, 1), (63, 256), (8193, 1024), (8192, 8192), (u32::MAX, u32::MAX)] {
++        assert_eq!(
++            parse_pyrowave_config(&config(4096, 2048)).unwrap().width,
++            4096
++        );
++        for (w, h) in [
++            (0, 1),
++            (63, 256),
++            (8193, 1024),
++            (8192, 8192),
++            (u32::MAX, u32::MAX),
++        ] {
 +            assert!(parse_pyrowave_config(&config(w, h)).is_err());
 +        }
 +        let mut data = config(4096, 2048);
-+        for len in 0..10 { assert!(parse_pyrowave_config(&data[..len]).is_err()); }
-+        data.push(0); assert!(parse_pyrowave_config(&data).is_err()); data.pop();
-+        data[8] = 0; assert!(parse_pyrowave_config(&data).is_err());
-+        data[8] = 1; data[9] = 2; assert!(parse_pyrowave_config(&data).is_err());
++        for len in 0..10 {
++            assert!(parse_pyrowave_config(&data[..len]).is_err());
++        }
++        data.push(0);
++        assert!(parse_pyrowave_config(&data).is_err());
++        data.pop();
++        data[8] = 0;
++        assert!(parse_pyrowave_config(&data).is_err());
++        data[8] = 1;
++        data[9] = 2;
++        assert!(parse_pyrowave_config(&data).is_err());
 +    }
 +}
 diff --git a/alvr/client_openxr/src/lib.rs b/alvr/client_openxr/src/lib.rs
-index 3e35add..2e7ab9e 100644
+index 3e35add..4271c70 100644
 --- a/alvr/client_openxr/src/lib.rs
 +++ b/alvr/client_openxr/src/lib.rs
-@@ -1,3 +1,4 @@
+@@ -4,6 +4,7 @@ mod graphics;
+ mod interaction;
+ mod lobby;
+ mod passthrough;
 +mod pcvr_request;
- mod c_api;
- mod extra_extensions;
- mod graphics;
-@@ -262,6 +263,8 @@ pub fn entry_point() {
+ mod stream;
+ 
+ use crate::stream::ParsedStreamConfig;
+@@ -261,7 +262,10 @@ pub fn entry_point() {
+                 .unwrap();
          }
  
++        let (pcvr_request, restart_deadline) = pcvr_request::read();
          let capabilities = ClientCapabilities {
-+            pcvr_request: pcvr_request::read(),
-+            restart_deadline: Some(std::time::Instant::now() + Duration::from_secs(120)),
++            pcvr_request,
++            restart_deadline,
              default_view_resolution,
              refresh_rates,
              foveated_encoding: platform != Platform::Unknown,
 diff --git a/alvr/client_openxr/src/pcvr_request.rs b/alvr/client_openxr/src/pcvr_request.rs
 new file mode 100644
-index 0000000..911dba0
+index 0000000..71631e7
 --- /dev/null
 +++ b/alvr/client_openxr/src/pcvr_request.rs
-@@ -0,0 +1,31 @@
+@@ -0,0 +1,139 @@
 +use alvr_packets::PcvrRequest;
 +#[cfg(target_os = "android")]
-+fn android_request() -> alvr_common::anyhow::Result<PcvrRequest> {
++fn android_request() -> alvr_common::anyhow::Result<(PcvrRequest, Option<std::time::Instant>)> {
 +    use alvr_session::CodecType;
-+    use jni::{objects::{JObject, JValue}, JavaVM};
++    use jni::{
++        objects::{JObject, JValue},
++        JavaVM,
++    };
 +    let context = ndk_context::android_context();
 +    let vm = unsafe { JavaVM::from_raw(context.vm().cast())? };
 +    let mut env = vm.attach_current_thread()?;
 +    let activity = unsafe { JObject::from_raw(context.context().cast()) };
-+    let intent = env.call_method(&activity, "getIntent", "()Landroid/content/Intent;", &[])?.l()?;
++    let intent = env
++        .call_method(&activity, "getIntent", "()Landroid/content/Intent;", &[])?
++        .l()?;
 +    let mut string = |key: &str| -> alvr_common::anyhow::Result<Option<CodecType>> {
 +        let key = env.new_string(key)?;
-+        let value = env.call_method(&intent, "getStringExtra", "(Ljava/lang/String;)Ljava/lang/String;", &[JValue::Object(&key)])?.l()?;
-+        if value.is_null() { return Ok(None); }
++        let value = env
++            .call_method(
++                &intent,
++                "getStringExtra",
++                "(Ljava/lang/String;)Ljava/lang/String;",
++                &[JValue::Object(&key)],
++            )?
++            .l()?;
++        if value.is_null() {
++            return Ok(None);
++        }
 +        let value: String = env.get_string(&value.into())?.into();
-+        Ok(match value.as_str() { "PyroWave" => Some(CodecType::PyroWave), "AV1" => Some(CodecType::AV1), "Hevc" => Some(CodecType::Hevc), _ => None })
++        Ok(match value.as_str() {
++            "PyroWave" => Some(CodecType::PyroWave),
++            "AV1" => Some(CodecType::AV1),
++            "Hevc" => Some(CodecType::Hevc),
++            _ => None,
++        })
 +    };
 +    let codec = string("vq_pcvr_codec")?;
 +    let fallback = string("vq_pcvr_fallback")?.filter(|codec| *codec != CodecType::PyroWave);
 +    let mut boolean = |key: &str| -> alvr_common::anyhow::Result<bool> {
 +        let key = env.new_string(key)?;
-+        Ok(env.call_method(&intent, "getBooleanExtra", "(Ljava/lang/String;Z)Z", &[JValue::Object(&key), JValue::Bool(0)])?.z()?)
++        Ok(env
++            .call_method(
++                &intent,
++                "getBooleanExtra",
++                "(Ljava/lang/String;Z)Z",
++                &[JValue::Object(&key), JValue::Bool(0)],
++            )?
++            .z()?)
 +    };
-+    Ok(PcvrRequest { codec, fallback, travel: boolean("vq_pcvr_travel")?, allow_restart: boolean("vq_pcvr_allow_restart")? })
++    let travel = boolean("vq_pcvr_travel")?;
++    let allowed = boolean("vq_pcvr_allow_restart")?;
++    let key = env.new_string("vq_pcvr_restart_until_ms")?;
++    let deadline = env
++        .call_method(
++            &intent,
++            "getLongExtra",
++            "(Ljava/lang/String;J)J",
++            &[JValue::Object(&key), JValue::Long(0)],
++        )?
++        .j()?;
++    let bitrate_key = env.new_string("vq_pcvr_bitrate_mbps")?;
++    let bitrate = env
++        .call_method(
++            &intent,
++            "getIntExtra",
++            "(Ljava/lang/String;I)I",
++            &[JValue::Object(&bitrate_key), JValue::Int(0)],
++        )?
++        .i()?;
++    let bitrate_ceiling_mbps = (5..=200).contains(&bitrate).then_some(bitrate as u64);
++    let now = env
++        .call_static_method("android/os/SystemClock", "elapsedRealtime", "()J", &[])?
++        .j()?;
++    let remaining = deadline.saturating_sub(now);
++    let allow_restart = allowed && remaining > 0 && remaining <= 120000;
++    Ok((
++        PcvrRequest {
++            codec,
++            fallback,
++            travel,
++            allow_restart,
++            bitrate_ceiling_mbps,
++        },
++        allow_restart.then(|| {
++            std::time::Instant::now() + std::time::Duration::from_millis(remaining as u64)
++        }),
++    ))
 +}
-+pub fn read() -> PcvrRequest {
++pub fn read() -> (PcvrRequest, Option<std::time::Instant>) {
 +    #[cfg(target_os = "android")]
-+    { android_request().unwrap_or_else(|error| { alvr_common::warn!("PCVR options unavailable: {error}"); PcvrRequest::default() }) }
++    {
++        android_request().unwrap_or_else(|error| {
++            alvr_common::warn!("PCVR options unavailable: {error}");
++            (PcvrRequest::default(), None)
++        })
++    }
 +    #[cfg(not(target_os = "android"))]
-+    { PcvrRequest::default() }
++    {
++        (PcvrRequest::default(), None)
++    }
++}
++
++// Called only after actual decoder output, never from a requested preference.
++pub fn report_codec(codec: alvr_session::CodecType) {
++    #[cfg(target_os = "android")]
++    {
++        use jni::{
++            objects::{JObject, JValue},
++            JavaVM,
++        };
++        let name = match codec {
++            alvr_session::CodecType::PyroWave => "PyroWave",
++            alvr_session::CodecType::AV1 => "AV1",
++            alvr_session::CodecType::Hevc => "HEVC",
++            alvr_session::CodecType::H264 => "H.264",
++        };
++        let context = ndk_context::android_context();
++        let result = (|| -> alvr_common::anyhow::Result<()> {
++            let vm = unsafe { JavaVM::from_raw(context.vm().cast())? };
++            let mut env = vm.attach_current_thread()?;
++            let activity = unsafe { JObject::from_raw(context.context().cast()) };
++            let text = env.new_string(name)?;
++            let result = env.call_method(
++                &activity,
++                "onPcvrCodec",
++                "(Ljava/lang/String;)V",
++                &[JValue::Object(&text)],
++            );
++            if result.is_err() {
++                let _ = env.exception_clear();
++            }
++            result?;
++            Ok(())
++        })();
++        if let Err(error) = result {
++            alvr_common::warn!("Could not record decoded codec: {error}");
++        }
++    }
 +}
 diff --git a/alvr/client_openxr/src/stream.rs b/alvr/client_openxr/src/stream.rs
-index ca32945..2bb3dfe 100644
+index ca32945..20c6ff0 100644
 --- a/alvr/client_openxr/src/stream.rs
 +++ b/alvr/client_openxr/src/stream.rs
 @@ -34,6 +34,7 @@ use std::{
@@ -745,30 +1022,41 @@ index ca32945..2bb3dfe 100644
              config.encoding_gamma,
              config.upscaling.clone(),
          );
-@@ -314,13 +316,17 @@ impl StreamContext {
+@@ -314,13 +316,27 @@ impl StreamContext {
          };
  
          if let Some(config) = maybe_config {
 -            let (mut sink, source) = video_decoder::create_decoder(config.clone(), {
 +            let result = video_decoder::create_decoder(config.clone(), {
                  let ctx = Arc::clone(&self.core_context);
++                let reported = std::sync::atomic::AtomicBool::new(false);
                  move |maybe_timestamp: Result<Duration>| match maybe_timestamp {
-                     Ok(timestamp) => ctx.report_frame_decoded(timestamp),
+-                    Ok(timestamp) => ctx.report_frame_decoded(timestamp),
++                    Ok(timestamp) => {
++                        ctx.report_frame_decoded(timestamp);
++                        if !reported.swap(true, std::sync::atomic::Ordering::Relaxed) {
++                            crate::pcvr_request::report_codec(codec);
++                        }
++                    }
                      Err(e) => ctx.report_fatal_decoder_error(&e.to_string()),
                  }
              });
 +            let (mut sink, source) = match result {
 +                Ok(decoder) => decoder,
-+                Err(error) => { self.core_context.report_fatal_decoder_error(&error.to_string()); return; }
++                Err(error) => {
++                    self.core_context
++                        .report_fatal_decoder_error(&error.to_string());
++                    return;
++                }
 +            };
              self.decoder = Some((config, source));
  
              self.core_context.set_decoder_input_callback(Box::new(
 diff --git a/alvr/packets/src/lib.rs b/alvr/packets/src/lib.rs
-index 995888e..6f8141e 100644
+index 995888e..50a2099 100644
 --- a/alvr/packets/src/lib.rs
 +++ b/alvr/packets/src/lib.rs
-@@ -31,12 +31,22 @@ pub struct VideoStreamingCapabilitiesLegacy {
+@@ -31,12 +31,23 @@ pub struct VideoStreamingCapabilitiesLegacy {
      pub microphone_sample_rate: u32,
  }
  
@@ -777,6 +1065,7 @@ index 995888e..6f8141e 100644
 +    pub codec: Option<CodecType>,
 +    pub fallback: Option<CodecType>,
 +    pub travel: bool,
++    pub bitrate_ceiling_mbps: Option<u64>,
 +    pub allow_restart: bool,
 +}
 +
@@ -791,7 +1080,7 @@ index 995888e..6f8141e 100644
      pub supports_foveated_encoding: bool, // todo rename
      pub encoder_high_profile: bool,
      pub encoder_10_bits: bool,
-@@ -94,6 +104,8 @@ pub fn decode_video_streaming_capabilities(
+@@ -94,6 +105,8 @@ pub fn decode_video_streaming_capabilities(
          default_view_resolution: legacy.default_view_resolution,
          supported_refresh_rates,
          microphone_sample_rate: legacy.microphone_sample_rate,
@@ -800,7 +1089,7 @@ index 995888e..6f8141e 100644
          supports_foveated_encoding: caps_json["supports_foveated_encoding"]
              .as_bool()
              .unwrap_or(true),
-@@ -124,6 +136,7 @@ pub enum ClientConnectionResult {
+@@ -124,6 +137,7 @@ pub enum ClientConnectionResult {
  // Note: not a network packet
  #[derive(Serialize, Deserialize, Clone)]
  pub struct NegotiatedStreamingConfig {
@@ -808,7 +1097,7 @@ index 995888e..6f8141e 100644
      pub view_resolution: UVec2,
      pub refresh_rate_hint: f32,
      pub game_audio_sample_rate: u32,
-@@ -186,6 +199,7 @@ pub fn decode_stream_config(packet: &StreamConfigPacket) -> Result<StreamConfig>
+@@ -186,6 +200,7 @@ pub fn decode_stream_config(packet: &StreamConfigPacket) -> Result<StreamConfig>
          server_version: session_config.server_version,
          settings,
          negotiated_config: NegotiatedStreamingConfig {
@@ -817,7 +1106,7 @@ index 995888e..6f8141e 100644
              refresh_rate_hint,
              game_audio_sample_rate,
 diff --git a/alvr/server_core/src/connection.rs b/alvr/server_core/src/connection.rs
-index 3144dfe..55769c7 100644
+index 3144dfe..eb02f91 100644
 --- a/alvr/server_core/src/connection.rs
 +++ b/alvr/server_core/src/connection.rs
 @@ -691,7 +691,7 @@ fn connection_pipeline(
@@ -829,7 +1118,7 @@ index 3144dfe..55769c7 100644
          .video
          .encoder_config
          .hdr
-@@ -712,21 +712,13 @@ fn connection_pipeline(
+@@ -712,21 +712,19 @@ fn connection_pipeline(
          streaming_caps.preferred_encoding_gamma
      };
  
@@ -848,17 +1137,23 @@ index 3144dfe..55769c7 100644
 -    } else {
 -        initial_settings.video.preferred_codec
 -    };
-+    let codec = crate::pcvr_codec::select(&streaming_caps.pcvr_request,
-+        initial_settings.video.preferred_codec, streaming_caps.encoder_av1,
++    let codec = crate::pcvr_codec::select(
++        &streaming_caps.pcvr_request,
++        initial_settings.video.preferred_codec,
++        streaming_caps.encoder_av1,
 +        streaming_caps.decoder_pyrowave,
-+        streaming_caps.decoder_pyrowave && crate::pcvr_codec::encoder_available());
++        streaming_caps.decoder_pyrowave && crate::pcvr_codec::encoder_available(),
++    );
 +    // This bridge carries SDR RGB after decoding, with exactly one range conversion.
-+    if codec == CodecType::PyroWave { enable_hdr = false; enable_10_bits_encoding = false; }
++    if codec == CodecType::PyroWave {
++        enable_hdr = false;
++        enable_10_bits_encoding = false;
++    }
 +    info!("PCVR selected codec: {codec:?}");
  
      #[cfg_attr(target_os = "linux", allow(unused_variables))]
      let game_audio_sample_rate = if let Switch::Enabled(game_audio_config) =
-@@ -773,6 +765,7 @@ fn connection_pipeline(
+@@ -773,6 +771,7 @@ fn connection_pipeline(
      let stream_config_packet = alvr_packets::encode_stream_config(
          session_manager_lock.session(),
          &NegotiatedStreamingConfig {
@@ -866,22 +1161,61 @@ index 3144dfe..55769c7 100644
              view_resolution: stream_view_resolution,
              refresh_rate_hint: fps,
              game_audio_sample_rate,
-@@ -805,6 +798,9 @@ fn connection_pipeline(
+@@ -805,6 +804,14 @@ fn connection_pipeline(
      new_openvr_config.codec = codec as _;
  
      if session_manager_lock.session().openvr_config != new_openvr_config {
 +        if !streaming_caps.pcvr_request.allow_restart {
++            control_sender
++                .send(&ServerControlPacket::Reserved(
++                    "vq_restart_consent_required".into(),
++                ))
++                .ok();
 +            con_bail!("PCVR settings require SteamVR restart. Reconnect from the headset and confirm the restart prompt.");
 +        }
          session_manager_lock.session_mut().openvr_config = new_openvr_config;
  
          control_sender.send(&ServerControlPacket::Restarting).ok();
-@@ -1110,6 +1106,11 @@ fn connection_pipeline(
+@@ -833,6 +840,17 @@ fn connection_pipeline(
+         },
+     ));
+ 
++    *ctx.pcvr_bitrate_ceiling.write() = streaming_caps
++        .pcvr_request
++        .bitrate_ceiling_mbps
++        .filter(|value| (5..=200).contains(value))
++        .map(|value| {
++            if streaming_caps.pcvr_request.travel {
++                value.min(45)
++            } else {
++                value
++            }
++        });
+     *ctx.bitrate_manager.lock() =
+         BitrateManager::new(initial_settings.video.bitrate.history_size, fps);
+ 
+@@ -1071,7 +1089,11 @@ fn connection_pipeline(
+ 
+                     let session_manager_lock = SESSION_MANAGER.read();
+                     ctx.bitrate_manager.lock().report_frame_latencies(
+-                        &session_manager_lock.settings().video.bitrate.mode,
++                        &crate::pcvr_codec::bitrate_config(
++                            &session_manager_lock.settings().video.bitrate,
++                            *ctx.pcvr_bitrate_ceiling.read(),
++                        )
++                        .mode,
+                         timestamp,
+                         network_latency,
+                         decoder_latency,
+@@ -1110,6 +1132,14 @@ fn connection_pipeline(
          let client_hostname = client_hostname.clone();
          move || {
              while is_streaming(&client_hostname) {
 +                if codec == CodecType::PyroWave && crate::pcvr_codec::failed() {
-+                    control_sender.lock().send(&ServerControlPacket::Reserved("vq_pyrowave_failed".into())).ok();
++                    control_sender
++                        .lock()
++                        .send(&ServerControlPacket::Reserved("vq_pyrowave_failed".into()))
++                        .ok();
 +                    disconnect_notif.notify_one();
 +                    return;
 +                }
@@ -889,15 +1223,26 @@ index 3144dfe..55769c7 100644
                      info!("Client disconnected. Cause: {e:?}");
  
 diff --git a/alvr/server_core/src/lib.rs b/alvr/server_core/src/lib.rs
-index a102320..118279a 100644
+index a102320..1fdca71 100644
 --- a/alvr/server_core/src/lib.rs
 +++ b/alvr/server_core/src/lib.rs
-@@ -1,3 +1,4 @@
+@@ -5,6 +5,7 @@ mod hand_gestures;
+ mod haptics;
+ mod input_mapping;
+ mod logging_backend;
 +pub mod pcvr_codec;
- mod bitrate;
- mod c_api;
- mod connection;
-@@ -119,6 +120,7 @@ pub fn create_recording_file(connection_context: &ConnectionContext, settings: &
+ mod sockets;
+ mod statistics;
+ mod tracking;
+@@ -103,6 +104,7 @@ pub struct ConnectionContext {
+     events_sender: mpsc::Sender<ServerCoreEvent>,
+     statistics_manager: RwLock<Option<StatisticsManager>>,
+     bitrate_manager: Mutex<BitrateManager>,
++    pcvr_bitrate_ceiling: RwLock<Option<u64>>,
+     tracking_manager: RwLock<TrackingManager>,
+     decoder_config: Mutex<Option<DecoderInitializationConfig>>,
+     video_mirror_sender: Mutex<Option<broadcast::Sender<Vec<u8>>>>,
+@@ -119,6 +121,7 @@ pub fn create_recording_file(connection_context: &ConnectionContext, settings: &
          CodecType::H264 => "h264",
          CodecType::Hevc => "h265",
          CodecType::AV1 => "av1",
@@ -905,28 +1250,82 @@ index a102320..118279a 100644
      };
  
      let path = FILESYSTEM_LAYOUT.get().unwrap().log_dir.join(format!(
+@@ -212,6 +215,7 @@ impl ServerCoreContext {
+             events_sender,
+             statistics_manager: RwLock::new(Some(stats)),
+             bitrate_manager: Mutex::new(BitrateManager::new(256, 60.0)),
++            pcvr_bitrate_ceiling: RwLock::new(None),
+             tracking_manager: RwLock::new(TrackingManager::new(
+                 initial_settings.connection.statistics_history_size,
+             )),
+@@ -451,10 +455,14 @@ impl ServerCoreContext {
+ 
+         let pair = {
+             let session_manager_lock = SESSION_MANAGER.read();
++            let config = pcvr_codec::bitrate_config(
++                &session_manager_lock.settings().video.bitrate,
++                *self.connection_context.pcvr_bitrate_ceiling.read(),
++            );
+             self.connection_context
+                 .bitrate_manager
+                 .lock()
+-                .get_encoder_params(&session_manager_lock.settings().video.bitrate)
++                .get_encoder_params(&config)
+         };
+ 
+         if let Some((params, stats)) = pair {
 diff --git a/alvr/server_core/src/pcvr_codec.rs b/alvr/server_core/src/pcvr_codec.rs
 new file mode 100644
-index 0000000..52948c9
+index 0000000..1c39dab
 --- /dev/null
 +++ b/alvr/server_core/src/pcvr_codec.rs
-@@ -0,0 +1,39 @@
+@@ -0,0 +1,116 @@
 +//! Per-connection choice. Saved dashboard preferences remain owned by ALVR.
 +use alvr_packets::PcvrRequest;
 +use alvr_session::CodecType;
-+use std::sync::{atomic::{AtomicBool, Ordering}, OnceLock};
++use std::sync::{
++    atomic::{AtomicBool, Ordering},
++    OnceLock,
++};
 +static PROBE: OnceLock<fn() -> bool> = OnceLock::new();
 +static FAILED: AtomicBool = AtomicBool::new(false);
-+pub fn set_encoder_probe(probe: fn() -> bool) { let _ = PROBE.set(probe); }
-+pub fn failed() -> bool { FAILED.load(Ordering::Acquire) }
-+pub fn report_failure() { FAILED.store(true, Ordering::Release); }
-+pub fn encoder_available() -> bool { !failed() && PROBE.get().is_some_and(|probe| probe()) }
++pub fn set_encoder_probe(probe: fn() -> bool) {
++    let _ = PROBE.set(probe);
++}
++pub fn failed() -> bool {
++    FAILED.load(Ordering::Acquire)
++}
++pub fn report_failure() {
++    FAILED.store(true, Ordering::Release);
++}
++pub fn encoder_available() -> bool {
++    !failed() && PROBE.get().is_some_and(|probe| probe())
++}
 +
-+pub fn select(request: &PcvrRequest, preferred: CodecType, av1: bool, decoder_pyro: bool, encoder_pyro: bool) -> CodecType {
-+    let standard = |codec| match codec { CodecType::PyroWave => if av1 { CodecType::AV1 } else { CodecType::Hevc },
-+        CodecType::AV1 if !av1 => CodecType::Hevc, other => other };
++pub fn select(
++    request: &PcvrRequest,
++    preferred: CodecType,
++    av1: bool,
++    decoder_pyro: bool,
++    encoder_pyro: bool,
++) -> CodecType {
++    let standard = |codec| match codec {
++        CodecType::PyroWave => {
++            if av1 {
++                CodecType::AV1
++            } else {
++                CodecType::Hevc
++            }
++        }
++        CodecType::AV1 if !av1 => CodecType::Hevc,
++        other => other,
++    };
 +    let fallback = standard(request.fallback.unwrap_or(preferred));
-+    let requested = if request.travel { fallback } else { request.codec.unwrap_or(preferred) };
++    let requested = if request.travel {
++        fallback
++    } else {
++        request.codec.unwrap_or(preferred)
++    };
 +    match requested {
 +        CodecType::PyroWave if decoder_pyro && encoder_pyro => CodecType::PyroWave,
 +        CodecType::PyroWave => fallback,
@@ -938,35 +1337,88 @@ index 0000000..52948c9
 +    use super::*;
 +    #[test]
 +    fn intersects_caps_and_preserves_standard_fallback() {
-+        let mut request = PcvrRequest { codec: Some(CodecType::PyroWave), fallback: Some(CodecType::Hevc), ..Default::default() };
-+        assert_eq!(select(&request, CodecType::AV1, true, true, true), CodecType::PyroWave);
++        let mut request = PcvrRequest {
++            codec: Some(CodecType::PyroWave),
++            fallback: Some(CodecType::Hevc),
++            ..Default::default()
++        };
++        assert_eq!(
++            select(&request, CodecType::AV1, true, true, true),
++            CodecType::PyroWave
++        );
 +        for (decoder, encoder) in [(false, true), (true, false), (false, false)] {
-+            assert_eq!(select(&request, CodecType::AV1, true, decoder, encoder), CodecType::Hevc);
++            assert_eq!(
++                select(&request, CodecType::AV1, true, decoder, encoder),
++                CodecType::Hevc
++            );
 +        }
 +        request.travel = true;
-+        assert_eq!(select(&request, CodecType::AV1, true, true, true), CodecType::Hevc);
++        assert_eq!(
++            select(&request, CodecType::AV1, true, true, true),
++            CodecType::Hevc
++        );
 +        request.fallback = Some(CodecType::AV1);
-+        assert_eq!(select(&request, CodecType::AV1, false, true, true), CodecType::Hevc);
-+        assert_eq!(select(&PcvrRequest::default(), CodecType::H264, true, true, true), CodecType::H264);
++        assert_eq!(
++            select(&request, CodecType::AV1, false, true, true),
++            CodecType::Hevc
++        );
++        assert_eq!(
++            select(&PcvrRequest::default(), CodecType::H264, true, true, true),
++            CodecType::H264
++        );
 +    }
 +}
++
++pub fn bitrate_config(
++    base: &alvr_session::BitrateConfig,
++    ceiling: Option<u64>,
++) -> alvr_session::BitrateConfig {
++    let mut config = base.clone();
++    if let Some(ceiling) = ceiling {
++        config.mode = alvr_session::BitrateMode::Adaptive {
++            saturation_multiplier: 0.9,
++            max_throughput_mbps: alvr_common::settings_schema::Switch::Enabled(ceiling),
++            min_throughput_mbps: alvr_common::settings_schema::Switch::Disabled,
++            max_network_latency_ms: alvr_common::settings_schema::Switch::Disabled,
++            encoder_latency_limiter: alvr_common::settings_schema::Switch::Enabled(
++                alvr_session::EncoderLatencyLimiter {
++                    max_saturation_multiplier: 0.9,
++                },
++            ),
++            decoder_latency_limiter: alvr_common::settings_schema::Switch::Enabled(
++                alvr_session::DecoderLatencyLimiter {
++                    max_decoder_latency_ms: 15,
++                    latency_overstep_frames: 30,
++                    latency_overstep_multiplier: 0.9,
++                },
++            ),
++        };
++    }
++    config
++}
 diff --git a/alvr/server_openvr/build.rs b/alvr/server_openvr/build.rs
-index 2573d07..9839962 100644
+index 2573d07..61dd772 100644
 --- a/alvr/server_openvr/build.rs
 +++ b/alvr/server_openvr/build.rs
-@@ -101,6 +101,17 @@ fn main() {
+@@ -101,6 +101,23 @@ fn main() {
      #[cfg(feature = "gpl")]
      build.define("ALVR_GPL", None);
  
 +    if platform_name == "windows" {
 +        println!("cargo:rerun-if-env-changed=ALVR_PYROWAVE_DIR");
 +        println!("cargo:rerun-if-env-changed=FXC");
-+        let pyro = PathBuf::from(env::var("ALVR_PYROWAVE_DIR").expect("Pinned PyroWave source required"));
-+        build.include(&pyro).include(pyro.join("Granite/third_party/khronos/vulkan-headers/include"));
++        let pyro =
++            PathBuf::from(env::var("ALVR_PYROWAVE_DIR").expect("Pinned PyroWave source required"));
++        build
++            .include(&pyro)
++            .include(pyro.join("Granite/third_party/khronos/vulkan-headers/include"));
 +        let fxc = env::var("FXC").unwrap_or_else(|_| "fxc.exe".into());
-+        let status = std::process::Command::new(fxc).args(["/nologo", "/T", "ps_5_0", "/E", "main", "/Fo"])
++        let status = std::process::Command::new(fxc)
++            .args(["/nologo", "/T", "ps_5_0", "/E", "main", "/Fo"])
 +            .arg(out_dir.join("rgbtoyuvplanar.cso"))
-+            .arg("cpp/alvr_server/shader/RgbToYuvPlanar.hlsl").status().expect("Run Windows SDK fxc");
++            .arg("cpp/alvr_server/shader/RgbToYuvPlanar.hlsl")
++            .status()
++            .expect("Run Windows SDK fxc");
 +        assert!(status.success(), "Planar shader compilation failed");
 +    }
      build.compile("bindings");
@@ -1476,14 +1928,15 @@ index 0000000..b420966
 +}
 diff --git a/alvr/server_openvr/cpp/platform/win32/VideoEncoderPyroWave.h b/alvr/server_openvr/cpp/platform/win32/VideoEncoderPyroWave.h
 new file mode 100644
-index 0000000..257a970
+index 0000000..b13b927
 --- /dev/null
 +++ b/alvr/server_openvr/cpp/platform/win32/VideoEncoderPyroWave.h
-@@ -0,0 +1,61 @@
+@@ -0,0 +1,62 @@
 +#pragma once
 +// Selective port from Galaxy XR ALVR Research (MIT); see native source notices.
 +#include "VideoEncoder.h"
 +#include <d3d11_4.h>
++#include <wrl.h>
 +#include <vulkan/vulkan.h>
 +#include "pyrowave.h"
 +#include <vector>
@@ -1720,10 +2173,10 @@ index 1e27d97..1c7505d 100644
          crate::RGBTOYUV420_CSO_LEN = RGBTOYUV420_CSO.len() as _;
          crate::QUAD_SHADER_COMP_SPV_PTR = QUAD_SHADER_COMP_SPV.as_ptr();
 diff --git a/alvr/server_openvr/src/lib.rs b/alvr/server_openvr/src/lib.rs
-index 8d66d79..16bc72a 100644
+index 8d66d79..6e7a845 100644
 --- a/alvr/server_openvr/src/lib.rs
 +++ b/alvr/server_openvr/src/lib.rs
-@@ -317,13 +317,11 @@ extern "C" fn send_haptics(device_id: u64, duration_s: f32, frequency: f32, ampl
+@@ -317,13 +317,16 @@ extern "C" fn send_haptics(device_id: u64, duration_s: f32, frequency: f32, ampl
  }
  
  extern "C" fn set_video_config_nals(buffer_ptr: *const u8, len: i32, codec: i32) {
@@ -1734,14 +2187,19 @@ index 8d66d79..16bc72a 100644
 -    } else {
 -        CodecType::AV1
 +    let codec = match codec {
-+        0 => CodecType::H264, 1 => CodecType::Hevc, 2 => CodecType::AV1,
-+        3 => CodecType::PyroWave, _ => return,
++        0 => CodecType::H264,
++        1 => CodecType::Hevc,
++        2 => CodecType::AV1,
++        3 => CodecType::PyroWave,
++        _ => return,
      };
-+    if len < 0 || len > 65536 || buffer_ptr.is_null() { return; }
++    if len < 0 || len > 65536 || buffer_ptr.is_null() {
++        return;
++    }
  
      let mut config_buffer = vec![0; len as usize];
  
-@@ -477,6 +475,9 @@ pub unsafe extern "C" fn HmdDriverFactory(
+@@ -477,6 +480,9 @@ pub unsafe extern "C" fn HmdDriverFactory(
              RegisterButtons = Some(register_buttons);
              DriverReadyIdle = Some(driver_ready_idle);
              HapticsSend = Some(send_haptics);
@@ -1751,12 +2209,14 @@ index 8d66d79..16bc72a 100644
              SetVideoConfigNals = Some(set_video_config_nals);
              VideoSend = Some(send_video);
              GetDynamicEncoderParams = Some(get_dynamic_encoder_params);
-@@ -502,3 +503,5 @@ pub unsafe extern "C" fn HmdDriverFactory(
+@@ -502,3 +508,7 @@ pub unsafe extern "C" fn HmdDriverFactory(
  
      CppOpenvrEntryPoint(interface_name, return_code)
  }
 +
-+extern "C" fn report_pyrowave_failure() { alvr_server_core::pcvr_codec::report_failure(); }
++extern "C" fn report_pyrowave_failure() {
++    alvr_server_core::pcvr_codec::report_failure();
++}
 diff --git a/alvr/session/src/settings.rs b/alvr/session/src/settings.rs
 index 154ddb8..1f750da 100644
 --- a/alvr/session/src/settings.rs

@@ -1,0 +1,4 @@
+{
+    global: pyroclient_*;
+    local: *;
+};

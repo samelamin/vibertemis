@@ -17,6 +17,15 @@ jobs:
           rustup toolchain install 1.97.1 --profile minimal
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           rustup override set 1.97.1
+      - name: Restore native compilation cache
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            build/quest/alvr/target
+          key: quest-native-windows-rust1971-${{ github.sha }}
+          restore-keys: quest-native-windows-rust1971-
       - name: Build matching Windows PCVR runtime
         shell: pwsh
         run: ./quest/native/build-windows.ps1
@@ -27,3 +36,12 @@ jobs:
           path: build/quest/alvr/build/alvr_streamer_windows/
           if-no-files-found: error
           retention-days: 14
+      - name: Save native compilation cache
+        if: always()
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            build/quest/alvr/target
+          key: quest-native-windows-rust1971-${{ github.sha }}
