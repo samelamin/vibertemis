@@ -12,6 +12,9 @@ function Run-Setup([string]$label, [bool]$expectSuccess) {
 }
 Run-Setup 'fresh' $true
 $manager = "$dest/manager/VibertemisManager.App.exe"
+$pe = [IO.File]::ReadAllBytes($manager)
+$header = [BitConverter]::ToInt32($pe, 0x3c)
+if ([BitConverter]::ToUInt16($pe, $header + 24 + 68) -ne 2) { throw 'Manager is a console app; GUI subsystem required' }
 $verify = Start-Process -FilePath $manager -ArgumentList '--verify-install' -Wait -PassThru
 if ($verify.ExitCode -ne 0) { throw 'Installed payload diagnostic failed' }
 $session = "$dest/runtime/session.json"

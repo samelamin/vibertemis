@@ -22,7 +22,9 @@ public sealed class ShellExecuteUacHelper : IUacHelper
             };
             using var p = Process.Start(psi);
             if (p is null) return new UacLaunchResult(false, 0, "Process.Start returned null.");
-            return new UacLaunchResult(true, p.Id, "");
+            if (!p.WaitForExit(35000))
+                return new UacLaunchResult(true, p.Id, "Network setup is still running. Wait for it to finish before retrying.");
+            return new UacLaunchResult(true, p.Id, p.ExitCode == 0 ? "" : "Windows could not configure network access. Retry setup.", true, p.ExitCode);
         }
         catch (System.ComponentModel.Win32Exception ex)
         {

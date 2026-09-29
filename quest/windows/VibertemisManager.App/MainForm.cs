@@ -596,7 +596,7 @@ public sealed class MainForm : Form
         }
     }
 
-    private void SetupNetworkAccess()
+    private async void SetupNetworkAccess()
     {
         var helper = Path.Combine(_svc.Paths.ProgramsRoot, "manager", "VibertemisNetworkHelper.exe");
         try
@@ -608,11 +608,18 @@ public sealed class MainForm : Form
             }
         }
         catch (Exception ex) { LogStatus("Cannot verify network helper: " + ex.Message); return; }
-        var result = _svc.UacHelper.Launch(helper, "--setup-network");
-        if (!result.Launched)
-            LogStatus("Network setup helper was not launched: " + (result.Error ?? "unknown"));
-        else
-            LogStatus("Network setup helper launched (PID " + result.ProcessId + ").");
+        _btnSetupNetwork.Enabled = false;
+        LogStatus("Approve the Windows prompt to configure network access...");
+        try
+        {
+            var result = await Task.Run(() => _svc.UacHelper.Launch(helper, "--setup-network"));
+            if (IsDisposed || Disposing) return;
+            if (result.Launched && result.Completed && result.ExitCode == 0)
+                LogStatus("Network access configured for trusted Private/Domain networks.");
+            else
+                LogStatus(result.Error.Length > 0 ? result.Error : "Network setup did not complete. Retry when ready.");
+        }
+        finally { if (!IsDisposed) _btnSetupNetwork.Enabled = true; }
     }
 
     private void OnAutoStartToggled()
