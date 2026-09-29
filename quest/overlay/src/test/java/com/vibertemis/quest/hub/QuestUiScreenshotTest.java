@@ -116,6 +116,24 @@ public class QuestUiScreenshotTest {
         }
     }
 
+    @Test
+    public void pcvrPanelScreenshots() throws Exception {
+        setHeadset(true);
+        for (boolean large : new boolean[]{false, true}) {
+            int width = large ? 360 : 1000, height = large ? 800 : 700;
+            setQualifiers(large ? "w360dp-h800dp-port-mdpi" : "w1000dp-h700dp-land-mdpi");
+            setFontScale(large ? 1.6f : 1.0f);
+            try (ActivityController<com.vibertemis.quest.pcvr.PcvrSettingsActivity> controller =
+                    Robolectric.buildActivity(com.vibertemis.quest.pcvr.PcvrSettingsActivity.class)
+                        .create().start().resume().visible()) {
+                Bitmap bitmap = snapshotActivity(controller.get(), width, height);
+                assertExactDimsAndNonBlank(bitmap, width, height, "PCVR connection");
+                writePng(bitmap, new File(outDir, large ? "pcvr_fontscale_1_6_360x800.png"
+                    : "pcvr_1000x700.png"));
+            }
+        }
+    }
+
     private static void setHeadset(boolean headset) {
         ShadowPackageManager spm = Shadows.shadowOf(
                 RuntimeEnvironment.getApplication().getPackageManager());

@@ -1,5 +1,5 @@
 diff --git a/app/build.gradle b/app/build.gradle
-index f5bdc022..38ced430 100644
+index f5bdc022..7d4bd8b0 100644
 --- a/app/build.gradle
 +++ b/app/build.gradle
 @@ -18,14 +18,30 @@ android {
@@ -58,13 +58,15 @@ index f5bdc022..38ced430 100644
              dimension "root"
              buildConfigField "boolean", "ROOT_BUILD", "false"
          }
-@@ -108,11 +128,17 @@ android {
+@@ -108,11 +128,19 @@ android {
          }
      }
  
 +    testOptions {
 +        unitTests {
 +            includeAndroidResources = true
++            // Robolectric Conscrypt's server-socket fixture uses InetAddress internals on JDK21.
++            all { jvmArgs '--add-opens=java.base/java.net=ALL-UNNAMED' }
 +        }
 +    }
 +
@@ -78,7 +80,7 @@ index f5bdc022..38ced430 100644
  
              minifyEnabled true
              proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
-@@ -120,8 +146,8 @@ android {
+@@ -120,8 +148,8 @@ android {
          release {
              // This fork ships under its own applicationId, so the unofficial
              // suffix upstream asks forks to keep is no longer needed.
@@ -89,7 +91,7 @@ index f5bdc022..38ced430 100644
  
              if (canSign) {
                  signingConfig signingConfigs.release
-@@ -151,4 +177,10 @@ dependencies {
+@@ -151,4 +179,10 @@ dependencies {
      implementation 'com.squareup.okhttp3:okhttp:4.12.0'
      implementation 'org.jmdns:jmdns:3.5.9'
      implementation 'com.github.cgutman:ShieldControllerExtensions:1.0.1'
@@ -101,7 +103,7 @@ index f5bdc022..38ced430 100644
 +    testImplementation 'androidx.test:core:1.5.0'
  }
 diff --git a/app/src/main/AndroidManifest.xml b/app/src/main/AndroidManifest.xml
-index 8fb03b32..e1a630f0 100644
+index 8fb03b32..eb634991 100644
 --- a/app/src/main/AndroidManifest.xml
 +++ b/app/src/main/AndroidManifest.xml
 @@ -19,6 +19,7 @@
@@ -154,12 +156,13 @@ index 8fb03b32..e1a630f0 100644
                  <category android:name="android.intent.category.LAUNCHER" />
                  <category android:name="android.intent.category.MULTIWINDOW_LAUNCHER" />
                  <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
-@@ -159,6 +184,40 @@
+@@ -159,6 +184,41 @@
              </intent-filter>
              <meta-data android:name="pvr.app.type" android:value="2d" />
          </activity>
 +        <!-- Vibertemis XR Preview: in-app setup screen. Not exported.
 +             Accessible only from MainHubActivity. -->
++        <activity android:name="com.vibertemis.quest.pcvr.PcvrSettingsActivity" android:exported="false" />
 +        <activity
 +            android:name="com.vibertemis.quest.hub.SetupActivity"
 +            android:exported="false"
@@ -254,7 +257,7 @@ index e88bca0e..53e5ca91 100644
          }
          else {
 diff --git a/app/src/main/java/com/limelight/preferences/StreamSettings.java b/app/src/main/java/com/limelight/preferences/StreamSettings.java
-index 3bc8220e..336dc626 100644
+index 3bc8220e..05979eb5 100644
 --- a/app/src/main/java/com/limelight/preferences/StreamSettings.java
 +++ b/app/src/main/java/com/limelight/preferences/StreamSettings.java
 @@ -35,6 +35,10 @@ import com.limelight.R;
@@ -322,7 +325,7 @@ index 3bc8220e..336dc626 100644
              }
  
              // Where the log actually is, which is the first thing anyone
-@@ -406,6 +422,24 @@ public class StreamSettings extends Activity {
+@@ -406,6 +422,30 @@ public class StreamSettings extends Activity {
                  category_gamepad_settings.removePreference(findPreference("seekbar_vibrate_fallback_strength"));
              }
  
@@ -344,10 +347,16 @@ index 3bc8220e..336dc626 100644
 +                }
 +            }
 +
++            Preference pcvrConnection = findPreference("vq_pcvr_connection");
++            if (pcvrConnection != null) pcvrConnection.setOnPreferenceClickListener(pref -> {
++                startActivity(new android.content.Intent(getActivity(), com.vibertemis.quest.pcvr.PcvrSettingsActivity.class));
++                return true;
++            });
++
              Display display = getActivity().getWindowManager().getDefaultDisplay();
              float maxSupportedFps = display.getRefreshRate();
  
-@@ -732,6 +766,97 @@ public class StreamSettings extends Activity {
+@@ -732,6 +772,97 @@ public class StreamSettings extends Activity {
                      return true;
                  }
              });
@@ -468,7 +477,7 @@ index 65291b96..2f3b77a4 100644
  </adaptive-icon>
 \ No newline at end of file
 diff --git a/app/src/main/res/xml/preferences.xml b/app/src/main/res/xml/preferences.xml
-index 1891f2c1..6f85980b 100644
+index 1891f2c1..16ff284f 100644
 --- a/app/src/main/res/xml/preferences.xml
 +++ b/app/src/main/res/xml/preferences.xml
 @@ -2,6 +2,37 @@
@@ -541,7 +550,7 @@ index 1891f2c1..6f85980b 100644
              seekbar:step="500"
              seekbar:keyStep="1000"
              seekbar:divisor="1000"
-@@ -359,4 +391,106 @@
+@@ -359,4 +391,107 @@
              android:summary="@string/summary_privacy_policy"
              url="https://moonlight-stream.org/privacy.html"/>
      </PreferenceCategory-->
@@ -615,6 +624,7 @@ index 1891f2c1..6f85980b 100644
 +            android:summary="@string/nested_back_row_summary"/>
 +        <PreferenceCategory android:title="@string/pcvr_host_section_title"
 +            android:key="vq_pcvr_host">
++            <Preference android:key="vq_pcvr_connection" android:title="PC pairing and codec" android:summary="Automatic SteamVR startup, standard codec and Travel mode" />
 +            <Preference
 +                android:title="@string/pcvr_host_item_adaptive_bitrate_title"
 +                android:summary="@string/pcvr_host_item_adaptive_bitrate_summary"

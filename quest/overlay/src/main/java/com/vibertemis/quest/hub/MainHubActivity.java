@@ -16,6 +16,11 @@ import android.widget.Button;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import com.vibertemis.quest.pcvr.HostClient;
+import com.vibertemis.quest.pcvr.HostPairing;
+import com.vibertemis.quest.pcvr.PairingStore;
+import com.vibertemis.quest.pcvr.PcvrOptions;
+import com.vibertemis.quest.pcvr.PcvrSettingsActivity;
 import com.limelight.PcView;
 import com.limelight.R;
 import com.limelight.preferences.StreamSettings;
@@ -77,6 +82,12 @@ public class MainHubActivity extends Activity {
     private SettingsController settingsController;
 
     private boolean requestPending;
+    private boolean connectPending;
+    private boolean resumed;
+    private int connectGeneration;
+    private HostClient hostClient;
+    private android.app.AlertDialog connectDialog;
+    private final java.util.concurrent.ExecutorService connectWorker = java.util.concurrent.Executors.newSingleThreadExecutor();
     private boolean launchPending;
     /**
      * Set true by {@code onPause} when {@code launchPending} was true
@@ -146,7 +157,7 @@ public class MainHubActivity extends Activity {
                             Toast.LENGTH_LONG).show();
                     return;
                 }
-                if (launchPending || requestPending) {
+                if (launchPending || requestPending || connectPending) {
                     return;
                 }
                 if (hasMicPermission()) {
@@ -185,6 +196,7 @@ public class MainHubActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        resumed = true;
         settingsController.refresh();
         settingsController.register();
         renderStatus();
@@ -207,6 +219,8 @@ public class MainHubActivity extends Activity {
     @Override
     protected void onPause() {
         super.onPause();
+        resumed = false;
+        cancelHostConnection();
         settingsController.unregister();
         // Mark that we actually left for a launched activity. A
         // permission dialog pause may arrive BEFORE launchPending is
@@ -340,7 +354,7 @@ public class MainHubActivity extends Activity {
      * tap from the same user gesture is not silently swallowed.
      */
     private void launchScreenGaming() {
-        if (launchPending || requestPending) return;
+        if (launchPending || requestPending || connectPending) return;
         Log.i(TAG, "Launching Screen gaming -> PcView");
         try {
             Intent i = new Intent();
@@ -361,7 +375,7 @@ public class MainHubActivity extends Activity {
     }
 
     private void launchStreamingSettings() {
-        if (launchPending || requestPending) return;
+        if (launchPending || requestPending || connectPending) return;
         try {
             Intent i = new Intent();
             i.setComponent(new ComponentName(getPackageName(),
@@ -383,7 +397,7 @@ public class MainHubActivity extends Activity {
     }
 
     private void launchSetup() {
-        if (launchPending || requestPending) return;
+        if (launchPending || requestPending || connectPending) return;
         try {
             Intent i = new Intent(MainHubActivity.this, SetupActivity.class);
             launchPending = true;
@@ -401,8 +415,75 @@ public class MainHubActivity extends Activity {
         }
     }
 
+    protected boolean hasPairedHost() { return new PairingStore(this).hasPairing(); }
+    protected HostPairing loadHostPairing() throws Exception { return new PairingStore(getApplicationContext()).load(); }
+    protected HostClient createHostClient() { return new HostClient(); }
+
     private void launchSteamVr() {
-        if (launchPending) return;
+        if (launchPending || connectPending || !VrCapabilities.isHeadset(this) || !hasMicPermission()) return;
+        if (!hasPairedHost()) { dispatchSteamVr(); return; }
+        connectPending = true;
+        final int generation = ++connectGeneration;
+        final HostClient client = createHostClient();
+        hostClient = client;
+        connectDialog = new android.app.AlertDialog.Builder(this)
+                .setTitle("Starting PCVR")
+                .setMessage("Contacting your PC and waiting for SteamVR…")
+                .setNegativeButton("Cancel", (d,w) -> cancelHostConnection())
+                .setOnCancelListener(d -> cancelHostConnection()).show();
+        connectWorker.execute(() -> {
+            try {
+                HostPairing pairing = loadHostPairing();
+                if (pairing == null) throw new HostClient.Failure("PAIRING", "Pair your PC again.");
+                client.start(pairing, new PcvrOptions(getApplicationContext()).requestedCodec());
+                runOnUiThread(() -> {
+                    if (generation != connectGeneration || !connectPending) return;
+                    finishHostConnection();
+                    if (resumed && !isFinishing() && !isDestroyed() && VrCapabilities.isHeadset(this) && hasMicPermission()) dispatchSteamVr();
+                });
+            } catch (Exception e) {
+                final String message = e instanceof HostClient.Failure ? e.getMessage() : "Could not reach your PC or read its pairing. Check the companion, address and network, then retry.";
+                runOnUiThread(() -> {
+                    if (generation != connectGeneration || !connectPending) return;
+                    finishHostConnection();
+                    if (!resumed || isFinishing() || isDestroyed()) return;
+                    new android.app.AlertDialog.Builder(this).setTitle("PCVR connection stopped").setMessage(message)
+                        .setPositiveButton("Retry", (d,w) -> launchSteamVr())
+                        .setNegativeButton("Cancel", null)
+                        .setNeutralButton("Connection options", (d,w) -> showConnectionOptions()).show();
+                });
+            }
+        });
+    }
+
+    private void showConnectionOptions() {
+        new android.app.AlertDialog.Builder(this).setTitle("PCVR connection options")
+            .setItems(new String[]{"Pair or change PC", "Open PCVR manually"}, (d,which) -> {
+                if (which == 0) startActivity(new Intent(this, PcvrSettingsActivity.class));
+                else if (resumed && hasMicPermission() && VrCapabilities.isHeadset(this)) dispatchSteamVr();
+            }).setNegativeButton("Cancel", null).show();
+    }
+
+    private void finishHostConnection() {
+        connectPending = false;
+        hostClient = null;
+        if (connectDialog != null) { connectDialog.dismiss(); connectDialog = null; }
+    }
+
+    private void cancelHostConnection() {
+        ++connectGeneration;
+        if (hostClient != null) hostClient.cancel();
+        finishHostConnection();
+    }
+
+    @Override protected void onDestroy() {
+        cancelHostConnection();
+        connectWorker.shutdownNow();
+        super.onDestroy();
+    }
+
+    private void dispatchSteamVr() {
+        if (launchPending || !hasMicPermission()) return;
         if (!VrCapabilities.isHeadset(this)) {
             Toast.makeText(this, R.string.hub_steamvr_unsupported,
                     Toast.LENGTH_LONG).show();
@@ -417,6 +498,10 @@ public class MainHubActivity extends Activity {
             i.addCategory("com.oculus.intent.category.VR");
             i.addCategory("org.khronos.openxr.intent.category.IMMERSIVE_HMD");
             i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            PcvrOptions options = new PcvrOptions(this);
+            i.putExtra("vq_pcvr_codec", options.requestedCodec());
+            i.putExtra("vq_pcvr_fallback", options.standardCodec());
+            i.putExtra("vq_pcvr_travel", options.travel());
             launchPending = true;
             startActivity(i);
         } catch (ActivityNotFoundException e) {

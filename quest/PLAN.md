@@ -33,14 +33,15 @@ Files: quest/host (Go), .github/workflows/quest-host-control.yml.
 Validation: Codex independently passed full Linux race suite, vet, and Windows
 cross-build. Targeted regressions cover observation/retry identity, expired
 owner reuse, cache capacity, nonce expiry, polling budgets and Session0.
-Actual Windows runtime CI remains required before delivery.
+Windows 2022 runtime tests and Linux race checks passed in GitHub Actions
+run 36543525481 at d2203882.
 
 Agy Gemini 3.1 Pro (High) reviewed the plan and implementations. Earlier
 ownership/history flaws were rejected and fixed by Codex. Final host review
 found no P0/P1 issues and approved this phase conditional on Windows CI.
 The consultation does not approve the unfinished Android/native phases.
 
-## Android control phase (in progress)
+## Android control phase (reviewed; native integration pending)
 
 Files: quest/overlay, consolidated seven-file upstream patch.
 - Pair with one bounded JSON import/paste; AndroidKeyStore AES-GCM key,
@@ -54,7 +55,13 @@ Files: quest/overlay, consolidated seven-file upstream patch.
 - Keep existing 99 Android tests; add network/pairing/lifecycle regressions
   and large-font / headset-panel screenshots.
 
-Agy reviewed this plan. Accepted: pinned leaf identity, request idempotency,
+Agy reviewed this plan and the corrected implementation (Gemini 3.1 Pro High,
+2026-09-29); approved with no P0/P1 findings. Codex passed all 111 existing
+and new tests, built the APK, and inspected headset/large-text screenshots.
+One additional screenshot regression passes. Real AndroidKeyStore hardware
+validation remains required. The optional length-check optimization was
+applied; stable local radio IDs are intentional for view state restoration.
+Accepted: pinned leaf identity, request idempotency,
 truthful connection labels and lifecycle gates. Clarified storage uses keys
 in AndroidKeyStore and ciphertext outside backup; no global trust bypass.
 
