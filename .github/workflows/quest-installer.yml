@@ -1,0 +1,57 @@
+name: Quest Installer CI
+on:
+  push:
+    branches: [quest/installer-ci]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  linux-core:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-dotnet@d4c94342e560b34958eacfc5d055d21461ed1c5d
+        with:
+          dotnet-version: 8.0.x
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version: '1.26.0'
+          cache-dependency-path: quest/host/go.sum
+      - run: dotnet test quest/windows/VibertemisManager.Core.Tests -c Release --nologo -v minimal
+      - working-directory: quest/host
+        run: |
+          go vet ./...
+          go test -race -count=1 ./...
+  windows-build:
+    runs-on: windows-2022
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-dotnet@d4c94342e560b34958eacfc5d055d21461ed1c5d
+        with:
+          dotnet-version: 8.0.x
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version: '1.26.0'
+          cache-dependency-path: quest/host/go.sum
+      - name: Test Core and real companion export
+        run: dotnet test quest/windows/VibertemisManager.Core.Tests -c Release --nologo -v minimal
+      - name: Build verified installer payload
+        shell: pwsh
+        run: ./quest/installer/build-installer.ps1
+      - name: Install, refuse busy sessions, retain settings, uninstall
+        shell: pwsh
+        run: ./quest/installer/smoke-windows.ps1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: vibertemisvr-hostmanager-setup-0.1.0.4
+          path: build/installer/VibertemisVR-HostManager-Setup-0.1.0.4.exe
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: installer-smoke-logs
+          path: build/installer/smoke-*.log
+          if-no-files-found: ignore

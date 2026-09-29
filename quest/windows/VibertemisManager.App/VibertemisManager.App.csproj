@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <LangVersion>12</LangVersion>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ApplicationIcon />
+    <AssemblyName>VibertemisManager.App</AssemblyName>
+    <RootNamespace>VibertemisManager.App</RootNamespace>
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <InvariantGlobalization>false</InvariantGlobalization>
+    <AssemblyTitle>VibertemisVR Host Manager</AssemblyTitle>
+    <Product>VibertemisVR Host Manager</Product>
+    <Company>Vibertemis</Company>
+    <Version>0.1.0.4</Version>
+    <FileVersion>0.1.0.4</FileVersion>
+    <InformationalVersion>0.1.0.4-quest-preview</InformationalVersion>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\VibertemisManager.Core\VibertemisManager.Core.csproj" />
+  </ItemGroup>
+  <ItemGroup Condition="Exists('Resources\Integrity')">
+    <EmbeddedResource Include="Resources/Integrity/*.json" LogicalName="VibertemisManager.App.Resources.Integrity.%(Filename)%(Extension)" />
+  </ItemGroup>
+</Project>
