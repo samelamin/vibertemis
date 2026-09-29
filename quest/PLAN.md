@@ -66,7 +66,7 @@ Accepted: pinned leaf identity, request idempotency,
 truthful connection labels and lifecycle gates. Clarified storage uses keys
 in AndroidKeyStore and ciphertext outside backup; no global trust bypass.
 
-## Native codec phase (integrated; Windows CI pending)
+## Native codec phase (integrated; Windows CI passed)
 
 Selective port onto pinned ALVR20.14.1, retaining AV1/HEVC/H264 and Quest
 OpenXR/Touch/haptics. Build matching custom Windows driver and Android client
@@ -98,7 +98,7 @@ requested codecs are never reported as negotiated by the companion. The
 headset records the last codec only after a real decoded frame.
 
 Windows native CI compiled at 422303f4, then found a DLL packaging-name
-mismatch. Corrected in ad800c0b; CI run 36550716420 is the release gate.
+mismatch. Corrected in ad800c0b; CI run 36550716420 passed and produced the Windows host.
 Updated companion Windows runtime and Linux race CI passed run 36550715598.
 Agy approved protected pairing export and DLL packaging fixes. In-app setup
 now links to the custom host and matching guide; Android tests pass again.
@@ -108,8 +108,7 @@ default (45 maximum). Restart consent is explicit and expires after 2 minutes.
 
 ## Delivery gate
 
-No P0/P1 or incomplete feature may be presented as working. No new release
-has been published in this phase. Verify matching Windows/APK artifacts,
+No P0/P1 or incomplete feature may be presented as working. Both Windows builds and the Android build now pass. Verify matching Windows/APK artifacts,
 checksums, source archive and installation instructions before notifying the
 owner. Real Quest/4090 latency, visual quality and tracking need owner testing.
 Telegram notification requires the owner's configured destination; no token
@@ -126,3 +125,11 @@ Delivery uses a separate experimental Quest tag/branch. Main push would
 trigger an unrelated automatic desktop production release, so this test build
 is not merged into main before owner hardware results. The desktop update
 channel and existing Steam Deck connection fixes remain unchanged.
+
+
+Final package verification: downloaded Windows CI artifact; confirmed the
+PyroWave DLL is beside the driver, all 16 requested API exports exist, and
+runtime dependencies match the documented Visual C++ x64 prerequisite.
+Standard encoders do not statically depend on the optional PyroWave DLL.
+Matching Windows sources are unchanged from ad800c0b. Source-only UX/docs
+commits do not change native libraries or companion binaries.

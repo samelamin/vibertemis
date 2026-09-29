@@ -1,7 +1,7 @@
-# Native codec integration — draft, not a released build
+# Native codec integration — experimental Quest preview 3
 
 Matching custom ALVR protocol: 20.14.1-vibertemis-pyro.1. Stock ALVR hosts
-cannot pair with this native client. The public preview remains unchanged.
+cannot pair with this native client. Install the matching Windows package.
 
 `sources.json` pins ALVR, PyroWave, Granite and the research reference.
 Granite is pinned to the separately validated source checkout rather than
@@ -23,8 +23,9 @@ The `quest/native-codec-ci` branch builds draft artifacts, never releases.
 
 Android: `build-android.sh` builds the pinned libraries; `install-android.py`
 installs their verified set after the base fetch/overlay. `check-android.py`
-detects stale or mixed libraries. Matching Windows validation remains in progress. The integrated local APK enables the toggle only with the verified custom
-libraries. Do not publish until Codex and Agy finish review and both builds pass.
+detects stale or mixed libraries. Windows CI run 36550716420 passed. The integrated APK enables the toggle
+with verified custom libraries. Source review and both platform builds pass;
+real Quest/RTX hardware testing remains outstanding.
 
 Buffer lifetime: latest pending frame, three explicitly leased output buffers;
 renderer owns its buffer until next dequeue. GPU waits are bounded to one

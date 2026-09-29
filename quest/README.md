@@ -73,7 +73,8 @@ is still required; this is an experimental test build.
 
 ### Windows host setup
 
-1. Install Steam and SteamVR. Extract this release's Windows host ZIP to a
+1. Install Steam, SteamVR and the [Microsoft Visual C++ x64 runtime](https://aka.ms/vc14/vc_redist.x64.exe).
+   Extract this release's Windows host ZIP to a
    permanent folder, for example `C:\VibertemisVR`. Keep its DLLs together.
 2. Run `ALVR Dashboard.exe`, finish the setup wizard and register the driver.
    Allow ALVR through Windows Firewall on your trusted network. Keep the
