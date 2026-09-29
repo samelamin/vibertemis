@@ -44,6 +44,7 @@ func main() {
 		alvrSession   = flag.String("alvr-session", "", "absolute path to ALVR session.json (required)")
 		steamPath     = flag.String("steam-path", "", "absolute path to Steam.exe (optional; URL dispatch used otherwise)")
 		maxSkew       = flag.Duration("max-skew", 30*time.Second, "max allowed request clock skew")
+		exportFile    = flag.Bool("export-pairing", false, "write a private UTF-8 pairing file and print its path, then exit")
 		showExport    = flag.Bool("show-export", false, "print the pairing export to stdout and exit")
 	)
 	flag.Parse()
@@ -86,6 +87,14 @@ func main() {
 	}
 	if err := validateAdvertisedAddr(*advertiseAddr); err != nil {
 		log.Fatalf("-advertise: %v", err)
+	}
+	if *exportFile {
+		path, err := pairing.SaveExport(*stateDir, st, *advertiseAddr)
+		if err != nil {
+			log.Fatalf("export pairing: %v", err)
+		}
+		fmt.Println(path)
+		return
 	}
 	if *showExport {
 		exp := st.Export(*advertiseAddr)

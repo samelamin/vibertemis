@@ -7,6 +7,7 @@ pyro="$repo/build/quest/pyrowave"
 alvr="$repo/build/quest/alvr"
 bridge="$repo/build/quest/pyroclient"
 python3 "$repo/quest/native/fetch.py"
+source_fingerprint="$(python3 "$repo/quest/native/fingerprint.py")"
 cmake -S "$pyro" -B "$pyro/build-android" -G Ninja \
   -DCMAKE_TOOLCHAIN_FILE="$ndk/build/cmake/android.toolchain.cmake" \
   -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-30 -DANDROID_STL=c++_shared \
@@ -31,5 +32,7 @@ mkdir -p "$output"
 cp "$CARGO_TARGET_DIR/aarch64-linux-android/release/libalvr_client_openxr.so" "$output/"
 cp -L "$bridge/libpyroclient.so" "$pyro/build-android/libpyrowave-shared.so" "$output/"
 "$llvm/llvm-strip" --strip-unneeded "$output/"*.so
+[[ "$source_fingerprint" == "$(python3 "$repo/quest/native/fingerprint.py")" ]] || { echo "Native sources changed during build; rebuild required" >&2; exit 1; }
 (cd "$output" && sha256sum *.so > SHA256SUMS)
+printf '%s\n' "$source_fingerprint" > "$output/SOURCE_SHA256"
 printf 'Native libraries built in %s; APK overlay step must install this matched set.\n' "$output"

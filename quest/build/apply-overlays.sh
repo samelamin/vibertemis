@@ -77,6 +77,7 @@ ACTUAL_HEAD="$(cd "${UPSTREAM}" && git rev-parse HEAD)"
 #    applied state can produce silent failures.
 (cd "${UPSTREAM}" && git checkout -- \
     app/build.gradle \
+    app/proguard-rules.pro \
     app/src/main/AndroidManifest.xml \
     app/src/main/java/com/limelight/preferences/PreferenceConfiguration.java \
     app/src/main/java/com/limelight/preferences/StreamSettings.java \

@@ -41,9 +41,9 @@ ownership/history flaws were rejected and fixed by Codex. Final host review
 found no P0/P1 issues and approved this phase conditional on Windows CI.
 The consultation does not approve the unfinished Android/native phases.
 
-## Android control phase (reviewed; native integration pending)
+## Android control phase (integrated local build)
 
-Files: quest/overlay, consolidated seven-file upstream patch.
+Files: quest/overlay, consolidated eight-file upstream patch.
 - Pair with one bounded JSON import/paste; AndroidKeyStore AES-GCM key,
   authenticated ciphertext in no-backup storage; no plaintext fallback.
 - Instance-scoped pinned TLS, HMAC contract matching Go, redirects disabled.
@@ -65,7 +65,7 @@ Accepted: pinned leaf identity, request idempotency,
 truthful connection labels and lifecycle gates. Clarified storage uses keys
 in AndroidKeyStore and ciphertext outside backup; no global trust bypass.
 
-## Native codec phase (not integrated yet)
+## Native codec phase (integrated; Windows CI pending)
 
 Selective port onto pinned ALVR20.14.1, retaining AV1/HEVC/H264 and Quest
 OpenXR/Touch/haptics. Build matching custom Windows driver and Android client
@@ -83,12 +83,24 @@ extension-based alternatives to Vulkan1.3 where supported. Missing features
 or initialization failures must preserve standard codecs and report why.
 Quest3 supports fixed foveation; do not offer nonexistent eye tracking.
 
-Both upstream ALVR Android client and upstream PyroWave Android library have
-compiled independently. This is NOT an integrated codec or hardware result.
-Windows MSVC CI, source/license artifacts, one-loader APK checks and Agy review
-are still required. LAN target is 200 Mbps; Travel preserves standard codec
-preferences and requires actual remote reachability (e.g. an existing VPN).
-Do not claim download speed alone guarantees latency or stream quality.
+The integrated Android build passes 115 tests and includes the custom ALVR,
+PyroWave and conversion bridge libraries, with matching source fingerprints
+and hashes. APK checks confirm arm64 only, one OpenXR loader, preserved JNI
+codec callback and the existing signing identity. The local preview 3 APK
+SHA256 is 6accba38bded4c7e4eef01eaf957f209dcb9a6d8143ae2ebda3b765b68679af5.
+Two pure Rust tests cover native request selection and decoder config bounds.
+
+Agy Gemini 3.1 Pro (High) approved the revised native C++/Rust paths and then
+the Go/native handshake integration on 2026-09-29. A stale-backup flaw in a
+legacy, non-HTTP adapter helper was fixed with a regression test. Saved or
+requested codecs are never reported as negotiated by the companion. The
+headset records the last codec only after a real decoded frame.
+
+Windows native CI is running at 422303f4 (run 36548644963). Earlier Windows
+failures were CRLF patch handling and a missing WRL include; both fixed.
+Actual Quest/4090 interoperability and latency remain untested. Home caps
+adaptive bitrate at up to 200 Mbps, Travel uses Standard and 30 Mbps by
+default (45 maximum). Restart consent is explicit and expires after 2 minutes.
 
 ## Delivery gate
 

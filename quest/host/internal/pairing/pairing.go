@@ -281,3 +281,40 @@ func ProtectFile(path string) error { return protectFile(path) }
 // ProtectDir applies the platform-private permission set to
 // the directory at path.
 func ProtectDir(path string) error { return protectDir(path) }
+
+// SaveExport writes UTF-8 JSON directly, avoiding PowerShell's UTF-16 redirection.
+// The export contains the shared token, so it stays under the private state directory.
+func SaveExport(dir string, state *State, address string) (string, error) {
+	if err := EnsureDir(dir); err != nil {
+		return "", err
+	}
+	data, err := json.MarshalIndent(state.Export(address), "", "  ")
+	if err != nil {
+		return "", err
+	}
+	file, err := os.CreateTemp(dir, ".pairing-export-*")
+	if err != nil {
+		return "", err
+	}
+	temporary := file.Name()
+	defer os.Remove(temporary)
+	if err := protectFile(temporary); err != nil {
+		file.Close()
+		return "", err
+	}
+	if _, err := file.Write(data); err != nil {
+		file.Close()
+		return "", err
+	}
+	if err := file.Close(); err != nil {
+		return "", err
+	}
+	final := filepath.Join(dir, "pairing-export.json")
+	if err := os.Rename(temporary, final); err != nil {
+		return "", err
+	}
+	if err := verifyFileIsPrivate(final); err != nil {
+		return "", err
+	}
+	return final, nil
+}

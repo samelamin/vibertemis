@@ -130,6 +130,14 @@ public class QuestUiScreenshotTest {
                 assertExactDimsAndNonBlank(bitmap, width, height, "PCVR connection");
                 writePng(bitmap, new File(outDir, large ? "pcvr_fontscale_1_6_360x800.png"
                     : "pcvr_1000x700.png"));
+                ViewGroup content = controller.get().findViewById(android.R.id.content);
+                ViewGroup panel = (ViewGroup) content.getChildAt(0);
+                android.widget.ScrollView scroll = (android.widget.ScrollView) panel.getChildAt(1);
+                scroll.fullScroll(View.FOCUS_DOWN);
+                Shadows.shadowOf(android.os.Looper.getMainLooper()).idle();
+                Bitmap bottom = snapshotActivity(controller.get(), width, height);
+                assertTrue("PCVR quality controls must be reachable by scrolling", scroll.getScrollY() > 0);
+                writePng(bottom, new File(outDir, large ? "pcvr_bottom_fontscale_1_6.png" : "pcvr_bottom_1000x700.png"));
             }
         }
     }

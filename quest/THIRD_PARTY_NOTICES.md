@@ -6,6 +6,9 @@ original license text lives in the corresponding-source archive:
 - `android/LICENSE.txt` — GPLv3 (Moonlight XR family).
 - `android/app/src/main/jni/moonlight-core/moonlight-common-c/LICENSE.txt` — GPLv3.
 - `alvr-source/LICENSE` — MIT (ALVR).
+- `pyrowave-source/LICENSE` — MIT (PyroWave).
+- `pyrowave-source/Granite/LICENSE` — MIT (Granite), plus its bundled third-party notices.
+- `vibertemis-quest/quest/native/pyroclient/LICENSE` — MIT (Galaxy XR reference bridge).
 - `vibertemis-quest/LICENSE` — GPLv3 (this repo).
 
 Upstream READMEs and license headers inside each tree also state the

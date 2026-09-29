@@ -31,8 +31,8 @@ import java.util.List;
  * runtime grant dialog. A denial is NOT a safe mute — voice chat simply
  * will not work, and {@link MainHubActivity} does not launch on denial.
  *
- * <p>Does not read or write any SharedPreferences; that store lives in
- * the main process. PCVR settings are owned by the host ALVR server.
+ * <p>Launch options arrive by Intent. Last decoded codec is recorded through
+ * AtomicFile, never cross-process SharedPreferences.
  */
 public class SteamVrActivity extends NativeActivity {
 
@@ -40,6 +40,11 @@ public class SteamVrActivity extends NativeActivity {
 
     /** Process suffix declared in AndroidManifest.xml. */
     static final String PROCESS_SUFFIX = ":pcvr";
+
+    /** Called once by the native decoder after the first successfully decoded frame. */
+    public void onPcvrCodec(String codec) {
+        com.vibertemis.quest.pcvr.PcvrHistory.decoded(this, codec);
+    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {

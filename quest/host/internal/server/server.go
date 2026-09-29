@@ -107,6 +107,7 @@ type StartPcvrResponse struct {
 
 // StartPcvrRequest is the request payload.
 type StartPcvrRequest struct {
+	NativeProtocol string `json:"native_protocol,omitempty"`
 	Role           string `json:"role"`
 	Mode           string `json:"mode"`
 	RequestedCodec string `json:"requested_codec"`

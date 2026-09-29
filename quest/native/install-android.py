@@ -3,10 +3,13 @@
 import hashlib
 from pathlib import Path
 import shutil
+from fingerprint import fingerprint
 ROOT = Path(__file__).resolve().parents[2]
 source = ROOT / "build/quest/native-android"
 target = ROOT / "build/quest/upstream/app/src/main/jniLibs/arm64-v8a"
 expected = {"libalvr_client_openxr.so", "libpyroclient.so", "libpyrowave-shared.so"}
+if (source / "SOURCE_SHA256").read_text().strip() != fingerprint():
+    raise SystemExit("Native binaries were built from different sources; rebuild required")
 checksums = {}
 for line in (source / "SHA256SUMS").read_text().splitlines():
     digest, name = line.split()
@@ -23,3 +26,5 @@ for name in sorted(expected):
     shutil.copy2(source/name, target/name)
 shutil.copy2(source/"SHA256SUMS", target/"vibertemis-native.sha256")
 print("Installed complete custom ALVR + PyroWave native set")
+
+shutil.copy2(source/"SOURCE_SHA256", target/"vibertemis-native-source.sha256")

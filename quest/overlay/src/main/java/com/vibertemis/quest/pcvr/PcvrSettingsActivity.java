@@ -21,6 +21,7 @@ public final class PcvrSettingsActivity extends Activity {
   private LinearLayout body;
   private volatile boolean destroyed;
   private AlertDialog pairingDialog;
+  private Button forgetButton;
 
   @Override
   public void onCreate(Bundle state) {
@@ -64,7 +65,7 @@ public final class PcvrSettingsActivity extends Activity {
               }
             }));
     body.addView(button("Paste pairing", this::paste));
-    body.addView(
+    forgetButton =
         button(
             "Forget paired PC",
             () ->
@@ -88,7 +89,10 @@ public final class PcvrSettingsActivity extends Activity {
                                         });
                                   }
                                 }))
-                    .show()));
+                    .show());
+    body.addView(forgetButton);
+    String lastCodec = PcvrHistory.lastDecoded(this);
+    if (lastCodec != null) label("Last decoded codec: " + lastCodec, 16);
     label("Streaming mode", 20);
     Switch travel = new Switch(this);
     travel.setText("Travel — use standard codec");
@@ -110,7 +114,7 @@ public final class PcvrSettingsActivity extends Activity {
         PcvrOptions.PYROWAVE_BUILD
             ? "Compatibility checked when connecting. Travel uses your standard codec."
             : "Requires matching experimental host and headset builds. Standard streaming remains"
-                  + " available.",
+                + " available.",
         16);
     pyro.setOnCheckedChangeListener((v, checked) -> options.pyro(checked));
     label("Standard codec", 20);
@@ -137,12 +141,51 @@ public final class PcvrSettingsActivity extends Activity {
             + " codec in use.",
         16);
     label("Quality and latency", 20);
+    bitrateButton(false);
+    bitrateButton(true);
     label(
-        "Use the ALVR Dashboard for bitrate, resolution, refresh rate and fixed foveation. Your"
-            + " local target is 200 Mbps; lower the bitrate for travel. Quest 3 has no eye-tracking"
-            + " hardware.",
+        "Bitrate adapts below these limits. Home allows up to 200 Mbps; Travel starts at 30 Mbps to"
+            + " leave room on a 50 Mbps connection. Your PC upload speed and network delay still"
+            + " matter.",
+        16);
+    label(
+        "Use the ALVR Dashboard for resolution, refresh rate and fixed foveation. Quest 3 has no"
+            + " eye-tracking hardware.",
         16);
     worker.execute(this::refreshPairing);
+  }
+
+  private void bitrateButton(boolean travel) {
+    Button button = button("", () -> {});
+    Runnable refresh =
+        () ->
+            button.setText(
+                (travel ? "Travel limit: " : "Home limit: ")
+                    + (travel ? options.travelMbps() : options.homeMbps())
+                    + " Mbps");
+    refresh.run();
+    button.setEnabled(PcvrOptions.PYROWAVE_BUILD);
+    button.setOnClickListener(
+        v -> {
+          NumberPicker picker = new NumberPicker(this);
+          picker.setMinValue(5);
+          picker.setMaxValue(travel ? 45 : 200);
+          picker.setValue(travel ? options.travelMbps() : options.homeMbps());
+          picker.setWrapSelectorWheel(false);
+          new AlertDialog.Builder(this)
+              .setTitle(travel ? "Travel bitrate limit" : "Home bitrate limit")
+              .setView(picker)
+              .setNegativeButton("Cancel", null)
+              .setPositiveButton(
+                  "Save",
+                  (d, w) -> {
+                    picker.clearFocus();
+                    options.bitrate(travel, picker.getValue());
+                    refresh.run();
+                  })
+              .show();
+        });
+    body.addView(button);
   }
 
   private void refreshPairing() {
@@ -159,7 +202,10 @@ public final class PcvrSettingsActivity extends Activity {
     final String value = text;
     runOnUiThread(
         () -> {
-          if (!destroyed) status.setText(value);
+          if (!destroyed) {
+            status.setText(value);
+            forgetButton.setEnabled(store.hasPairing());
+          }
         });
   }
 

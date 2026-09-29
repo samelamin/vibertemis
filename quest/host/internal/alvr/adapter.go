@@ -65,6 +65,7 @@ var (
 // Matches the workspace version in alvr/Cargo.toml at the pinned
 // commit a9f6542fa507a841f40ab4f3fcb531427cd02550.
 const ExpectedVersion = "20.14.1"
+const NativeVersion = "20.14.1-vibertemis-pyro.1"
 
 // Codec is a stock ALVR CodecType variant string. The names are
 // case-sensitive and match the serde default serialization.
@@ -116,6 +117,7 @@ type Adapter struct {
 	path         string
 	gate         ProcessGate
 	lastSnapshot *snapshot
+	replaceFile  func(string, string) error // optional failure-injection seam; production uses os.Rename
 }
 
 // NewAdapter returns an adapter for the given path. gate MUST be
@@ -186,54 +188,84 @@ func validateSchema(j map[string]interface{}) error {
 	if !ok {
 		return ErrSchemaUnrecognized
 	}
-	if _, ok := pc["variant"]; !ok {
+	codec, ok := pc["variant"].(string)
+	if !ok {
+		return ErrSchemaUnrecognized
+	}
+	switch codec {
+	case "H264", "Hevc", "AV1":
+	case "PyroWave":
+		if sessionVersion(j) != NativeVersion {
+			return ErrSchemaUnrecognized
+		}
+	default:
 		return ErrSchemaUnrecognized
 	}
 	return nil
 }
 
+// ALVR serializes semver as a string. Legacy synthetic object fixtures are
+// accepted only when all numeric parts and optional prerelease are exact.
+func sessionVersion(j map[string]interface{}) string {
+	if value, ok := j["server_version"].(string); ok {
+		return value
+	}
+	if value, ok := j["server_version"].(map[string]interface{}); ok {
+		major, a := value["major"].(float64)
+		minor, b := value["minor"].(float64)
+		patch, c := value["patch"].(float64)
+		if !a || !b || !c || major != 20 || minor != 14 || patch != 1 {
+			return ""
+		}
+		version := ExpectedVersion
+		if pre, exists := value["pre"]; exists {
+			text, ok := pre.(string)
+			if !ok {
+				return ""
+			}
+			if text != "" {
+				version += "-" + text
+			}
+		}
+		if build, exists := value["build"]; exists {
+			text, ok := build.(string)
+			if !ok || text != "" {
+				return ""
+			}
+		}
+		return version
+	}
+	return ""
+}
 func validateVersion(j map[string]interface{}) error {
-	v, ok := j["server_version"]
-	if !ok {
-		return ErrSchemaUnrecognized
+	version := sessionVersion(j)
+	if version != ExpectedVersion && version != NativeVersion {
+		return fmt.Errorf("%w: %q", ErrVersionMismatch, version)
 	}
-	// server_version serializes as a semver object: {major, minor, patch, ...}.
-	// The string form (to_string) is "MAJOR.MINOR.PATCH[-PRERELEASE]".
-	// Accept either the object form or a pre-stringified form.
-	if m, ok := v.(map[string]interface{}); ok {
-		maj, _ := m["major"].(float64)
-		min, _ := m["minor"].(float64)
-		pat, _ := m["patch"].(float64)
-		have := fmt.Sprintf("%d.%d.%d", int(maj), int(min), int(pat))
-		if have != ExpectedVersion {
-			return fmt.Errorf("%w: have %s, want %s", ErrVersionMismatch, have, ExpectedVersion)
-		}
-		return nil
-	}
-	if s, ok := v.(string); ok {
-		if s != ExpectedVersion {
-			return fmt.Errorf("%w: have %s, want %s", ErrVersionMismatch, s, ExpectedVersion)
-		}
-		return nil
-	}
-	return ErrSchemaUnrecognized
+	return nil
 }
 
 // CurrentCodec returns the codec ALVR has currently saved. The
 // empty string means "missing or unrecognized" — NOT a negotiated
 // value.
 func (a *Adapter) CurrentCodec() (Codec, error) {
+	codec, _, err := a.CodecState()
+	return codec, err
+}
+
+// CodecState returns one consistent read, not two racing session snapshots.
+func (a *Adapter) CodecState() (Codec, bool, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	cur, err := a.loadLocked()
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	ss, _ := cur["session_settings"].(map[string]interface{})
 	video, _ := ss["video"].(map[string]interface{})
 	pc, _ := video["preferred_codec"].(map[string]interface{})
 	v, _ := pc["variant"].(string)
-	return Codec(v), nil
+	return Codec(v), sessionVersion(cur) == NativeVersion, nil
 }
 
 // ProbeResult is the /capabilities payload.
@@ -250,6 +282,7 @@ func (a *Adapter) CurrentCodec() (Codec, error) {
 // session.json would conflate "what the user picked" with "what
 // the stream is using".
 type ProbeResult struct {
+	NativeHandshake bool     `json:"native_handshake"`
 	Codecs          []string `json:"codecs"`
 	PyroWave        bool     `json:"pyrowave"`
 	PyroWaveReason  string   `json:"pyrowave_reason"`
@@ -276,13 +309,19 @@ func (a *Adapter) Probe() (ProbeResult, error) {
 		}
 		return ProbeResult{}, err
 	}
-	if _, err := a.loadLocked(); err != nil {
+	doc, err := a.loadLocked()
+	if err != nil {
 		return ProbeResult{
 			Codecs:          []string{},
 			PyroWave:        false,
 			PyroWaveReason:  PyroWaveDisabledReason,
 			NegotiatedCodec: "",
 		}, nil
+	}
+	if sessionVersion(doc) == NativeVersion {
+		return ProbeResult{NativeHandshake: true,
+			Codecs:         []string{string(CodecH264), string(CodecHEVC), string(CodecAV1), "PyroWave"},
+			PyroWaveReason: "Runtime encoder and decoder compatibility is checked during the VR connection."}, nil
 	}
 	return ProbeResult{
 		Codecs:          []string{string(CodecH264), string(CodecHEVC), string(CodecAV1)},
@@ -331,6 +370,9 @@ func (a *Adapter) EnsureCodec(desired Codec) (Codec, error) {
 	if err != nil {
 		return "", err
 	}
+	if sessionVersion(cur) == NativeVersion {
+		return "", errors.New("custom ALVR codec is managed by its native handshake")
+	}
 	runningVR, err := a.gate.VRServerRunning()
 	if err != nil {
 		return "", fmt.Errorf("%w: vrserver: %v", ErrProcessProbe, err)
@@ -372,19 +414,27 @@ func (a *Adapter) writeLocked(cur map[string]interface{}, desired Codec) error {
 	if err := os.WriteFile(tmpPath, newData, 0644); err != nil {
 		return fmt.Errorf("write tmp: %w", err)
 	}
-	if _, statErr := os.Stat(bakPath); statErr != nil {
-		if cpErr := copyFile(a.path, bakPath); cpErr != nil {
-			_ = os.Remove(tmpPath)
-			return fmt.Errorf("backup: %w", cpErr)
-		}
-	}
-	if err := os.Rename(tmpPath, a.path); err != nil {
+	// Refresh the backup for this transaction; an old backup is never a
+	// rollback source. A failed rename must leave the destination untouched.
+	if cpErr := os.WriteFile(bakPath, a.lastSnapshot.bytes, 0644); cpErr != nil {
 		_ = os.Remove(tmpPath)
-		if cpErr := copyFile(bakPath, a.path); cpErr != nil {
-			return fmt.Errorf("%w: rename=%v restore=%v", ErrRollbackFailed, err, cpErr)
-		}
+		return fmt.Errorf("backup: %w", cpErr)
+	}
+	if err := a.confirmSnapshotMatchesLocked(); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	replace := a.replaceFile
+	if replace == nil {
+		replace = os.Rename
+	}
+	if err := replace(tmpPath, a.path); err != nil {
+		_ = os.Remove(tmpPath)
+		// Do not restore anything over the still-current file (or over a
+		// newer file another process wrote). The original rename failed.
 		return fmt.Errorf("%w: %v", ErrWrite, err)
 	}
+
 	st, err := os.Stat(a.path)
 	if err == nil {
 		a.lastSnapshot = &snapshot{

@@ -170,6 +170,7 @@ public class HostClient {
             .put("role", "headset")
             .put("mode", "pcvr")
             .put("requested_codec", codec)
+            .put("native_protocol", PcvrOptions.PYROWAVE_BUILD ? "20.14.1-vibertemis-pyro.1" : "")
             .put("request_id", UUID.randomUUID().toString())
             .toString()
             .getBytes(StandardCharsets.UTF_8);

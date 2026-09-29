@@ -105,6 +105,7 @@ public class MainHubActivityTest {
 
         View root = c.get().findViewById(R.id.hub_btn_steamvr);
         root.performClick();
+        com.vibertemis.quest.pcvr.PcvrTestActions.confirmRestartIfShown();
 
         // Walk every started activity Robolectric captured; none must
         // target SteamVrActivity.
@@ -131,6 +132,7 @@ public class MainHubActivityTest {
 
         View root = c.get().findViewById(R.id.hub_btn_steamvr);
         root.performClick();
+        com.vibertemis.quest.pcvr.PcvrTestActions.confirmRestartIfShown();
 
         // Drain the permission-request side effect. We don't assert its
         // exact type — only that the PCVR launch is not among the
@@ -178,6 +180,7 @@ public class MainHubActivityTest {
 
         View root = c.get().findViewById(R.id.hub_btn_steamvr);
         root.performClick();
+        com.vibertemis.quest.pcvr.PcvrTestActions.confirmRestartIfShown();
 
         // Walk the captured started activities; find the PCVR one.
         ShadowApplication app = ShadowApplication.getInstance();
@@ -210,6 +213,7 @@ public class MainHubActivityTest {
 
         View root = c.get().findViewById(R.id.hub_btn_screen);
         root.performClick();
+        com.vibertemis.quest.pcvr.PcvrTestActions.confirmRestartIfShown();
 
         ShadowApplication app = ShadowApplication.getInstance();
         Intent pc = null;
@@ -240,10 +244,13 @@ public class MainHubActivityTest {
 
         View root = c.get().findViewById(R.id.hub_btn_steamvr);
         root.performClick();
+        com.vibertemis.quest.pcvr.PcvrTestActions.confirmRestartIfShown();
         // Second tap before the first launch has been consumed by the
         // user coming back to the hub.
         root.performClick();
+        com.vibertemis.quest.pcvr.PcvrTestActions.confirmRestartIfShown();
         root.performClick();
+        com.vibertemis.quest.pcvr.PcvrTestActions.confirmRestartIfShown();
 
         ShadowApplication app = ShadowApplication.getInstance();
         Intent i;
@@ -268,7 +275,9 @@ public class MainHubActivityTest {
 
         View root = c.get().findViewById(R.id.hub_btn_steamvr);
         root.performClick();
+        com.vibertemis.quest.pcvr.PcvrTestActions.confirmRestartIfShown();
         root.performClick();
+        com.vibertemis.quest.pcvr.PcvrTestActions.confirmRestartIfShown();
 
         // No SteamVrActivity launch should happen while permission is
         // pending — the second tap is ignored by the request guard.
@@ -296,12 +305,14 @@ public class MainHubActivityTest {
         // Dispatch a SteamVR tap so a permission request is in flight.
         View root = c.get().findViewById(R.id.hub_btn_steamvr);
         root.performClick();
+        com.vibertemis.quest.pcvr.PcvrTestActions.confirmRestartIfShown();
 
         // Deliver a result whose permission name is not RECORD_AUDIO.
         c.get().onRequestPermissionsResult(
                 REQ_MIC_FOR_STEAMVR,
                 new String[]{Manifest.permission.CAMERA},
                 new int[]{PackageManager.PERMISSION_GRANTED});
+        com.vibertemis.quest.pcvr.PcvrTestActions.confirmRestartIfShown();
 
         ShadowApplication app = ShadowApplication.getInstance();
         Intent i;
@@ -325,6 +336,7 @@ public class MainHubActivityTest {
 
         View root = c.get().findViewById(R.id.hub_btn_steamvr);
         root.performClick();
+        com.vibertemis.quest.pcvr.PcvrTestActions.confirmRestartIfShown();
         c.get().onRequestPermissionsResult(
                 REQ_MIC_FOR_STEAMVR,
                 new String[]{Manifest.permission.RECORD_AUDIO},
@@ -352,18 +364,21 @@ public class MainHubActivityTest {
 
         View root = c.get().findViewById(R.id.hub_btn_steamvr);
         root.performClick();
+        com.vibertemis.quest.pcvr.PcvrTestActions.confirmRestartIfShown();
 
         // First result — granted, launches PCVR.
         c.get().onRequestPermissionsResult(
                 REQ_MIC_FOR_STEAMVR,
                 new String[]{Manifest.permission.RECORD_AUDIO},
                 new int[]{PackageManager.PERMISSION_GRANTED});
+        com.vibertemis.quest.pcvr.PcvrTestActions.confirmRestartIfShown();
 
         // Second delivery of the same grant — must be a no-op.
         c.get().onRequestPermissionsResult(
                 REQ_MIC_FOR_STEAMVR,
                 new String[]{Manifest.permission.RECORD_AUDIO},
                 new int[]{PackageManager.PERMISSION_GRANTED});
+        com.vibertemis.quest.pcvr.PcvrTestActions.confirmRestartIfShown();
 
         ShadowApplication app = ShadowApplication.getInstance();
         Intent i;
@@ -389,6 +404,7 @@ public class MainHubActivityTest {
 
         View root = c.get().findViewById(R.id.hub_btn_steamvr);
         root.performClick();
+        com.vibertemis.quest.pcvr.PcvrTestActions.confirmRestartIfShown();
 
         c.get().onRequestPermissionsResult(
                 REQ_MIC_FOR_STEAMVR,
@@ -421,6 +437,7 @@ public class MainHubActivityTest {
         // Tap settings -> simulate the user going there and coming back.
         View settings = c.get().findViewById(R.id.hub_btn_settings);
         settings.performClick();
+        com.vibertemis.quest.pcvr.PcvrTestActions.confirmRestartIfShown();
 
         // Capture and clear so we can isolate the onResume-side starts.
         ShadowApplication app = ShadowApplication.getInstance();
@@ -457,6 +474,7 @@ public class MainHubActivityTest {
 
         View root = c.get().findViewById(R.id.hub_btn_steamvr);
         root.performClick();
+        com.vibertemis.quest.pcvr.PcvrTestActions.confirmRestartIfShown();
 
         // Save the state mid-request.
         Bundle state = new Bundle();
@@ -485,6 +503,7 @@ public class MainHubActivityTest {
                 MainHubActivity.REQ_MIC_FOR_STEAMVR_FOR_TEST,
                 new String[]{Manifest.permission.RECORD_AUDIO},
                 new int[]{PackageManager.PERMISSION_GRANTED});
+        com.vibertemis.quest.pcvr.PcvrTestActions.confirmRestartIfShown();
         int first = 0;
         while ((i = app.getNextStartedActivity()) != null) {
             if (isSteamVrIntent(i)) first++;
@@ -499,6 +518,7 @@ public class MainHubActivityTest {
         // new instance and blocked the click.
         app.grantPermissions(Manifest.permission.RECORD_AUDIO);
         rootReborn.performClick();
+        com.vibertemis.quest.pcvr.PcvrTestActions.confirmRestartIfShown();
         int second = 0;
         while ((i = app.getNextStartedActivity()) != null) {
             if (isSteamVrIntent(i)) second++;
@@ -533,6 +553,7 @@ public class MainHubActivityTest {
         // requestPending. No SteamVrActivity launch yet (mic denied).
         View pcvr = c.get().findViewById(R.id.hub_btn_steamvr);
         pcvr.performClick();
+        com.vibertemis.quest.pcvr.PcvrTestActions.confirmRestartIfShown();
         int pcvrBeforeGrant = 0;
         while ((i = app.getNextStartedActivity()) != null) {
             if (isSteamVrIntent(i)) pcvrBeforeGrant++;
@@ -554,6 +575,7 @@ public class MainHubActivityTest {
                 REQ_MIC_FOR_STEAMVR,
                 new String[]{Manifest.permission.RECORD_AUDIO},
                 new int[]{PackageManager.PERMISSION_GRANTED});
+        com.vibertemis.quest.pcvr.PcvrTestActions.confirmRestartIfShown();
         int pcvrAfterGrant = 0;
         while ((i = app.getNextStartedActivity()) != null) {
             if (isSteamVrIntent(i)) pcvrAfterGrant++;
@@ -566,6 +588,7 @@ public class MainHubActivityTest {
         // launched-activity pause for the FIRST tap, so launchLeftHub
         // is still false and launchPending is still true.
         pcvr.performClick();
+        com.vibertemis.quest.pcvr.PcvrTestActions.confirmRestartIfShown();
         int pcvrDouble = 0;
         while ((i = app.getNextStartedActivity()) != null) {
             if (isSteamVrIntent(i)) pcvrDouble++;
@@ -576,6 +599,7 @@ public class MainHubActivityTest {
         // Other buttons are also guarded during the in-flight launch.
         View screen = c.get().findViewById(R.id.hub_btn_screen);
         screen.performClick();
+        com.vibertemis.quest.pcvr.PcvrTestActions.confirmRestartIfShown();
         int screenBlocked = 0;
         while ((i = app.getNextStartedActivity()) != null) {
             if (i.getComponent() != null
@@ -595,6 +619,7 @@ public class MainHubActivityTest {
 
         // A fresh tap now works.
         screen.performClick();
+        com.vibertemis.quest.pcvr.PcvrTestActions.confirmRestartIfShown();
         int screenAfterReturn = 0;
         while ((i = app.getNextStartedActivity()) != null) {
             if (i.getComponent() != null
@@ -623,6 +648,7 @@ public class MainHubActivityTest {
         // Tap PCVR — launches SteamVrActivity, sets launchPending.
         View steamvr = c.get().findViewById(R.id.hub_btn_steamvr);
         steamvr.performClick();
+        com.vibertemis.quest.pcvr.PcvrTestActions.confirmRestartIfShown();
         int first = 0;
         while ((i = app.getNextStartedActivity()) != null) {
             if (isSteamVrIntent(i)) first++;
@@ -632,6 +658,7 @@ public class MainHubActivityTest {
         // Setup tap during in-flight launch must NOT launch SetupActivity.
         View setup = c.get().findViewById(R.id.hub_btn_setup);
         setup.performClick();
+        com.vibertemis.quest.pcvr.PcvrTestActions.confirmRestartIfShown();
         int setupDuringLaunch = 0;
         while ((i = app.getNextStartedActivity()) != null) {
             if ("com.vibertemis.quest.hub.SetupActivity".equals(
@@ -646,6 +673,7 @@ public class MainHubActivityTest {
         // StreamSettings.
         View settings = c.get().findViewById(R.id.hub_btn_settings);
         settings.performClick();
+        com.vibertemis.quest.pcvr.PcvrTestActions.confirmRestartIfShown();
         int settingsDuringLaunch = 0;
         while ((i = app.getNextStartedActivity()) != null) {
             if ("com.limelight.preferences.StreamSettings".equals(
@@ -660,6 +688,7 @@ public class MainHubActivityTest {
         c.pause();
         c.resume();
         setup.performClick();
+        com.vibertemis.quest.pcvr.PcvrTestActions.confirmRestartIfShown();
         int setupAfterReturn = 0;
         while ((i = app.getNextStartedActivity()) != null) {
             if ("com.vibertemis.quest.hub.SetupActivity".equals(

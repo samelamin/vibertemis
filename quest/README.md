@@ -5,12 +5,12 @@ A single arm64 APK shipping two streaming modes from one launcher.
 - **Screen gaming** — flat streaming on phone; on headsets, optional
   synthetic 3D is available. Pairs with a Sunshine or Apollo host on the
   PC. Moonlight itself is never used as a server.
-- **Real PCVR** — actual ALVR v20.14.1 with HMD and Touch controller
+- **Real PCVR** — custom ALVR 20.14.1-vibertemis-pyro.1 with HMD and Touch controller
   tracking on Quest3. The PC host runs the ALVR streamer; this APK is
   the headset client. Hardware behavior on Quest3 is UNTESTED.
 
-APK `vibertemis-quest-preview-0.1.0.2.apk`, package
-`com.vibertemis.quest.preview.debug`, version `0.1.0-quest-preview.2`,
+APK `vibertemis-quest-preview-0.1.0.3.apk`, package
+`com.vibertemis.quest.preview.debug`, version `0.1.0-quest-preview.3`,
 `arm64-v8a` only, `minSdk=26`, `targetSdk=34`. No second ALVR headset
 app — the runtime is bundled inside this APK.
 
@@ -20,7 +20,7 @@ app — the runtime is bundled inside this APK.
    <https://developers.meta.com/horizon/documentation/native/android/mobile-device-setup/>.
 2. Connect over USB and accept the "Allow USB debugging?" prompt on
    the headset.
-3. `adb install -r vibertemis-quest-preview-0.1.0.2.apk`.
+3. `adb install -r vibertemis-quest-preview-0.1.0.3.apk`.
 4. Launch under **Unknown Sources**.
 
 ## Screen mode
@@ -65,65 +65,89 @@ reader on every `onResume` — there is no separate "last profile" lie.
 
 ## PCVR mode (Quest3 only)
 
-Wireless SteamVR through ALVR v20.14.1. The headset client is this
-APK; the PC host runs the matching ALVR streamer.
+Wireless SteamVR, headset tracking and Touch controllers use the bundled
+custom ALVR client. **Install the matching Windows host from this release.**
+Stock ALVR 20.14.1 and other releases cannot connect to this custom protocol.
+Target hardware: Windows 11, RTX 4090, Quest 3. Actual headset/GPU testing
+is still required; this is an experimental test build.
 
-### ALVR PC streamer (REQUIRED, exact 20.14.1)
+### Windows host setup
 
-- **Windows** — `alvr_streamer_windows.zip`
-  <https://github.com/alvr-org/ALVR/releases/download/v20.14.1/alvr_streamer_windows.zip>
-  SHA-256 `6fbb85432822e9e3162d29b2919cd843bd9805262aef0c4797ffec7c57654a83`.
-  Launch `ALVR Dashboard.exe` at the archive top level.
-- **Linux** — `alvr_streamer_linux.tar.gz`
-  <https://github.com/alvr-org/ALVR/releases/download/v20.14.1/alvr_streamer_linux.tar.gz>
-  SHA-256 `be82b4a7a3cb3607dd5c307cf2b0a1b524d1ecbba586d657a458117a8a63bc09`.
-  Launch the extracted `alvr_streamer_linux/bin/alvr_dashboard`.
+1. Install Steam and SteamVR. Extract this release's Windows host ZIP to a
+   permanent folder, for example `C:\VibertemisVR`. Keep its DLLs together.
+2. Run `ALVR Dashboard.exe`, finish the setup wizard and register the driver.
+   Allow ALVR through Windows Firewall on your trusted network. Keep the
+   dashboard available for trusting the headset and changing display settings.
+3. Place this release's `vibertemis-host-companion.exe` in that folder.
+   Use the actual absolute path to the dashboard's `session.json` below.
+4. In PowerShell, replace the example IP with your PC's reachable LAN IP:
 
-Verify with `sha256sum` after download. Install Steam and SteamVR on
-the PC; let the ALVR wizard register its driver. On the headset, tap
-the SteamVR entry — the headset app prompts for microphone access on
-first use. On the PC dashboard, trust the discovered headset, then
-launch SteamVR. Requirements: <https://github.com/alvr-org/ALVR/wiki/Requirements>.
+```powershell
+cd C:\VibertemisVR
+.\vibertemis-host-companion.exe -alvr-session "C:\VibertemisVR\session.json" -advertise "192.168.1.10:28540" -export-pairing
+```
 
-### PCVR settings live on the dashboard
+The command prints the path to a private UTF-8 `pairing-export.json` file.
+Copy it to the headset's Downloads folder over USB, then open **PCVR settings**
+and import it. The file contains a pairing token; keep it private and remove
+the transferred copy after import. Do not redirect `-show-export` from older
+PowerShell: its UTF-16 output will not import.
 
-Codec, refresh, resolution, adaptive bitrate, and fixed-foveated
-encoding are dashboard-owned. Verified ALVR v20.14.1 defaults (see
-`alvr/session/src/settings.rs`): 72 Hz, H.264, 30 Mbps constant,
-fixed-foveated encoding on, adaptive bitrate available but not
-default-enabled.
+5. Start the companion in your normal signed-in Windows session:
 
-- Adaptive bitrate is an opt-in toggle on the dashboard. The v20.14.1
-  default is constant 30 Mbps.
-- Fixed-foveated encoding downscales the periphery of each frame
-  before encoding, so the encoded stream carries fewer bits for the
-  peripheral area at the cost of detail there. Centre detail is
-  preserved. There is no measured savings guarantee.
-- Quest 3 has no eye-tracking hardware. Gaze-driven foveation is not
-  available; only fixed-foveated encoding is.
-- The Travel and HQ presets are screen-only. PCVR is not bound to
-  any preset in this APK.
-- A 50 Mbps downlink test alone does not predict a working session;
-  home upload, RTT, jitter, and loss dominate. PCVR WAN is
-  experimental: run a UDP-passing VPN and enter the peer's VPN-side IP
-  manually in the ALVR dashboard. No headset-side host IP field, no
-  automatic port opening, no seamless Internet VR.
-- ALVR has no PIN pairing and no Moonlight Desktop applist on the
-  headset. PCVR session setup is: trust the discovered headset from
-  the ALVR dashboard on the PC, then launch a VR game from SteamVR
-  on the PC or from the SteamVR library on the headset.
+```powershell
+.\vibertemis-host-companion.exe -alvr-session "C:\VibertemisVR\session.json" -listen "192.168.1.10:28540" -advertise "192.168.1.10:28540"
+```
 
-Guide: <https://github.com/alvr-org/ALVR/wiki/Headset-and-ALVR-streamer-on-separate-networks>.
+Keep this window open. Allow this executable through the firewall on the
+trusted network if prompted. The companion uses TCP 28540; ALVR's wizard
+manages streaming rules. It must run as your interactive user, not a service.
 
-### Microphone permission
+6. On Quest, choose **SteamVR**, grant microphone permission, then confirm
+   **Connect**. This explicitly permits a SteamVR restart if the selected
+   codec/display configuration requires it. Trust the discovered headset in
+   the ALVR dashboard on first connection. Launch a VR game from SteamVR.
 
-Microphone permission is required by this preview's launcher. The
-bundled ALVR runtime is unmodified; its recording path can repeatedly
-retry when host microphone forwarding is enabled and recording is
-denied. The sample-rate query alone does not establish a
-recording-permission requirement. Voice forwarding is controlled by
-the ALVR dashboard (off by default on Windows, on by default on
-Linux).
+Only an explicit headset PCVR connection asks the companion to start SteamVR.
+Screen gaming, phones, settings and status checks do not start it. Without
+pairing, the manual route requires starting SteamVR on the PC yourself.
+Codec/display changes can require a restart; save your current game first.
+The restart permission expires after two minutes, including connection setup.
+
+### Codec and quality controls
+
+**PCVR settings** keeps its controls separate from Screen gaming:
+
+- **PyroWave**: experimental GPU codec for Home. Switch it off to use the
+  saved Standard selection: Auto, AV1 or HEVC. Runtime encoder/decoder
+  capability checks can fall back to a standard codec.
+- **Travel**: temporarily uses Standard and preserves the PyroWave choice
+  for your next Home connection.
+- **Home limit**: adjustable 5–200 Mbps, starting at 200 Mbps.
+- **Travel limit**: adjustable 5–45 Mbps, starting at 30 Mbps to leave room
+  on a 50 Mbps connection. Adaptive bitrate may drop below either limit.
+- **Last decoded codec**: recorded only after the headset decodes a frame.
+  It describes the last stream, not a guarantee for the next connection.
+
+Changes apply on the next PCVR connection. Disconnect before changing an
+active stream. Resolution, refresh rate and fixed-foveated encoding remain
+in the ALVR dashboard. Begin at 72 Hz, then test higher display settings on
+your own network. High bitrate does not guarantee low latency.
+
+ALVR's fixed foveation reduces peripheral image detail before encoding.
+This is not Valve's gaze-driven foveated-streaming implementation. Quest 3
+has no eye tracking; this build does not offer gaze-driven foveation.
+
+For travel, configure a UDP-capable VPN and add the headset's reachable VPN
+IP manually in ALVR. Pair the companion using the PC's reachable VPN address
+if it differs from the LAN address. No automatic Internet discovery or port
+opening is implemented. Home upload, round-trip delay, jitter and packet
+loss matter alongside download speed. See the
+[ALVR separate-network guide](https://github.com/alvr-org/ALVR/wiki/Headset-and-ALVR-streamer-on-separate-networks).
+
+Microphone permission is required by the preview launcher. Voice forwarding
+is controlled separately in the ALVR dashboard. Screen synthetic 3D and real
+stereoscopic PCVR are separate modes.
 
 ## Rebuilding from source
 
@@ -133,22 +157,23 @@ NDK `27.0.12077973`. Set `ANDROID_HOME` and `JAVA_HOME`; optional
 `GRADLE_USER_HOME` is respected.
 
 ```bash
-bash quest/build/fetch.sh          # fetch upstream + extract native lib
-bash quest/build/apply-overlays.sh # apply patch and overlay sources
-ANDROID_HOME=/path/to/Android/Sdk \
-JAVA_HOME=/path/to/jdk-21 \
-bash quest/build/build.sh          # tests + assembleNonRootDebug
+bash quest/build/fetch.sh
+bash quest/build/apply-overlays.sh
+bash quest/native/build-android.sh
+python3 quest/native/install-android.py
+bash quest/build/build.sh
 ```
-Output APK:
-`build/quest/upstream/app/build/outputs/apk/nonRoot/debug/app-nonRoot-debug.apk`.
 
-The source archive exposes `android/` (full patched Moonlight XR
-source plus submodules and the prebuilt ALVR `.so`), `alvr-source/`
-(exact MIT source for ALVR at the pinned SHA), and
-`vibertemis-quest/` (recipes, overlays, docs). GPLv3 and MIT
-originals included; no `.git` required. From `android/`, run
-`./gradlew testNonRootDebugUnitTest assembleNonRootDebug` with
-`ANDROID_HOME` and `JAVA_HOME` set. Real sideload, ALVR session,
-SteamVR, controller tracking, haptics, recenter, mic round-trip,
-host disconnect / reconnect, and LAN / VPN quality metrics are the
-user's responsibility — see `TESTING.md` and `RESEARCH.md`.
+Native prerequisites additionally include Rust 1.97.1, CMake and Ninja.
+The native scripts fetch exact ALVR, PyroWave and Granite commits from
+`native/sources.json`. Source fingerprints and library hashes reject stale
+or mixed binaries. Windows host build: `quest/native/build-windows.ps1`
+with MSVC and the Windows SDK. Build the companion from `quest/host` using
+Go 1.26: `go build ./cmd/vibertemis-host-companion`.
+
+APK output:
+`build/quest/upstream/app/build/outputs/apk/nonRoot/debug/app-nonRoot-debug.apk`.
+The corresponding-source archive includes patched Android/ALVR trees,
+PyroWave, Granite with submodules, recipes and original licenses.
+See `TESTING.md` for the real-device acceptance checklist. Automated tests
+and successful compilation do not establish streaming quality or latency.

@@ -66,6 +66,12 @@ func (s *Server) handleStartPcvr1(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	switch normalizeCodec(req.RequestedCodec) {
+	case alvr.Codec(alvr.AutoSentinel), alvr.CodecH264, alvr.CodecHEVC, alvr.CodecAV1, alvr.Codec("PyroWave"):
+	default:
+		writeStartPcvr(w, StartPcvrResponse{State: StateDenied, Error: ErrBadRequest, Message: "Unknown requested codec"})
+		return
+	}
 	payloadDigest := payloadHex(body)
 
 	// Atomic launch transaction. The lookupOrBeginTx call
@@ -164,24 +170,28 @@ func (s *Server) handleStartPcvr1(w http.ResponseWriter, r *http.Request) {
 		// Match or Auto → ALREADY_RUNNING. Mismatch →
 		// RECONNECT_REQUIRED with explicit dashboard
 		// instruction.
-		cur, curErr := s.deps.Adapter.CurrentCodec()
+		cur, native, curErr := s.deps.Adapter.CodecState()
 		if curErr != nil {
 			finalise(StartPcvrResponse{
 				State:   StateReconnectRequired,
 				Error:   ErrAlvrUnreadable,
-				Message: "SteamVR is running but the ALVR session.json is unreadable (" + curErr.Error() + "); cannot confirm codec — open the ALVR Dashboard, verify Codec is one of H264/Hevc/AV1, then retry",
+				Message: "SteamVR is running but the ALVR session.json is unreadable (" + curErr.Error() + "); cannot confirm codec — open the ALVR Dashboard, verify the matching host installation, then retry",
 			})
 			return
 		}
-		if desired := normalizeCodec(req.RequestedCodec); desired == "" || string(desired) == alvr.AutoSentinel || cur == desired {
+		if req.NativeProtocol != "" && (req.NativeProtocol != alvr.NativeVersion || !native) {
+			failStart(StartPcvrResponse{State: StateDenied, Error: ErrAlvrVersion, Message: "Install the matching custom ALVR host"})
+			return
+		}
+		if desired := normalizeCodec(req.RequestedCodec); native || desired == "" || string(desired) == alvr.AutoSentinel || cur == desired {
 			finalise(StartPcvrResponse{
-				State: StateAlreadyRunning, AppliedCodec: string(cur),
+				State: StateAlreadyRunning, AppliedCodec: savedCodecLabel(cur, native),
 			})
 			return
 		}
 		finalise(StartPcvrResponse{
 			State: StateReconnectRequired, Error: ErrAlvrCodec,
-			AppliedCodec: string(cur),
+			AppliedCodec: savedCodecLabel(cur, native),
 			Message: fmt.Sprintf("SteamVR is running with codec=%s but the headset requested codec=%s. Do not kill SteamVR. Open the ALVR Dashboard, set Codec to %s, save, then stop and reconnect ALVR from the headset.",
 				cur, req.RequestedCodec, req.RequestedCodec),
 		})
@@ -193,25 +203,30 @@ func (s *Server) handleStartPcvr1(w http.ResponseWriter, r *http.Request) {
 	// launch (Codex #15). The headset has not asked for a
 	// codec change yet; Auto / matching / cold-start all flow
 	// through the same read-only check.
-	cur, curErr := s.deps.Adapter.CurrentCodec()
+	cur, native, curErr := s.deps.Adapter.CodecState()
 	if curErr != nil {
 		// Missing / malformed / wrong version: refuse to launch.
 		failStart(StartPcvrResponse{
 			State:   StateReconnectRequired,
 			Error:   mapCurErr(curErr),
-			Message: "ALVR is not installed, the session.json is unreadable, or its server_version is not 20.14.1 (" + curErr.Error() + "); install / repair ALVR v20.14.1 then retry",
+			Message: "ALVR is not installed, the session.json is unreadable, or its server_version is unsupported (" + curErr.Error() + "); install / repair the matching ALVR host from this release, then retry",
 		})
 		return
 	}
 
-	// Now check the requested codec against the ALVR setting.
+	if req.NativeProtocol != "" && (req.NativeProtocol != alvr.NativeVersion || !native) {
+		failStart(StartPcvrResponse{State: StateDenied, Error: ErrAlvrVersion, Message: "Install the matching custom ALVR host"})
+		return
+	}
+	// Custom native handshake owns codec selection; never edit its preferences.
+	// Stock hosts still require matching the saved dashboard codec.
 	desired := normalizeCodec(req.RequestedCodec)
-	if desired != "" && string(desired) != alvr.AutoSentinel && cur != desired {
+	if !native && desired != "" && string(desired) != alvr.AutoSentinel && cur != desired {
 		// Phase 1: refuse to auto-edit the host config. Tell
 		// the user to use the ALVR Dashboard.
 		failStart(StartPcvrResponse{
 			State: StateReconnectRequired, Error: ErrAlvrCodec,
-			AppliedCodec: string(cur),
+			AppliedCodec: savedCodecLabel(cur, native),
 			Message: fmt.Sprintf("ALVR is currently configured for codec=%s but the headset requested %s. The companion does not edit session.json in this build. Open the ALVR Dashboard, set Codec to %s, save, then retry.",
 				cur, desired, desired),
 		})
@@ -234,7 +249,7 @@ func (s *Server) handleStartPcvr1(w http.ResponseWriter, r *http.Request) {
 		}
 		failStart(StartPcvrResponse{
 			State: StateDenied, Error: ErrSteamLaunch,
-			AppliedCodec: string(cur),
+			AppliedCodec: savedCodecLabel(cur, native),
 			Message:      err.Error(),
 		})
 		return
@@ -255,7 +270,7 @@ func (s *Server) handleStartPcvr1(w http.ResponseWriter, r *http.Request) {
 		// vrserver is up. The startup is complete; cache
 		// the final response and clear the lease so a NEW
 		// request_id can dispatch again.
-		finalise(StartPcvrResponse{State: StateStarted, AppliedCodec: string(cur)})
+		finalise(StartPcvrResponse{State: StateStarted, AppliedCodec: savedCodecLabel(cur, native)})
 		return
 	}
 	// vrserver not yet observed. Return STARTING immediately.
@@ -267,7 +282,7 @@ func (s *Server) handleStartPcvr1(w http.ResponseWriter, r *http.Request) {
 	// and allow a second dispatch.
 	owner = false
 	writeStartPcvr(w, StartPcvrResponse{
-		State: StateStarting, AppliedCodec: string(cur),
+		State: StateStarting, AppliedCodec: savedCodecLabel(cur, native),
 		Message: "launch dispatched; vrserver not observed within probe budget; poll /status or retry with the same request_id",
 	})
 }
@@ -468,4 +483,12 @@ func writeErr(w http.ResponseWriter, status int, code StartPcvrError, msg string
 		Error:   code,
 		Message: msg,
 	})
+}
+
+// Custom negotiation has not happened yet. Never report its requested/saved codec as applied.
+func savedCodecLabel(codec alvr.Codec, native bool) string {
+	if native {
+		return ""
+	}
+	return string(codec)
 }

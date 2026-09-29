@@ -95,6 +95,8 @@ log "GRADLE_USER_HOME   = ${GRADLE_USER_HOME}"
 
 cd "${UPSTREAM}"
 
+python3 "${REPO_ROOT}/quest/native/check-android.py"
+
 # 6. First Quest3 test package: arm64-v8a only, minSdk 26, target 34.
 #    Debug build is signed with the AGP debug keystore so users can sideload.
 ./gradlew \

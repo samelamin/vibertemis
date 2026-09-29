@@ -3,7 +3,7 @@
 ## Automated tests (build host)
 
 `./gradlew testNonRootDebugUnitTest` runs the unit suite. The build
-host runs 99 tests, 0 failures. Tests cover prefs, routing, mic,
+host runs 115 tests, 0 failures. Tests cover prefs, routing, mic,
 capability gating, per-instance SettingsController wiring, top status
 preference observer refresh, hub launch / request / permission guards,
 PackageManager launcher-category resolution, the inflated
@@ -68,3 +68,31 @@ sleep / wake. Capture LAN quality metrics from the ALVR dashboard and,
 over VPN, record RTT, jitter, and loss for the Travel path. Do not
 record measured performance numbers from the build host — there is no
 real headset there.
+
+## Preview 3 acceptance cases
+
+- Upgrade preview 2 without uninstalling; confirm the signing identity and
+  Screen pairing/settings survive. Screen mode must not start SteamVR.
+- Import the Windows companion pairing file. Confirm an incorrect pin or
+  token fails closed; Forget removes pairing and returns to manual setup.
+- From Quest, explicitly connect and approve restart. SteamVR should start
+  once. Cancel, phone launch, opening settings and stale background dialogs
+  must not start it. After two minutes, a required restart needs fresh consent.
+- Verify both controllers, buttons, poses, haptics and recenter in a VR game.
+- Compare Standard AV1, HEVC and Home PyroWave using the actual decoded-codec
+  label after returning to settings. Never infer success from the toggle.
+- Test unavailable PyroWave capability and encoder/decoder initialization
+  failure: fallback should negotiate Standard, with no false PyroWave label.
+- Switch Travel on, connect through VPN, and confirm Standard plus its own
+  bitrate ceiling. Switch Home back on; prior PyroWave selection is retained.
+- Record resolution, refresh, actual bitrate, encode/decode times, network
+  latency, frame drops and visual artefacts at 30/100/200 Mbps as applicable.
+  Compare like-for-like settings. Do not assume 200 Mbps is always better.
+- Exercise sleep/wake, network loss, host exit, repeated codec switches and
+  rapid disconnect/reconnect. Check for stuck resources or duplicate launch.
+
+Pure Rust tests cover native codec-selection/fallback and decoder config
+bounds. Go tests cover authenticated startup, replay/transaction ownership,
+read-only custom-host configuration and protected pairing export. Windows
+runtime CI is required in addition to Linux race tests. Device testing remains
+outstanding until the owner supplies results.

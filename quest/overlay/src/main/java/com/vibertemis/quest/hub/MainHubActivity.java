@@ -83,6 +83,7 @@ public class MainHubActivity extends Activity {
 
     private boolean requestPending;
     private boolean connectPending;
+    private long restartConsentUntil;
     private boolean resumed;
     private int connectGeneration;
     private HostClient hostClient;
@@ -419,7 +420,32 @@ public class MainHubActivity extends Activity {
     protected HostPairing loadHostPairing() throws Exception { return new PairingStore(getApplicationContext()).load(); }
     protected HostClient createHostClient() { return new HostClient(); }
 
+    protected boolean usesNativeRuntime() { return PcvrOptions.PYROWAVE_BUILD; }
+
     private void launchSteamVr() {
+        if (launchPending || connectPending || !VrCapabilities.isHeadset(this) || !hasMicPermission()) return;
+        if (!usesNativeRuntime()) { startPcvrConnection(); return; }
+        confirmPcvrRestart(this::startPcvrConnection);
+    }
+
+    private void confirmPcvrRestart(Runnable connect) {
+        connectPending = true;
+        final int generation = ++connectGeneration;
+        connectDialog = new android.app.AlertDialog.Builder(this)
+            .setTitle("Connect to PCVR?")
+            .setMessage("SteamVR may restart to apply your headset and codec settings. Save any VR game in progress on the PC first.")
+            .setNegativeButton("Cancel", (d, w) -> cancelHostConnection())
+            .setOnCancelListener(d -> cancelHostConnection())
+            .setPositiveButton("Connect", (d, w) -> {
+                if (generation != connectGeneration || !connectPending) return;
+                finishHostConnection();
+                if (!resumed || isFinishing() || isDestroyed() || !VrCapabilities.isHeadset(this) || !hasMicPermission()) return;
+                restartConsentUntil = android.os.SystemClock.elapsedRealtime() + 120000;
+                connect.run();
+            }).show();
+    }
+
+    private void startPcvrConnection() {
         if (launchPending || connectPending || !VrCapabilities.isHeadset(this) || !hasMicPermission()) return;
         if (!hasPairedHost()) { dispatchSteamVr(); return; }
         connectPending = true;
@@ -460,7 +486,10 @@ public class MainHubActivity extends Activity {
         new android.app.AlertDialog.Builder(this).setTitle("PCVR connection options")
             .setItems(new String[]{"Pair or change PC", "Open PCVR manually"}, (d,which) -> {
                 if (which == 0) startActivity(new Intent(this, PcvrSettingsActivity.class));
-                else if (resumed && hasMicPermission() && VrCapabilities.isHeadset(this)) dispatchSteamVr();
+                else if (resumed && hasMicPermission() && VrCapabilities.isHeadset(this)) {
+                    if (usesNativeRuntime()) confirmPcvrRestart(this::dispatchSteamVr);
+                    else dispatchSteamVr();
+                }
             }).setNegativeButton("Cancel", null).show();
     }
 
@@ -502,6 +531,9 @@ public class MainHubActivity extends Activity {
             i.putExtra("vq_pcvr_codec", options.requestedCodec());
             i.putExtra("vq_pcvr_fallback", options.standardCodec());
             i.putExtra("vq_pcvr_travel", options.travel());
+            i.putExtra("vq_pcvr_bitrate_mbps", options.bitrateMbps());
+            i.putExtra("vq_pcvr_allow_restart", usesNativeRuntime() && android.os.SystemClock.elapsedRealtime() < restartConsentUntil);
+            i.putExtra("vq_pcvr_restart_until_ms", restartConsentUntil);
             launchPending = true;
             startActivity(i);
         } catch (ActivityNotFoundException e) {

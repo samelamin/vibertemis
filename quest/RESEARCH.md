@@ -1,55 +1,47 @@
-# Research notes
-
-Items not integrated. The screen path is stock Moonlight XR and PCVR
-is stock ALVR v20.14.1.
+# Research and implementation notes
 
 ## PyroWave
 
-<https://github.com/Themaister/pyrowave> — MIT, Vulkan-based,
-intra-only GPU encoder designed for very high bandwidth (~200+ Mbps).
-Stock Moonlight and stock ALVR do not negotiate it, and no Quest
-decoder is shipped. Integration requires paired host and client
-codec support, a Quest decoder, and matched quality and latency
-benchmarks. This preview does not ship a PyroWave toggle.
+[Upstream PyroWave](https://github.com/Themaister/pyrowave) is an MIT-licensed
+Vulkan intra-frame GPU codec aimed at high-bandwidth streaming. Its bandwidth
+and performance claims are upstream results, not measurements of this build.
+Preview 3 selectively integrates its host encoder and Android decoder into
+ALVR 20.14.1. The custom protocol is `20.14.1-vibertemis-pyro.1`.
+Exact sources are recorded in `native/sources.json`.
 
-## GalaxyXR PyroWave fork
+The [Galaxy XR research fork](https://github.com/Terminal-ennui/galaxy-xr-alvr-pyrowave-444)
+provided MIT-licensed reference interop code. Its ALVR 20.13 assumptions,
+Galaxy presets, experimental wavelets and eye-tracking settings were not
+imported. This port uses upstream CDF 9/7 with FP32 math. Reference hardware
+results do not establish Quest compatibility or performance.
 
-<https://github.com/Terminal-ennui/galaxy-xr-alvr-pyrowave-444> —
-ALVR 20.13 (not 20.14.1). Reports a streaming experiment at
-300–400 Mbps on non-Quest hardware. Not Quest-validated; not drop-in
-for this preview.
+## Foveated streaming
 
-## Eye-tracked foveation on Quest3
+[Valve's external-vendor integration notes](https://github.com/ValveSoftware/openvr/wiki/Steam-Link-Integration-for-External-Vendors)
+describe its Steam Link path. This build uses ALVR fixed-foveated encoding:
+peripheral detail is reduced before encoding. It does not implement Valve's
+gaze-driven transport. Quest 3 has no eye-tracking hardware.
 
-Quest 3 has no eye-tracking hardware at all. Valve Steam Frame
-(<https://store.steampowered.com/hardware/steamframe>) ships with
-gaze tracking; Quest 3 does not. ALVR's fixed-foveated encoding
-downscales the periphery of each frame before encoding — distinct
-from local-client foveated rendering.
+## Quality and transport
 
-## Apollo
+The custom handshake carries requested codec, standard fallback, a bitrate
+ceiling and expiring restart consent. Runtime capability checks own codec
+selection. Home permits 200 Mbps; Travel selects standard codecs and starts
+at 30 Mbps. Both use adaptive bitrate below their configured ceiling.
+ALVR retains its tracking, controller, audio and transport paths.
 
-<https://github.com/ClassicOldSong/Apollo> — an alternative Sunshine-
-based host. Not a legacy NVIDIA GameStream client.
+Screen streaming continues to use Sunshine or
+[Apollo](https://github.com/ClassicOldSong/Apollo). PyroWave applies only to
+PCVR in this build, not the Moonlight Screen protocol.
 
-## ALVR v20.14.1 verified defaults
+Remote PCVR requires working network reachability. See
+[ALVR separate-network setup](https://github.com/alvr-org/ALVR/wiki/Headset-and-ALVR-streamer-on-separate-networks).
+A 50 Mbps download measurement does not establish upload, jitter, packet loss
+or motion-to-photon latency. No seamless Internet broker is implemented.
 
-From `alvr/session/src/settings.rs`:
+## Validation boundary
 
-- Codec: H.264 (HEVC and AV1 available on the dashboard if the host
-  GPU supports them).
-- Refresh: 72 Hz.
-- Bitrate: 30 Mbps constant (adaptive bitrate is an opt-in toggle on
-  the dashboard; the v20.14.1 default is constant 30 Mbps).
-- Fixed-foveated encoding: enabled.
-- Microphone: off on Windows hosts by default. Voice chat is host-
-  controlled.
-
-The bundled ALVR runtime in this preview build is unmodified.
-Microphone permission is required by this preview's launcher. The
-bundled ALVR runtime is unmodified; its recording path can repeatedly
-retry when host microphone forwarding is enabled and recording is
-denied. The sample-rate query alone does not establish a
-recording-permission requirement. Voice forwarding is controlled by
-the ALVR dashboard (off by default on Windows, on by default on
-Linux).
+Source review, Android tests and native compilation cannot establish
+headset stability, latency, colour accuracy or controller behaviour. Record
+those on Quest 3 / Windows 11 / RTX 4090 using TESTING.md. Microphone access
+is required by the launcher; forwarding remains dashboard-controlled.

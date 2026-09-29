@@ -23,8 +23,8 @@ The `quest/native-codec-ci` branch builds draft artifacts, never releases.
 
 Android: `build-android.sh` builds the pinned libraries; `install-android.py`
 installs their verified set after the base fetch/overlay. `check-android.py`
-detects stale or mixed libraries. Matching Windows validation remains in progress. Do not enable the app toggle
-or publish this draft until Codex and Agy finish review and both builds pass.
+detects stale or mixed libraries. Matching Windows validation remains in progress. The integrated local APK enables the toggle only with the verified custom
+libraries. Do not publish until Codex and Agy finish review and both builds pass.
 
 Buffer lifetime: latest pending frame, three explicitly leased output buffers;
 renderer owns its buffer until next dequeue. GPU waits are bounded to one
