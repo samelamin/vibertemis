@@ -1,0 +1,2 @@
+# Native payload identity is byte-based and must match on Windows and Linux.
+quest/native/** text eol=lf
