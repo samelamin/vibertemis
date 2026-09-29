@@ -4,7 +4,7 @@
 package pairing
 
 import (
-	"os"
+	"errors"
 	"path/filepath"
 	"testing"
 )
@@ -48,13 +48,12 @@ func TestPairingLoad_RefusesWorldReadable(t *testing.T) {
 	// Loosen the file to 0644 (group+other readable). Load
 	// must refuse.
 	path := filepath.Join(dir, "state.json")
-	if err := os.Chmod(path, 0644); err != nil {
-		t.Fatalf("chmod: %v", err)
-	}
+	expected := makeWorldReadable(t, path)
 	_, err = Load(dir)
-	if err != ErrStateBadPerm {
-		t.Fatalf("expected ErrStateBadPerm, got %v", err)
+	if !errors.Is(err, expected) {
+		t.Fatalf("expected %v, got %v", expected, err)
 	}
+
 }
 
 func TestPairingExportOmitsPrivateKey(t *testing.T) {

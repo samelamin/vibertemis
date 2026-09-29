@@ -190,3 +190,28 @@ func TestSetPrivateDACL_ProtectedBitIsSet(t *testing.T) {
 		t.Fatal("SE_DACL_PROTECTED bit must be set")
 	}
 }
+
+func makeWorldReadable(t *testing.T, path string) error {
+	t.Helper()
+	sddl, err := buildPrivateSDDL(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sd, err := windows.SecurityDescriptorFromString(sddl + "(A;;GR;;;WD)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dacl, _, err := sd.DACL()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := windows.SetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, nil, nil, dacl, nil); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := protectFile(path); err != nil {
+			t.Error(err)
+		}
+	})
+	return ErrStateBadDACL
+}
