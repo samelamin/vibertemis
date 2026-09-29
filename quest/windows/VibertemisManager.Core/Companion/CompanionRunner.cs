@@ -124,7 +124,7 @@ public sealed class CompanionRunner : ICompanionRunner
             var argv = new List<string> {
                 "-listen", $"{spec.ListenAddress}:{spec.listenPort}",
                 "-advertise", $"{spec.AdvertiseAddress}:{spec.AdvertisePort}",
-                "-alvr-session", spec.AlvrSessionPath, "-state-dir", spec.StateDir
+                "-alvr-session", spec.AlvrSessionPath, "-state-dir", spec.StateDir, "-mdns"
             };
             var owned = new Owned(_launcher.Launch(spec.CompanionExePath, argv));
             _owned = owned;

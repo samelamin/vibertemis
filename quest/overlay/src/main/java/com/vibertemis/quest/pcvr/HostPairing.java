@@ -52,6 +52,12 @@ public final class HostPairing {
     return new HostPairing(address, pin, token, pem);
   }
 
+  public HostPairing withAddress(String endpoint) throws Exception {
+    JSONObject copy = new JSONObject(serialize());
+    copy.put("host_address", endpoint);
+    return parse(copy.toString());
+  }
+
   public URL endpoint(String path) throws Exception {
     if (!path.equals("/status") && !path.equals("/capabilities") && !path.equals("/start_pcvr"))
       throw new IllegalArgumentException("Unknown host action.");

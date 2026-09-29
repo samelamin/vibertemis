@@ -1,7 +1,7 @@
 # Quest installer and updater implementation
 
-Status: work in progress, not released. Windows drafts are undergoing correction
-and real Windows CI. Automatic headset routing is committed at cbc00870.
+Status: release candidate, not yet released. Corrected Windows installer passed
+real Windows CI; final updater/discovery build is being validated. Automatic headset routing is committed at cbc00870.
 
 ## Agreed contract
 
@@ -55,3 +55,17 @@ added a local exited-process catch. Proposed asynchronous companion race does
 not apply: manager Stop waits for exact owned-process exit, and refuses Exit
 on denied/timeout. Full updater/install handoff still awaits implementation and
 review. No release sign-off granted by this checkpoint.
+
+Final implementation review: Agy explicitly approved the supplied installer,
+manager updater handoff, companion ownership, paired TLS/discovery and Android
+update boundaries with no P0/P1 findings. Android panel resize handling, queued
+DNS-SD resolution, and rate-limit messages were corrected after its first
+review. Code review does not prove hardware streaming or eliminate OS-level
+file replacement races. Codex independently checked all reviewed boundaries.
+
+The APK update handoff uses a nonexported narrow FileProvider and the Android
+user-confirmed installer, an allowed simpler option from the original plan.
+Completed downloads are revalidated after activity recreation. Downloads
+interrupted by process death require a retry. Existing ZIP native settings can
+be copied through Explorer; pairing in the profile is retained automatically.
+Go toolchain updated to 1.26.8; govulncheck reports no vulnerabilities.

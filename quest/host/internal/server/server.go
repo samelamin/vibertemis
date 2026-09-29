@@ -116,6 +116,9 @@ type StartPcvrRequest struct {
 
 // CapabilitiesResponse is the /capabilities payload.
 type CapabilitiesResponse struct {
+	Version         string   `json:"version"`
+	Sequence        int      `json:"sequence"`
+	NativeProtocol  string   `json:"native_protocol"`
 	Codecs          []string `json:"codecs"`
 	PyroWave        bool     `json:"pyrowave"`
 	PyroWaveReason  string   `json:"pyrowave_reason"`
@@ -383,6 +386,7 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(CapabilitiesResponse{
+		Version: "0.1.0.4", Sequence: 4, NativeProtocol: alvr.NativeVersion,
 		Codecs:          res.Codecs,
 		PyroWave:        res.PyroWave,
 		PyroWaveReason:  res.PyroWaveReason,

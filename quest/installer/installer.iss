@@ -54,6 +54,12 @@ Name: "{group}\VibertemisVR Host Manager"; Filename: "{app}\manager\VibertemisMa
 [Tasks]
 Name: "startmenu"; Description: "Create a Start menu shortcut"; GroupDescription: "Additional icons"; Flags: checkedonce
 
+[Registry]
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: none; ValueName: "VibertemisVRHostManager"; Flags: uninsdeletevalue
+
+[Run]
+Filename: "{app}\manager\VibertemisManager.App.exe"; Description: "Open VibertemisVR Host Manager"; Flags: nowait postinstall skipifsilent
+
 [Code]
 var
   WmiServices: Variant;
@@ -83,7 +89,7 @@ function BusyReason(): String;
 begin
   Result := '';
   try
-    if ProcessExists('Name = ''vrserver.exe'' OR Name = ''vrcompositor.exe''') then
+    if ProcessExists('Name = ''vrserver.exe'' OR Name = ''vrcompositor.exe'' OR Name = ''vrmonitor.exe''') then
       Result := 'Close SteamVR before continuing. Your VR session will not be stopped automatically.'
     else if ProcessExists('Name = ''ALVR Dashboard.exe''') then
       Result := 'Close ALVR Dashboard before continuing.'

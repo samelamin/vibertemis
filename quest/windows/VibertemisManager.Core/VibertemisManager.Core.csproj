@@ -17,4 +17,7 @@
   <ItemGroup>
     <EmbeddedResource Include="Resources/Integrity/*.bin" Condition="Exists('Resources/Integrity')" />
   </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="../../update/public-key.pem" LogicalName="Vibertemis.Update.PublicKey" />
+  </ItemGroup>
 </Project>

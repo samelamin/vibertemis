@@ -9,8 +9,8 @@ A single arm64 APK shipping two streaming modes from one launcher.
   tracking on Quest3. The PC host runs the ALVR streamer; this APK is
   the headset client. Hardware behavior on Quest3 is UNTESTED.
 
-APK `vibertemis-quest-preview-0.1.0.3.apk`, package
-`com.vibertemis.quest.preview.debug`, version `0.1.0-quest-preview.3`,
+APK `vibertemis-quest-preview-0.1.0.4.apk`, package
+`com.vibertemis.quest.preview.debug`, version `0.1.0-quest-preview.4`,
 `arm64-v8a` only, `minSdk=26`, `targetSdk=34`. No second ALVR headset
 app — the runtime is bundled inside this APK.
 
@@ -20,7 +20,7 @@ app — the runtime is bundled inside this APK.
    <https://developers.meta.com/horizon/documentation/native/android/mobile-device-setup/>.
 2. Connect over USB and accept the "Allow USB debugging?" prompt on
    the headset.
-3. `adb install -r vibertemis-quest-preview-0.1.0.3.apk`.
+3. `adb install -r vibertemis-quest-preview-0.1.0.4.apk`.
 4. Launch under **Unknown Sources**.
 
 ## Screen mode
@@ -73,47 +73,53 @@ is still required; this is an experimental test build.
 
 ### Windows host setup
 
-1. Install Steam, SteamVR and the [Microsoft Visual C++ x64 runtime](https://aka.ms/vc14/vc_redist.x64.exe).
-   Extract this release's Windows host ZIP to a
-   permanent folder, for example `C:\VibertemisVR`. Keep its DLLs together.
-2. Run `ALVR Dashboard.exe`, finish the setup wizard and register the driver.
-   Allow ALVR through Windows Firewall on your trusted network. Keep the
-   dashboard available for trusting the headset and changing display settings.
-3. The ZIP includes `vibertemis-host-companion.exe`. Use the actual absolute
-   path to the dashboard's `session.json` below.
-4. In PowerShell, replace the example IP with your PC's reachable LAN IP:
+1. Run `VibertemisVR-HostManager-Setup-0.1.0.4.exe` in your normal Windows
+   account. The per-user wizard installs the manager and matching VR runtime.
+   Keep Vibeshine installed for flat streaming. No PowerShell is needed.
+2. Open **VibertemisVR Host Manager**. Use its prerequisite buttons if Steam,
+   SteamVR or the Microsoft Visual C++ x64 runtime is missing.
+3. Choose your PC's reachable network address. Click **Setup Network Access**
+   and approve the Windows prompt. This allows the companion and LAN discovery
+   on Private/Domain networks. Open **ALVR Dashboard**, complete its first-run
+   wizard and register the matching VR driver; its wizard handles streaming
+   firewall rules. Do this once before connecting.
+4. Click **Start companion**, then **Export pairing file**. Copy the revealed
+   `pairing-export.json` to Quest Downloads over USB, open **PCVR settings**,
+   and import it. Keep this credential private; remove the transferred copy
+   after import. Trust the headset in ALVR Dashboard on first connection.
+5. On Quest, tap **Connect**, grant microphone permission, and confirm the
+   possible SteamVR restart. A detected VR headset takes the tracked PCVR
+   path automatically. **Flat screen** remains an explicit override. Phones
+   take the flat path and do not ask the host to start SteamVR.
 
-```powershell
-cd C:\VibertemisVR
-.\vibertemis-host-companion.exe -alvr-session "C:\VibertemisVR\session.json" -advertise "192.168.1.10:28540" -export-pairing
-```
+The host companion remembers a successful start. Closing the manager window
+keeps it in the tray; **Exit** stops its companion, leaving SteamVR running.
+**Start with Windows** is opt-in. After pairing, LAN discovery can recover a
+changed PC address, but still verifies the saved PC identity before connecting.
+Discovery, settings and opening the app never start SteamVR.
 
-The command prints the path to a private UTF-8 `pairing-export.json` file.
-Copy it to the headset's Downloads folder over USB, then open **PCVR settings**
-and import it. The file contains a pairing token; keep it private and remove
-the transferred copy after import. Do not redirect `-show-export` from older
-PowerShell: its UTF-16 output will not import.
+For an existing ZIP setup, pairing in the user profile is reused. Its ALVR
+session stays in the old ZIP folder; close VR and use Explorer to copy that
+`session.json` into the new installation's `runtime` folder if you want to
+keep those native settings. Register the new runtime through its Dashboard.
+Do not run the old standalone companion alongside the manager.
 
-5. Start the companion in your normal signed-in Windows session:
+Codec/display changes can require a SteamVR restart; save your game before
+confirming Connect. Without companion pairing, the manual route requires
+starting SteamVR on the PC yourself.
 
-```powershell
-.\vibertemis-host-companion.exe -alvr-session "C:\VibertemisVR\session.json" -listen "192.168.1.10:28540" -advertise "192.168.1.10:28540"
-```
+### In-app updates
 
-Keep this window open. Allow this executable through the firewall on the
-trusted network if prompted. The companion uses TCP 28540; ALVR's wizard
-manages streaming rules. It must run as your interactive user, not a service.
-
-6. On Quest, choose **SteamVR**, grant microphone permission, then confirm
-   **Connect**. This explicitly permits a SteamVR restart if the selected
-   codec/display configuration requires it. Trust the discovered headset in
-   the ALVR dashboard on first connection. Launch a VR game from SteamVR.
-
-Only an explicit headset PCVR connection asks the companion to start SteamVR.
-Screen gaming, phones, settings and status checks do not start it. Without
-pairing, the manual route requires starting SteamVR on the PC yourself.
-Codec/display changes can require a restart; save your current game first.
-The restart permission expires after two minutes, including connection setup.
+- Windows: **Check for updates** in the host manager. Confirm download, close
+  SteamVR/ALVR Dashboard, then confirm installation. The setup wizard preserves
+  pairing and settings. Active VR sessions block updates and uninstall.
+- Quest: **App updates** in the idle hub. Download, then **Install update**.
+  Allow installs from Vibertemis if Android asks, and confirm the Android
+  installer. The first preview4 APK still needs sideloading; preview3 has no
+  in-app updater. Later signed previews can update through this screen.
+- Both clients verify signed release metadata and downloaded bytes. Quest
+  additionally requires the existing app signer and a newer package version.
+  Checks target Quest previews, independently of desktop releases.
 
 ### Codec and quality controls
 
@@ -170,7 +176,7 @@ The native scripts fetch exact ALVR, PyroWave and Granite commits from
 `native/sources.json`. Source fingerprints and library hashes reject stale
 or mixed binaries. Windows host build: `quest/native/build-windows.ps1`
 with MSVC and the Windows SDK. Build the companion from `quest/host` using
-Go 1.26: `go build ./cmd/vibertemis-host-companion`.
+Go 1.26.8: `go build ./cmd/vibertemis-host-companion`.
 
 APK output:
 `build/quest/upstream/app/build/outputs/apk/nonRoot/debug/app-nonRoot-debug.apk`.
@@ -178,3 +184,13 @@ The corresponding-source archive includes patched Android/ALVR trees,
 PyroWave, Granite with submodules, recipes and original licenses.
 See `TESTING.md` for the real-device acceptance checklist. Automated tests
 and successful compilation do not establish streaming quality or latency.
+
+For the Windows installer, use Windows with .NET 8, Go 1.26.8 and Inno Setup 6:
+
+```powershell
+./quest/installer/build-installer.ps1
+```
+
+The script verifies the immutable native payload, embeds its hashes and builds
+the manager/helper/installer. See `quest/update/README.md` for the signed update
+metadata contract. Release signing private keys are not included in source.

@@ -37,6 +37,11 @@ public class PairedHubTest {
     protected HostClient createHostClient() {
       return new HostClient() {
         @Override
+        public org.json.JSONObject request(HostPairing pairing, String method, String path, byte[] body) throws Exception {
+          if (!"GET".equals(method) || !"/status".equals(path)) throw new AssertionError("Only a read-only preflight is allowed");
+          return new org.json.JSONObject();
+        }
+        @Override
         public void start(HostPairing pairing, String codec) throws Exception {
           calls.incrementAndGet();
           entered.countDown();

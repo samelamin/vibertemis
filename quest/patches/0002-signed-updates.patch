@@ -1,0 +1,33 @@
+--- a/app/src/main/AndroidManifest.xml
++++ b/app/src/main/AndroidManifest.xml
+@@ -20,6 +20,7 @@
+     <uses-permission android:name="android.permission.WAKE_LOCK" />
+     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+     <uses-permission android:name="android.permission.RECORD_AUDIO"/>
++    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
+     <uses-permission android:name="com.android.providers.tv.permission.READ_EPG_DATA"/>
+     <uses-permission android:name="com.android.providers.tv.permission.WRITE_EPG_DATA"/>
+ 
+@@ -332,6 +333,11 @@
+             <meta-data android:name="WindowManagerPreference:FreeformWindowOrientation" android:value="landscape" />
+             <meta-data android:name="pvr.app.type" android:value="2d" />
+         </activity>
++        <activity android:name="com.vibertemis.quest.update.UpdatesActivity" android:configChanges="orientation|screenSize|screenLayout|keyboardHidden" android:exported="false" android:theme="@android:style/Theme.Material.NoActionBar" />
++        <provider android:name="com.vibertemis.quest.update.UpdateFileProvider"
++            android:authorities="${applicationId}.updates" android:exported="false" android:grantUriPermissions="true">
++            <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/quest_update_paths" />
++        </provider>
+     </application>
+ 
+ </manifest>
+\ No newline at end of file
+--- a/app/build.gradle
++++ b/app/build.gradle
+@@ -168,6 +168,7 @@
+ }
+ 
+ dependencies {
++    implementation "androidx.core:core:1.13.1"
+     // Khronos OpenXR loader, Apache 2.0
+     implementation 'org.khronos.openxr:openxr_loader_for_android:1.1.49'
+     // LiteRT runtime and GPU delegate, Apache 2.0

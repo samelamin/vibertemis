@@ -180,6 +180,16 @@ public class MainHubActivity extends Activity {
                 launchStreamingSettings();
             }
         });
+        findViewById(R.id.hub_btn_updates).setOnClickListener(v -> {
+            if (launchPending || requestPending || connectPending) return;
+            try {
+                launchPending = true;
+                startActivity(new Intent(this, com.vibertemis.quest.update.UpdatesActivity.class));
+            } catch (ActivityNotFoundException | SecurityException e) {
+                launchPending = false;
+                Toast.makeText(this, "Updates screen unavailable", Toast.LENGTH_LONG).show();
+            }
+        });
         setupBtn.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
@@ -492,6 +502,19 @@ public class MainHubActivity extends Activity {
             try {
                 HostPairing pairing = loadHostPairing();
                 if (pairing == null) throw new HostClient.Failure("PAIRING", "Pair your PC again.");
+                // First try the remembered endpoint without launching VR. Only
+                // transport failures trigger a bounded LAN hint lookup.
+                try { client.request(pairing, "GET", "/status", new byte[0]); }
+                catch (java.io.IOException unreachable) {
+                    if (client.isCancelled()) throw unreachable;
+                    HostPairing candidate = com.vibertemis.quest.pcvr.PairedDiscovery.find(getApplicationContext(), pairing, client);
+                    // Matching TXT is not proof: require the paired TLS pin and
+                    // authenticated status before saving or starting anything.
+                    client.request(candidate, "GET", "/status", new byte[0]);
+                    if (client.isCancelled()) throw new java.io.IOException("Cancelled");
+                    new PairingStore(getApplicationContext()).updateAddress(pairing, candidate);
+                    pairing = candidate;
+                }
                 client.start(pairing, new PcvrOptions(getApplicationContext()).requestedCodec());
                 runOnUiThread(() -> {
                     if (generation != connectGeneration || !connectPending) return;

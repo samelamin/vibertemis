@@ -41,6 +41,7 @@ using VibertemisManager.Core.Firewall;
 using VibertemisManager.Core.Network;
 using VibertemisManager.Core.Settings;
 using VibertemisManager.Core.Steam;
+using VibertemisManager.Core.Update;
 
 namespace VibertemisManager.App;
 
@@ -49,6 +50,11 @@ public sealed class MainForm : Form
     private readonly AppServices _svc;
     private readonly CliArgs _args;
     private NotifyIcon? _tray;
+    private readonly Button _btnUpdate = new() { Text = "Check for updates", AutoSize = true };
+    private readonly Button _btnCancelUpdate = new() { Text = "Cancel download", AutoSize = true, Visible = false };
+    private readonly ReleaseClient _updates = new();
+    private CancellationTokenSource? _updateCancellation;
+    private bool _updateBusy;
     private readonly EventWaitHandle _wake = new(false, EventResetMode.AutoReset, Program.MutexName + "-Wake");
     private readonly System.Windows.Forms.Timer _statusTimer = new() { Interval = 1000 };
     private CompanionLaunchSpec? _runningSpec;
@@ -197,7 +203,12 @@ public sealed class MainForm : Form
         footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         _lblVersion.Text = "0.1.0.4-quest-preview";
         _lblVersion.AutoSize = true;
-        footer.Controls.Add(new Label(), 0, 0);
+        var updateActions = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill };
+        updateActions.Controls.Add(_btnUpdate);
+        updateActions.Controls.Add(_btnCancelUpdate);
+        footer.Controls.Add(updateActions, 0, 0);
+        _btnUpdate.Click += async (_, _) => await CheckForUpdates();
+        _btnCancelUpdate.Click += (_, _) => _updateCancellation?.Cancel();
         footer.Controls.Add(_lblVersion, 1, 0);
 
         Controls.Add(root);
@@ -286,6 +297,7 @@ public sealed class MainForm : Form
             _exitRequested = false;
             return;
         }
+        _updateCancellation?.Cancel();
         _tray?.Dispose();
     }
 
@@ -646,6 +658,61 @@ public sealed class MainForm : Form
         LogStatus("Restore companion on startup: " + (_settings.RestoreCompanionOnStartup ? "enabled" : "disabled"));
     }
 
+    private async Task CheckForUpdates()
+    {
+        if (_updateBusy) return;
+        _updateBusy = true;
+        _btnUpdate.Enabled = false;
+        _btnCancelUpdate.Visible = true;
+        using var cancellation = new CancellationTokenSource();
+        _updateCancellation = cancellation;
+        try
+        {
+            LogStatus("Checking signed Quest preview releases...");
+            var release = await _updates.CheckAsync(cancellation.Token);
+            if (IsDisposed || Disposing) return;
+            if (release is null) { LogStatus("No newer compatible signed Quest preview is available."); return; }
+            if (MessageBox.Show(this, $"Download host update {release.Version}? Your settings and pairing will be kept.",
+                "Host update", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+            LogStatus($"Downloading {release.Version} ({release.Windows.Bytes / 1048576} MB)...");
+            var file = await _updates.DownloadAsync(release, _svc.Paths.UpdateCacheDir, cancellation.Token);
+            if (IsDisposed || Disposing) return;
+            if (_svc.BusyChecker.Check().IsBusy)
+            {
+                LogStatus("Update downloaded. Close SteamVR and ALVR Dashboard, then check for updates again to install.");
+                return;
+            }
+            if (MessageBox.Show(this, "Install the verified update now? The host manager will close and the setup wizard will open.",
+                "Install update", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+            if (_svc.BusyChecker.Check().IsBusy) { LogStatus("Close SteamVR and ALVR Dashboard before updating."); return; }
+            // Recheck cached bytes at the execution boundary, then stop only our
+            // own companion. Failure keeps this manager open and usable.
+            ReleaseClient.VerifyFile(file, release.Windows);
+            var wasRunning = _svc.Companion.IsRunning;
+            var stopped = _svc.Companion.Stop(CompanionStopReason.ManagerExit, TimeSpan.FromSeconds(5));
+            if (stopped.Outcome is CompanionStopOutcome.Denied or CompanionStopOutcome.Timeout)
+                throw new InvalidOperationException("Could not stop the host companion. " + stopped.Error);
+            try
+            {
+                var start = new ProcessStartInfo(file) { UseShellExecute = true };
+                start.ArgumentList.Add("/UPDATEPID=" + Environment.ProcessId);
+                start.ArgumentList.Add("/DIR=" + _svc.Paths.ProgramsRoot);
+                using var installer = Process.Start(start) ?? throw new IOException("Setup did not start");
+                _exitRequested = true;
+                Close();
+            }
+            catch { if (wasRunning) TryStartCompanion(silentIfFails: false); throw; }
+        }
+        catch (OperationCanceledException) { if (!IsDisposed) LogStatus("Update cancelled or timed out. Your current installation is unchanged."); }
+        catch (Exception ex) { if (!IsDisposed) LogStatus("Update unavailable: " + ex.Message); }
+        finally
+        {
+            _updateCancellation = null;
+            _updateBusy = false;
+            if (!IsDisposed) { _btnUpdate.Enabled = true; _btnCancelUpdate.Visible = false; }
+        }
+    }
+
     private void OpenUrl(string url)
     {
         try
@@ -679,6 +746,8 @@ public sealed class MainForm : Form
     {
         if (disposing)
         {
+            _updateCancellation?.Cancel();
+            _updates.Dispose();
             _statusTimer.Dispose();
             _wake.Dispose();
             _tray?.Dispose();

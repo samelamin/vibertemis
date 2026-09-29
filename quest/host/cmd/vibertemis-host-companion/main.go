@@ -6,8 +6,8 @@
 // a paired authenticated /start_pcvr, no ALVR Dashboard
 // detection that fails open. The companion serves:
 //
-//	GET  /capabilities   - public, codec enum + pyrowave=false
-//	GET  /status         - public, live SteamVR/Dashboard state
+//	GET  /capabilities   - authenticated codec and release capabilities
+//	GET  /status         - authenticated live SteamVR/Dashboard state
 //	POST /start_pcvr     - HMAC-authenticated, narrow contract
 //
 // The state directory, ALVR session path, and Steam exe path
@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/vibertemis/quest-codec-control/host/internal/alvr"
+	"github.com/vibertemis/quest-codec-control/host/internal/discovery"
 	"github.com/vibertemis/quest-codec-control/host/internal/pairing"
 	"github.com/vibertemis/quest-codec-control/host/internal/server"
 	"github.com/vibertemis/quest-codec-control/host/internal/state"
@@ -38,6 +39,7 @@ import (
 
 func main() {
 	var (
+		mdns          = flag.Bool("mdns", false, "advertise this paired host on the selected LAN adapter")
 		listenAddr    = flag.String("listen", "127.0.0.1:28540", "listen address")
 		advertiseAddr = flag.String("advertise", "", "advertised HTTPS endpoint host:port for the pairing export (default: derived from -listen)")
 		stateDir      = flag.String("state-dir", "", "companion state directory (default: per-user)")
@@ -146,6 +148,14 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
+	if *mdns {
+		advertiser, err := discovery.Start(*advertiseAddr, st.CertPin, alvr.NativeVersion)
+		if err != nil {
+			log.Printf("LAN discovery unavailable; direct address still works: %v", err)
+		} else {
+			defer advertiser.Shutdown()
+		}
+	}
 	log.Printf("vibertemis-host-companion listening on https://%s", *listenAddr)
 	log.Printf("  alvr session: %s", *alvrSession)
 	log.Printf("  state dir   : %s", *stateDir)

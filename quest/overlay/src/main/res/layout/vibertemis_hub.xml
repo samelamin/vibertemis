@@ -129,5 +129,13 @@
             android:text="@string/hub_btn_setup"
             android:contentDescription="@string/hub_btn_setup" />
 
+        <Button
+            android:id="@+id/hub_btn_updates"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:minHeight="56dp"
+            android:textSize="18sp"
+            android:text="App updates" />
     </LinearLayout>
 </ScrollView>

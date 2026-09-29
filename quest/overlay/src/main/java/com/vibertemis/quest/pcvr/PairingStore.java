@@ -99,6 +99,17 @@ public final class PairingStore {
     }
   }
 
+  public void updateAddress(HostPairing previous, HostPairing verified) throws Exception {
+    synchronized (LOCK) {
+      HostPairing current = load();
+      if (current == null || !current.pin.equals(previous.pin) || !current.token.equals(previous.token))
+        throw new IllegalStateException("Pairing changed during discovery. Retry.");
+      if (!verified.pin.equals(previous.pin) || !verified.token.equals(previous.token))
+        throw new IllegalArgumentException("Discovery cannot change paired identity");
+      save(verified);
+    }
+  }
+
   public void forget() throws Exception {
     synchronized (LOCK) {
       file.delete();

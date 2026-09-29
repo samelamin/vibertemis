@@ -69,7 +69,7 @@ public class CompanionRunnerTests : IDisposable
             "-listen", "192.168.1.42:28540",
             "-advertise", "192.168.1.42:28540",
             "-alvr-session", spec.AlvrSessionPath,
-            "-state-dir", spec.StateDir,
+            "-state-dir", spec.StateDir, "-mdns",
         }, started.Argv);
     }
 

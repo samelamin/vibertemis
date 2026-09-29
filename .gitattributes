@@ -1,2 +1,4 @@
 # Native payload identity is byte-based and must match on Windows and Linux.
 quest/native/** text eol=lf
+# Unified patches require a context-prefix space on blank lines.
+quest/patches/*.patch whitespace=-blank-at-eol
