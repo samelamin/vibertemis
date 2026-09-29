@@ -39,22 +39,22 @@
     <string name="setup_screen_mode_headset_step3">The headset shows a PIN. Open the Sunshine (or Apollo) web UI on the PC and enter that PIN to pair.</string>
     <string name="setup_screen_mode_headset_step4">Pick the game or Desktop entry in the app list to start streaming.</string>
 
-    <string name="setup_pcvr_mode_title">PCVR (ALVR v20.14.1)</string>
-    <string name="setup_pcvr_mode_body">PCVR streams SteamVR to the headset with full head and controller tracking. The PC host runs ALVR v20.14.1; the headset client is this app.</string>
+    <string name="setup_pcvr_mode_title">PCVR (Quest 3)</string>
+    <string name="setup_pcvr_mode_body">Stream SteamVR with head and Touch controller tracking. Install the matching custom Windows host from this app release. Stock ALVR builds cannot connect to this preview.</string>
     <string name="setup_pcvr_steps_pc">Steps on the PC:</string>
     <string name="setup_pcvr_step1">Install Steam and SteamVR.</string>
-    <string name="setup_pcvr_step2">Download ALVR v20.14.1 streamer (Windows or Linux) and launch the ALVR Dashboard.</string>
-    <string name="setup_pcvr_step3">Let the ALVR wizard register its SteamVR driver.</string>
-    <string name="setup_pcvr_step4">Run SteamVR on the PC.</string>
+    <string name="setup_pcvr_step2">Download the Windows host and companion from this release. Extract them together, then launch ALVR Dashboard.</string>
+    <string name="setup_pcvr_step3">Finish the ALVR wizard and register its SteamVR driver. Follow the Windows setup guide below to run the companion and export pairing.</string>
+    <string name="setup_pcvr_step4">Import the pairing file in PCVR settings on the headset. Keep the companion running on the PC for automatic SteamVR startup.</string>
     <string name="setup_pcvr_steps_headset">Steps on the headset:</string>
-    <string name="setup_pcvr_headset_step1">Run SteamVR (PCVR) on the headset. Grant microphone permission when prompted.</string>
+    <string name="setup_pcvr_headset_step1">Choose SteamVR on the headset, grant microphone access, then confirm Connect. SteamVR may restart to apply settings; save any running VR game first.</string>
     <string name="setup_pcvr_headset_step2">In the ALVR dashboard on your PC, trust the discovered headset.</string>
     <string name="setup_pcvr_headset_step3">Launch a VR game from SteamVR on your PC or from the SteamVR library in the headset.</string>
 
     <string name="setup_pcvr_mic_note">This preview build requires microphone permission to start SteamVR. You can control voice chat in the ALVR dashboard.</string>
     <string name="setup_pcvr_wan_note">PCVR over the public Internet requires a VPN that passes UDP. The headset has no built-in port-forwarding or relay; enter the peer\'s VPN-side IP in the ALVR dashboard.</string>
-    <string name="setup_pcvr_tuning_note">For best results over LAN: 5 GHz Wi-Fi or wired, a 90–120 Hz headset refresh rate, and disable other high-bandwidth traffic during a session. WAN: expect higher latency and jitter — session quality is dominated by RTT and loss, not raw bandwidth.</string>
-    <string name="setup_pcvr_troubleshoot_note">If PCVR will not connect: confirm the ALVR dashboard is running on the PC, that the headset and PC are on the same network, that SteamVR is running, and that no firewall is blocking UDP between them. The dashboard log shows the negotiated headset client.</string>
+    <string name="setup_pcvr_tuning_note">PCVR settings offers PyroWave for Home, Standard AV1/HEVC, Travel mode and bitrate limits. Home allows up to 200 Mbps; Travel starts at 30 Mbps. Use ALVR Dashboard for resolution, refresh and fixed foveation. Start at 72 Hz and test your network.</string>
+    <string name="setup_pcvr_troubleshoot_note">If connection fails, check that the PC runs the matching host from this release, the companion is running, pairing uses a reachable PC address, and the firewall allows traffic. Without companion pairing, start SteamVR manually. Check the ALVR dashboard log for streaming errors.</string>
 
     <string name="setup_open_link">Open</string>
     <string name="setup_copy_link">Copy link</string>
@@ -62,8 +62,8 @@
     <string name="setup_link_no_browser">No browser available. Link copied.</string>
     <string name="setup_link_copy_failed">Copy failed: no clipboard service available.</string>
     <string name="setup_downloads_title">Downloads</string>
-    <string name="setup_url_alvr_windows">ALVR streamer (Windows)</string>
-    <string name="setup_url_alvr_linux">ALVR streamer (Linux)</string>
+    <string name="setup_url_alvr_windows">Windows host and companion</string>
+    <string name="setup_url_pcvr_guide">Windows setup guide</string>
     <string name="setup_url_sunshine">Sunshine</string>
     <string name="setup_url_apollo">Apollo</string>
     <string name="setup_url_requirements">ALVR PC requirements (CPU, GPU, network)</string>

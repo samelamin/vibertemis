@@ -40,9 +40,9 @@ public class SetupActivity extends Activity {
 
     private static final Link[] LINKS = new Link[] {
             new Link(R.string.setup_url_alvr_windows,
-                    "https://github.com/alvr-org/ALVR/releases/download/v20.14.1/alvr_streamer_windows.zip"),
-            new Link(R.string.setup_url_alvr_linux,
-                    "https://github.com/alvr-org/ALVR/releases/download/v20.14.1/alvr_streamer_linux.tar.gz"),
+                    "https://github.com/samelamin/vibertemis/releases/tag/quest-preview-v0.1.0.3"),
+            new Link(R.string.setup_url_pcvr_guide,
+                    "https://github.com/samelamin/vibertemis/blob/quest-preview-v0.1.0.3/quest/README.md"),
             new Link(R.string.setup_url_sunshine,
                     "https://github.com/LizardByte/Sunshine"),
             new Link(R.string.setup_url_apollo,

@@ -50,8 +50,9 @@ Files: quest/overlay, consolidated eight-file upstream patch.
 - Async explicit PCVR connection; fresh nonces and stable retry request ID;
   lifecycle/permission checks, cancellation, actionable errors, manual route.
 - Separate PCVR Standard codec and Travel override; preserve PyroWave choice.
-- Requested settings are distinct from active stream. Unsupported PyroWave
-  remains disabled until matching native artifacts exist.
+- Requested settings are distinct from the last decoded stream. PyroWave is
+  enabled with matching fingerprint-verified native libraries; runtime probes
+  select a supported codec.
 - Keep existing 99 Android tests; add network/pairing/lifecycle regressions
   and large-font / headset-panel screenshots.
 
@@ -87,7 +88,7 @@ The integrated Android build passes 115 tests and includes the custom ALVR,
 PyroWave and conversion bridge libraries, with matching source fingerprints
 and hashes. APK checks confirm arm64 only, one OpenXR loader, preserved JNI
 codec callback and the existing signing identity. The local preview 3 APK
-SHA256 is 6accba38bded4c7e4eef01eaf957f209dcb9a6d8143ae2ebda3b765b68679af5.
+SHA256 is 495ee74f3113822ce42757b51ca87bfaafad84e436f179b18331ad12b9b2025a.
 Two pure Rust tests cover native request selection and decoder config bounds.
 
 Agy Gemini 3.1 Pro (High) approved the revised native C++/Rust paths and then
@@ -96,8 +97,11 @@ legacy, non-HTTP adapter helper was fixed with a regression test. Saved or
 requested codecs are never reported as negotiated by the companion. The
 headset records the last codec only after a real decoded frame.
 
-Windows native CI is running at 422303f4 (run 36548644963). Earlier Windows
-failures were CRLF patch handling and a missing WRL include; both fixed.
+Windows native CI compiled at 422303f4, then found a DLL packaging-name
+mismatch. Corrected in ad800c0b; CI run 36550716420 is the release gate.
+Updated companion Windows runtime and Linux race CI passed run 36550715598.
+Agy approved protected pairing export and DLL packaging fixes. In-app setup
+now links to the custom host and matching guide; Android tests pass again.
 Actual Quest/4090 interoperability and latency remain untested. Home caps
 adaptive bitrate at up to 200 Mbps, Travel uses Standard and 30 Mbps by
 default (45 maximum). Restart consent is explicit and expires after 2 minutes.
