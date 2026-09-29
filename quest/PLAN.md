@@ -88,7 +88,7 @@ The integrated Android build passes 115 tests and includes the custom ALVR,
 PyroWave and conversion bridge libraries, with matching source fingerprints
 and hashes. APK checks confirm arm64 only, one OpenXR loader, preserved JNI
 codec callback and the existing signing identity. The local preview 3 APK
-SHA256 is 495ee74f3113822ce42757b51ca87bfaafad84e436f179b18331ad12b9b2025a.
+SHA256 is cd47c0b7b3a799ecb88f1bde99fcc2f927b109e3a0a401760dd079106fe5c1e0.
 Two pure Rust tests cover native request selection and decoder config bounds.
 
 Agy Gemini 3.1 Pro (High) approved the revised native C++/Rust paths and then
@@ -114,3 +114,15 @@ checksums, source archive and installation instructions before notifying the
 owner. Real Quest/4090 latency, visual quality and tracking need owner testing.
 Telegram notification requires the owner's configured destination; no token
 should be pasted into chat or logs.
+
+
+Final UX review: Agy Gemini 3.1 Pro (High) approved the corrected PC/headset
+step ordering and accurate headset codec/bitrate descriptions. Codex retained
+ALVR client trust after clarifying that companion pairing covers HTTPS only.
+Cache-safe native checkout and corrected release/guide links were approved.
+Final Android rebuild: 115 tests, no failures/errors/skips.
+
+Delivery uses a separate experimental Quest tag/branch. Main push would
+trigger an unrelated automatic desktop production release, so this test build
+is not merged into main before owner hardware results. The desktop update
+channel and existing Steam Deck connection fixes remain unchanged.

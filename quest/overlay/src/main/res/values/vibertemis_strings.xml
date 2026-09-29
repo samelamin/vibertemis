@@ -14,7 +14,7 @@
 
     <string name="hub_btn_steamvr">SteamVR (PCVR)</string>
     <string name="hub_steamvr_unsupported">PCVR requires a VR headset.</string>
-    <string name="hub_steamvr_companion_reminder">PCVR requires the ALVR v20.14.1 companion running on the PC that runs SteamVR. See Setup on this screen.</string>
+    <string name="hub_steamvr_companion_reminder">PCVR needs the matching Windows host from this release. See Setup for installation and automatic SteamVR startup.</string>
     <string name="hub_mic_denied">Microphone permission is required to start SteamVR. PCVR not started.</string>
 
     <string name="hub_btn_settings">Streaming settings</string>
@@ -45,11 +45,11 @@
     <string name="setup_pcvr_step1">Install Steam and SteamVR.</string>
     <string name="setup_pcvr_step2">Download the Windows host and companion from this release. Extract them together, then launch ALVR Dashboard.</string>
     <string name="setup_pcvr_step3">Finish the ALVR wizard and register its SteamVR driver. Follow the Windows setup guide below to run the companion and export pairing.</string>
-    <string name="setup_pcvr_step4">Import the pairing file in PCVR settings on the headset. Keep the companion running on the PC for automatic SteamVR startup.</string>
+    <string name="setup_pcvr_step4">Keep the companion running. When the headset connects for the first time, trust it in ALVR Dashboard on the PC.</string>
     <string name="setup_pcvr_steps_headset">Steps on the headset:</string>
-    <string name="setup_pcvr_headset_step1">Choose SteamVR on the headset, grant microphone access, then confirm Connect. SteamVR may restart to apply settings; save any running VR game first.</string>
-    <string name="setup_pcvr_headset_step2">In the ALVR dashboard on your PC, trust the discovered headset.</string>
-    <string name="setup_pcvr_headset_step3">Launch a VR game from SteamVR on your PC or from the SteamVR library in the headset.</string>
+    <string name="setup_pcvr_headset_step1">Open PCVR settings and import the pairing file copied from your PC.</string>
+    <string name="setup_pcvr_headset_step2">Choose SteamVR, grant microphone access, then confirm Connect. SteamVR may restart to apply settings; save any running VR game first.</string>
+    <string name="setup_pcvr_headset_step3">Once connected, launch a VR game from the SteamVR library in the headset.</string>
 
     <string name="setup_pcvr_mic_note">This preview build requires microphone permission to start SteamVR. You can control voice chat in the ALVR dashboard.</string>
     <string name="setup_pcvr_wan_note">PCVR over the public Internet requires a VPN that passes UDP. The headset has no built-in port-forwarding or relay; enter the peer\'s VPN-side IP in the ALVR dashboard.</string>
@@ -128,14 +128,14 @@
 
     <!-- PCVR (host-owned) settings, honest copy. -->
     <string name="pcvr_host_section_title">SteamVR (PC) settings</string>
-    <string name="pcvr_host_section_summary">Codec, refresh rate, resolution, fixed-foveated encoding and adaptive bitrate for PCVR are configured on the ALVR dashboard running on the PC. The headset cannot change these.</string>
+    <string name="pcvr_host_section_summary">Pair your PC and choose codec, Travel mode and bitrate limits. Resolution, refresh rate and fixed foveation remain in ALVR Dashboard.</string>
 
     <string name="pcvr_host_item_adaptive_bitrate_title">Adaptive bitrate</string>
-    <string name="pcvr_host_item_adaptive_bitrate_summary">Toggle on the ALVR dashboard. The v20.14.1 default is constant 30 Mbps; adaptive is opt-in.</string>
+    <string name="pcvr_host_item_adaptive_bitrate_summary">Enabled for connections from this app. Set separate Home and Travel limits in PC pairing and codec; bitrate adapts below the selected limit.</string>
     <string name="pcvr_host_item_fixed_foveation_title">Fixed-foveated encoding</string>
     <string name="pcvr_host_item_fixed_foveation_summary">Downscales the periphery of each frame before encoding. Centre detail is preserved; peripheral detail is reduced. There is no measured savings guarantee.</string>
     <string name="pcvr_host_item_codec_title">Codec</string>
-    <string name="pcvr_host_item_codec_summary">ALVR v20.14.1 defaults to H.264, constant 30 Mbps, 72 Hz. HEVC and AV1 are available on the dashboard when the host GPU supports them.</string>
+    <string name="pcvr_host_item_codec_summary">Choose experimental PyroWave or Standard AV1/HEVC in PC pairing and codec. Runtime capabilities determine the actual stream codec; settings apply on the next connection.</string>
     <string name="pcvr_host_item_refresh_title">Refresh rate</string>
     <string name="pcvr_host_item_refresh_summary">Set on the ALVR dashboard. The actual headset refresh the runtime uses depends on the dashboard setting and the headset firmware.</string>
     <string name="pcvr_host_item_resolution_title">Resolution</string>
@@ -163,6 +163,6 @@
     <string name="top_section_screen_vr_title">Screen VR settings</string>
     <string name="top_section_screen_vr_summary">Synthetic 3D, depth model and the other settings in the headset-only VR category. Hidden on phones and TVs.</string>
     <string name="top_section_pcvr_title">SteamVR (PC) settings</string>
-    <string name="top_section_pcvr_summary">Read-only summary of the ALVR dashboard settings that control PCVR. The headset cannot change these.</string>
+    <string name="top_section_pcvr_summary">PC pairing, codec, Home and Travel bitrate limits, plus guidance for display settings on the PC.</string>
 
 </resources>

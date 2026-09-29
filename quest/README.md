@@ -78,8 +78,8 @@ is still required; this is an experimental test build.
 2. Run `ALVR Dashboard.exe`, finish the setup wizard and register the driver.
    Allow ALVR through Windows Firewall on your trusted network. Keep the
    dashboard available for trusting the headset and changing display settings.
-3. Place this release's `vibertemis-host-companion.exe` in that folder.
-   Use the actual absolute path to the dashboard's `session.json` below.
+3. The ZIP includes `vibertemis-host-companion.exe`. Use the actual absolute
+   path to the dashboard's `session.json` below.
 4. In PowerShell, replace the example IP with your PC's reachable LAN IP:
 
 ```powershell
