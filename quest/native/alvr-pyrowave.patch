@@ -1,0 +1,1794 @@
+diff --git a/Cargo.lock b/Cargo.lock
+index 6f95f24..9484177 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -182,7 +182,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "alvr_adb"
+-version = "20.14.1"
++version = "20.14.1-vibertemis-pyro.1"
+ dependencies = [
+  "alvr_common",
+  "alvr_filesystem",
+@@ -194,7 +194,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "alvr_audio"
+-version = "20.14.1"
++version = "20.14.1-vibertemis-pyro.1"
+ dependencies = [
+  "alvr_common",
+  "alvr_session",
+@@ -210,7 +210,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "alvr_client_core"
+-version = "20.14.1"
++version = "20.14.1-vibertemis-pyro.1"
+ dependencies = [
+  "alvr_audio",
+  "alvr_common",
+@@ -232,7 +232,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "alvr_client_mock"
+-version = "20.14.1"
++version = "20.14.1-vibertemis-pyro.1"
+ dependencies = [
+  "alvr_client_core",
+  "alvr_common",
+@@ -245,7 +245,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "alvr_client_openxr"
+-version = "20.14.1"
++version = "20.14.1-vibertemis-pyro.1"
+ dependencies = [
+  "alvr_client_core",
+  "alvr_common",
+@@ -262,7 +262,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "alvr_common"
+-version = "20.14.1"
++version = "20.14.1-vibertemis-pyro.1"
+ dependencies = [
+  "anyhow",
+  "backtrace",
+@@ -279,7 +279,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "alvr_dashboard"
+-version = "20.14.1"
++version = "20.14.1-vibertemis-pyro.1"
+ dependencies = [
+  "alvr_adb",
+  "alvr_common",
+@@ -311,7 +311,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "alvr_events"
+-version = "20.14.1"
++version = "20.14.1-vibertemis-pyro.1"
+ dependencies = [
+  "alvr_common",
+  "alvr_packets",
+@@ -322,7 +322,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "alvr_filesystem"
+-version = "20.14.1"
++version = "20.14.1-vibertemis-pyro.1"
+ dependencies = [
+  "dirs",
+  "once_cell",
+@@ -330,7 +330,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "alvr_graphics"
+-version = "20.14.1"
++version = "20.14.1-vibertemis-pyro.1"
+ dependencies = [
+  "alvr_common",
+  "alvr_session",
+@@ -344,7 +344,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "alvr_gui_common"
+-version = "20.14.1"
++version = "20.14.1-vibertemis-pyro.1"
+ dependencies = [
+  "alvr_common",
+  "egui",
+@@ -352,7 +352,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "alvr_launcher"
+-version = "20.14.1"
++version = "20.14.1-vibertemis-pyro.1"
+ dependencies = [
+  "alvr_adb",
+  "alvr_common",
+@@ -375,7 +375,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "alvr_packets"
+-version = "20.14.1"
++version = "20.14.1-vibertemis-pyro.1"
+ dependencies = [
+  "alvr_common",
+  "alvr_session",
+@@ -386,7 +386,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "alvr_server_core"
+-version = "20.14.1"
++version = "20.14.1-vibertemis-pyro.1"
+ dependencies = [
+  "alvr_adb",
+  "alvr_audio",
+@@ -420,7 +420,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "alvr_server_io"
+-version = "20.14.1"
++version = "20.14.1-vibertemis-pyro.1"
+ dependencies = [
+  "alvr_common",
+  "alvr_events",
+@@ -436,7 +436,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "alvr_server_openvr"
+-version = "20.14.1"
++version = "20.14.1-vibertemis-pyro.1"
+ dependencies = [
+  "alvr_common",
+  "alvr_filesystem",
+@@ -454,7 +454,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "alvr_session"
+-version = "20.14.1"
++version = "20.14.1-vibertemis-pyro.1"
+ dependencies = [
+  "alvr_common",
+  "alvr_filesystem",
+@@ -468,7 +468,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "alvr_sockets"
+-version = "20.14.1"
++version = "20.14.1-vibertemis-pyro.1"
+ dependencies = [
+  "alvr_common",
+  "alvr_session",
+@@ -481,7 +481,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "alvr_system_info"
+-version = "20.14.1"
++version = "20.14.1-vibertemis-pyro.1"
+ dependencies = [
+  "alvr_common",
+  "jni",
+@@ -495,7 +495,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "alvr_vrcompositor_wrapper"
+-version = "20.14.1"
++version = "20.14.1-vibertemis-pyro.1"
+ dependencies = [
+  "alvr_common",
+  "alvr_filesystem",
+@@ -505,7 +505,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "alvr_vulkan_layer"
+-version = "20.14.1"
++version = "20.14.1-vibertemis-pyro.1"
+ dependencies = [
+  "alvr_common",
+  "alvr_filesystem",
+@@ -517,7 +517,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "alvr_xtask"
+-version = "20.14.1"
++version = "20.14.1-vibertemis-pyro.1"
+ dependencies = [
+  "alvr_filesystem",
+  "pico-args",
+diff --git a/Cargo.toml b/Cargo.toml
+index d471a4a..75189e7 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -3,7 +3,7 @@ resolver = "2"
+ members = ["alvr/*"]
+ 
+ [workspace.package]
+-version = "20.14.1"
++version = "20.14.1-vibertemis-pyro.1"
+ edition = "2021"
+ rust-version = "1.82"
+ authors = ["alvr-org"]
+diff --git a/alvr/client_core/build.rs b/alvr/client_core/build.rs
+index 5b9dcfe..4e641c1 100644
+--- a/alvr/client_core/build.rs
++++ b/alvr/client_core/build.rs
+@@ -2,6 +2,10 @@ fn main() {
+     let platform_name = std::env::var("CARGO_CFG_TARGET_OS").unwrap();
+ 
+     if platform_name == "android" {
++        println!("cargo:rerun-if-env-changed=PYROCLIENT_LIB_DIR");
++        let bridge = std::env::var("PYROCLIENT_LIB_DIR").expect("PYROCLIENT_LIB_DIR is required for the custom client");
++        println!("cargo:rustc-link-search=native={bridge}");
++        println!("cargo:rustc-link-lib=pyroclient");
+         println!("cargo:rustc-link-lib=log");
+         println!("cargo:rustc-link-lib=EGL");
+         println!("cargo:rustc-link-lib=GLESv3");
+diff --git a/alvr/client_core/src/c_api.rs b/alvr/client_core/src/c_api.rs
+index b69f7e9..534f534 100644
+--- a/alvr/client_core/src/c_api.rs
++++ b/alvr/client_core/src/c_api.rs
+@@ -57,6 +57,7 @@ pub struct AlvrClientCapabilities {
+ 
+ #[repr(u8)]
+ pub enum AlvrCodec {
++    PyroWave = 3,
+     H264 = 0,
+     Hevc = 1,
+     AV1 = 2,
+@@ -295,6 +296,8 @@ pub unsafe extern "C" fn alvr_initialize(capabilities: AlvrClientCapabilities) {
+     .to_vec();
+ 
+     let capabilities = ClientCapabilities {
++        pcvr_request: Default::default(),
++        restart_deadline: None,
+         default_view_resolution,
+         refresh_rates,
+         foveated_encoding: capabilities.foveated_encoding,
+@@ -377,6 +380,7 @@ pub extern "C" fn alvr_poll_event(out_event: *mut AlvrEvent) -> bool {
+                             CodecType::H264 => AlvrCodec::H264,
+                             CodecType::Hevc => AlvrCodec::Hevc,
+                             CodecType::AV1 => AlvrCodec::AV1,
++                            CodecType::PyroWave => AlvrCodec::PyroWave,
+                         },
+                     }
+                 }
+@@ -945,6 +949,7 @@ pub extern "C" fn alvr_create_decoder(config: AlvrDecoderConfig) {
+             AlvrCodec::H264 => CodecType::H264,
+             AlvrCodec::Hevc => CodecType::Hevc,
+             AlvrCodec::AV1 => CodecType::AV1,
++            AlvrCodec::PyroWave => CodecType::PyroWave,
+         },
+         force_software_decoder: config.force_software_decoder,
+         max_buffering_frames: config.max_buffering_frames,
+@@ -989,7 +994,7 @@ pub extern "C" fn alvr_create_decoder(config: AlvrDecoderConfig) {
+         },
+     };
+ 
+-    let (mut sink, source) =
++    let result =
+         video_decoder::create_decoder(config, |maybe_timestamp: Result<Duration>| {
+             if let Some(context) = &*CLIENT_CORE_CONTEXT.lock() {
+                 match maybe_timestamp {
+@@ -999,6 +1004,13 @@ pub extern "C" fn alvr_create_decoder(config: AlvrDecoderConfig) {
+             }
+         });
+ 
++    let (mut sink, source) = match result {
++        Ok(decoder) => decoder,
++        Err(error) => {
++            if let Some(context) = &*CLIENT_CORE_CONTEXT.lock() { context.report_fatal_decoder_error(&error.to_string()); }
++            return;
++        }
++    };
+     *DECODER_SOURCE.lock() = Some(source);
+ 
+     if let Some(context) = &*CLIENT_CORE_CONTEXT.lock() {
+diff --git a/alvr/client_core/src/connection.rs b/alvr/client_core/src/connection.rs
+index 357bd43..26e9cda 100644
+--- a/alvr/client_core/src/connection.rs
++++ b/alvr/client_core/src/connection.rs
+@@ -200,6 +200,13 @@ fn connection_pipeline(
+             server_ip,
+             streaming_capabilities: Some(
+                 alvr_packets::encode_video_streaming_capabilities(&VideoStreamingCapabilities {
++                    decoder_pyrowave: capabilities.pcvr_request.codec == Some(alvr_session::CodecType::PyroWave)
++                        && !capabilities.pcvr_request.travel && crate::video_decoder::pyrowave_supported(),
++                    pcvr_request: alvr_packets::PcvrRequest {
++                        allow_restart: capabilities.restart_deadline.is_some_and(|deadline| Instant::now() < deadline)
++                            && capabilities.pcvr_request.allow_restart,
++                        ..capabilities.pcvr_request.clone()
++                    },
+                     default_view_resolution: capabilities.default_view_resolution,
+                     supported_refresh_rates: capabilities.refresh_rates,
+                     microphone_sample_rate,
+@@ -517,6 +524,11 @@ fn connection_pipeline(
+                         set_hud_message(&event_queue, SERVER_RESTART_MESSAGE);
+                         disconnect_notif.notify_one();
+                     }
++                    Ok(ServerControlPacket::Reserved(reason)) if reason == "vq_pyrowave_failed" => {
++                        crate::video_decoder::disable_pyrowave();
++                        set_hud_message(&event_queue, "PyroWave unavailable on the PC. Reconnecting with your standard codec.");
++                        disconnect_notif.notify_one();
++                    }
+                     Ok(ServerControlPacket::ReservedBuffer(buffer)) => {
+                         // NB: it's normal for deserialization to fail if server has different
+                         // version
+diff --git a/alvr/client_core/src/lib.rs b/alvr/client_core/src/lib.rs
+index 7af1711..9f55d9f 100644
+--- a/alvr/client_core/src/lib.rs
++++ b/alvr/client_core/src/lib.rs
+@@ -61,6 +61,8 @@ pub enum ClientCoreEvent {
+ // Note: this struct may change without breaking network protocol changes
+ #[derive(Clone)]
+ pub struct ClientCapabilities {
++    pub pcvr_request: alvr_packets::PcvrRequest,
++    pub restart_deadline: Option<std::time::Instant>,
+     pub default_view_resolution: UVec2,
+     pub refresh_rates: Vec<f32>,
+     pub foveated_encoding: bool,
+diff --git a/alvr/client_core/src/video_decoder/android.rs b/alvr/client_core/src/video_decoder/android.rs
+index a8e70c2..480fe85 100644
+--- a/alvr/client_core/src/video_decoder/android.rs
++++ b/alvr/client_core/src/video_decoder/android.rs
+@@ -144,12 +144,13 @@ impl Drop for VideoDecoderSource {
+     }
+ }
+ 
+-fn mime_for_codec(codec: CodecType) -> &'static str {
+-    match codec {
++fn mime_for_codec(codec: CodecType) -> Result<&'static str> {
++    Ok(match codec {
+         CodecType::H264 => "video/avc",
+         CodecType::Hevc => "video/hevc",
+         CodecType::AV1 => "video/av01",
+-    }
++        CodecType::PyroWave => bail!("PyroWave is not a MediaCodec codec"),
++    })
+ }
+ 
+ // Attempts to create a MediaCodec, and then configure and start it.
+@@ -164,11 +165,12 @@ fn decoder_attempt_setup(
+             CodecType::H264 => "OMX.google.h264.decoder",
+             CodecType::Hevc => "OMX.google.hevc.decoder",
+             CodecType::AV1 => bail!("AV1 is not supported for software decoding"),
++            CodecType::PyroWave => bail!("PyroWave is not a MediaCodec codec"),
+         };
+         MediaCodec::from_codec_name(&sw_codec_name)
+             .ok_or(anyhow!("no such codec: {}", &sw_codec_name))?
+     } else {
+-        let mime = mime_for_codec(codec_type);
++        let mime = mime_for_codec(codec_type)?;
+         MediaCodec::from_decoder_type(&mime)
+             .ok_or(anyhow!("unable to find decoder for mime type: {}", &mime))?
+     };
+@@ -244,7 +246,7 @@ fn decoder_lifecycle(
+     // todo: find out how to use it and avoid leaking the ImageReader
+     image_reader.set_buffer_removed_listener(Box::new(|_, _| ()))?;
+ 
+-    let mime = mime_for_codec(config.codec);
++    let mime = mime_for_codec(config.codec)?;
+ 
+     let mut format = MediaFormat::new();
+     format.set_str("mime", mime);
+diff --git a/alvr/client_core/src/video_decoder/mod.rs b/alvr/client_core/src/video_decoder/mod.rs
+index 3a1555c..1c69a56 100644
+--- a/alvr/client_core/src/video_decoder/mod.rs
++++ b/alvr/client_core/src/video_decoder/mod.rs
+@@ -1,5 +1,17 @@
+ #[cfg(target_os = "android")]
+ mod android;
++#[cfg(target_os = "android")]
++mod pyrowave;
++mod pyrowave_config;
++pub use pyrowave_config::parse_pyrowave_config;
++
++pub fn pyrowave_supported() -> bool {
++    #[cfg(target_os = "android")]
++    { pyrowave::supported() }
++    #[cfg(not(target_os = "android"))]
++    { false }
++}
++
+ 
+ use alvr_common::anyhow::Result;
+ use alvr_session::{CodecType, MediacodecProperty};
+@@ -17,7 +29,7 @@ pub struct VideoDecoderConfig {
+ 
+ pub struct VideoDecoderSink {
+     #[cfg(target_os = "android")]
+-    inner: android::VideoDecoderSink,
++    inner: Sink,
+ }
+ 
+ impl VideoDecoderSink {
+@@ -26,7 +38,10 @@ impl VideoDecoderSink {
+     pub fn push_nal(&mut self, timestamp: Duration, nal: &[u8]) -> bool {
+         #[cfg(target_os = "android")]
+         {
+-            alvr_common::show_err(self.inner.push_frame_nal(timestamp, nal)).unwrap_or(false)
++            alvr_common::show_err(match &mut self.inner {
++                Sink::MediaCodec(sink) => sink.push_frame_nal(timestamp, nal),
++                Sink::PyroWave(sink) => sink.push_frame_nal(timestamp, nal),
++            }).unwrap_or(false)
+         }
+         #[cfg(not(target_os = "android"))]
+         false
+@@ -35,7 +50,7 @@ impl VideoDecoderSink {
+ 
+ pub struct VideoDecoderSource {
+     #[cfg(target_os = "android")]
+-    inner: android::VideoDecoderSource,
++    inner: Source,
+ }
+ 
+ impl VideoDecoderSource {
+@@ -43,7 +58,10 @@ impl VideoDecoderSource {
+     pub fn get_frame(&mut self) -> Option<(Duration, *mut std::ffi::c_void)> {
+         #[cfg(target_os = "android")]
+         {
+-            self.inner.dequeue_frame()
++            match &mut self.inner {
++                Source::MediaCodec(source) => source.dequeue_frame(),
++                Source::PyroWave(source) => source.dequeue_frame(),
++            }
+         }
+         #[cfg(not(target_os = "android"))]
+         None
+@@ -55,21 +73,36 @@ impl VideoDecoderSource {
+ pub fn create_decoder(
+     config: VideoDecoderConfig,
+     report_frame_decoded: impl Fn(Result<Duration>) + Send + Sync + 'static,
+-) -> (VideoDecoderSink, VideoDecoderSource) {
++) -> Result<(VideoDecoderSink, VideoDecoderSource)> {
+     #[cfg(target_os = "android")]
+     {
++        if config.codec == CodecType::PyroWave {
++            let (sink, source) = pyrowave::video_decoder_split(config, report_frame_decoded)?;
++            return Ok((VideoDecoderSink { inner: Sink::PyroWave(sink) },
++                       VideoDecoderSource { inner: Source::PyroWave(source) }));
++        }
+         let (sink, source) = android::video_decoder_split(
+             config.clone(),
+             config.config_buffer,
+             report_frame_decoded,
+         )
+-        .unwrap();
++        ?;
+ 
+-        (
+-            VideoDecoderSink { inner: sink },
+-            VideoDecoderSource { inner: source },
+-        )
++        Ok((
++            VideoDecoderSink { inner: Sink::MediaCodec(sink) },
++            VideoDecoderSource { inner: Source::MediaCodec(source) },
++        ))
+     }
+     #[cfg(not(target_os = "android"))]
+-    (VideoDecoderSink {}, VideoDecoderSource {})
++    Ok((VideoDecoderSink {}, VideoDecoderSource {}))
++}
++
++#[cfg(target_os = "android")]
++enum Sink { MediaCodec(android::VideoDecoderSink), PyroWave(pyrowave::VideoDecoderSink) }
++#[cfg(target_os = "android")]
++enum Source { MediaCodec(android::VideoDecoderSource), PyroWave(pyrowave::VideoDecoderSource) }
++
++pub fn disable_pyrowave() {
++    #[cfg(target_os = "android")]
++    pyrowave::disable();
+ }
+diff --git a/alvr/client_core/src/video_decoder/pyrowave.rs b/alvr/client_core/src/video_decoder/pyrowave.rs
+new file mode 100644
+index 0000000..3bcc6fc
+--- /dev/null
++++ b/alvr/client_core/src/video_decoder/pyrowave.rs
+@@ -0,0 +1,128 @@
++//! Intra-only latest-frame decoder. A decoded AHardwareBuffer stays leased until
++//! the renderer's NEXT dequeue (the same lifetime contract as MediaCodec).
++use super::{parse_pyrowave_config, VideoDecoderConfig};
++use alvr_common::{anyhow::{anyhow, bail, Result}, parking_lot::{Condvar, Mutex}};
++use std::{ffi::c_void, sync::{atomic::{AtomicBool, Ordering}, Arc, OnceLock}, thread::{self, JoinHandle}, time::Duration};
++
++static FAILED: AtomicBool = AtomicBool::new(false);
++static PROBED: OnceLock<bool> = OnceLock::new();
++#[repr(C)]
++#[derive(Default)]
++struct FrameInfo { decode_ms: f64, convert_ms: f64, total_ms: f64, complete: i32 }
++extern "C" {
++    fn pyroclient_probe() -> i32;
++    fn pyroclient_create(w: u32, h: u32, chroma: i32, full: i32, ring: u32) -> *mut c_void;
++    fn pyroclient_push_packet(c: *mut c_void, data: *const u8, size: usize) -> i32;
++    fn pyroclient_decode(c: *mut c_void, out: *mut *mut c_void, info: *mut FrameInfo) -> i32;
++    fn pyroclient_clear(c: *mut c_void);
++    fn pyroclient_release(c: *mut c_void, out: *mut c_void);
++    fn pyroclient_destroy(c: *mut c_void);
++}
++
++pub fn disable() { FAILED.store(true, Ordering::Release); }
++
++pub fn supported() -> bool {
++    !FAILED.load(Ordering::Acquire) && *PROBED.get_or_init(|| unsafe { pyroclient_probe() == 1 })
++}
++
++struct Pending {
++    frame: Mutex<Option<(Duration, Vec<u8>)>>,
++    ready: Condvar,
++    running: AtomicBool,
++}
++struct Frames { decoded: Option<(Duration, usize)>, in_use: Option<usize> }
++struct Decoder { ptr: usize, frames: Mutex<Frames> }
++// Only the worker performs decode/queue operations. Release merely takes the
++// bridge's lease mutex. Drop runs after the worker joins and renderer releases.
++impl Decoder {
++    fn ptr(&self) -> *mut c_void { self.ptr as *mut c_void }
++    fn release(&self, ptr: usize) { unsafe { pyroclient_release(self.ptr(), ptr as *mut c_void) } }
++}
++impl Drop for Decoder {
++    fn drop(&mut self) { unsafe { pyroclient_destroy(self.ptr()) } }
++}
++
++pub struct VideoDecoderSink { pending: Arc<Pending> }
++impl VideoDecoderSink {
++    pub fn push_frame_nal(&mut self, timestamp: Duration, data: &[u8]) -> Result<bool> {
++        if data.is_empty() || data.len() > 8 * 1024 * 1024 { bail!("PyroWave frame exceeds limit"); }
++        let mut slot = self.pending.frame.lock();
++        if !self.pending.running.load(Ordering::Acquire) { return Ok(false); }
++        *slot = Some((timestamp, data.to_vec()));
++        self.pending.ready.notify_one();
++        Ok(true)
++    }
++}
++pub struct VideoDecoderSource { pending: Arc<Pending>, decoder: Arc<Decoder>, thread: Option<JoinHandle<()>> }
++impl VideoDecoderSource {
++    pub fn dequeue_frame(&mut self) -> Option<(Duration, *mut c_void)> {
++        let mut frames = self.decoder.frames.lock();
++        if let Some(previous) = frames.in_use.take() { self.decoder.release(previous); }
++        let (timestamp, ptr) = frames.decoded.take()?;
++        frames.in_use = Some(ptr);
++        Some((timestamp, ptr as *mut c_void))
++    }
++}
++impl Drop for VideoDecoderSource {
++    fn drop(&mut self) {
++        {
++            let mut pending = self.pending.frame.lock();
++            self.pending.running.store(false, Ordering::Release);
++            *pending = None;
++            self.pending.ready.notify_all();
++        }
++        if let Some(thread) = self.thread.take() { let _ = thread.join(); }
++        let mut frames = self.decoder.frames.lock();
++        if let Some(ptr) = frames.in_use.take() { self.decoder.release(ptr); }
++        if let Some((_, ptr)) = frames.decoded.take() { self.decoder.release(ptr); }
++    }
++}
++
++pub fn video_decoder_split(config: VideoDecoderConfig,
++    report: impl Fn(Result<Duration>) + Send + Sync + 'static,
++) -> Result<(VideoDecoderSink, VideoDecoderSource)> {
++    let cfg = parse_pyrowave_config(&config.config_buffer)?;
++    if !supported() { bail!("PyroWave unavailable; reconnect using the standard codec"); }
++    let ptr = unsafe { pyroclient_create(cfg.width, cfg.height, 1, cfg.full_range as i32, 3) };
++    if ptr.is_null() {
++        FAILED.store(true, Ordering::Release);
++        bail!("PyroWave initialization failed; reconnecting with the standard codec");
++    }
++    let decoder = Arc::new(Decoder { ptr: ptr as usize, frames: Mutex::new(Frames { decoded: None, in_use: None }) });
++    let pending = Arc::new(Pending { frame: Mutex::new(None), ready: Condvar::new(), running: AtomicBool::new(true) });
++    let thread = thread::Builder::new().name("PyroWave decoder".into()).spawn({
++        let decoder = Arc::clone(&decoder);
++        let pending = Arc::clone(&pending);
++        move || {
++            while pending.running.load(Ordering::Acquire) {
++                let next = {
++                    let mut slot = pending.frame.lock();
++                    while slot.is_none() && pending.running.load(Ordering::Acquire) { pending.ready.wait(&mut slot); }
++                    slot.take()
++                };
++                let Some((timestamp, data)) = next else { continue; };
++                let mut out = std::ptr::null_mut();
++                let mut info = FrameInfo::default();
++                let result = unsafe {
++                    // ALVR delivers an assembled intra frame, never mix partial frames.
++                    pyroclient_clear(decoder.ptr());
++                    if pyroclient_push_packet(decoder.ptr(), data.as_ptr(), data.len()) != 1 { -1 }
++                    else { pyroclient_decode(decoder.ptr(), &mut out, &mut info) }
++                };
++                if result == 1 { continue; } // all output slots leased: drop without blocking receive
++                if result != 0 || out.is_null() || info.complete != 1 {
++                    FAILED.store(true, Ordering::Release);
++                    pending.running.store(false, Ordering::Release);
++                    report(Err(anyhow!("PyroWave decoding failed; reconnecting with the standard codec")));
++                    break;
++                }
++                {
++                    let mut frames = decoder.frames.lock();
++                    if let Some((_, old)) = frames.decoded.replace((timestamp, out as usize)) { decoder.release(old); }
++                }
++                report(Ok(timestamp));
++            }
++        }
++    })?;
++    Ok((VideoDecoderSink { pending: Arc::clone(&pending) }, VideoDecoderSource { pending, decoder, thread: Some(thread) }))
++}
+diff --git a/alvr/client_core/src/video_decoder/pyrowave_config.rs b/alvr/client_core/src/video_decoder/pyrowave_config.rs
+new file mode 100644
+index 0000000..4943a11
+--- /dev/null
++++ b/alvr/client_core/src/video_decoder/pyrowave_config.rs
+@@ -0,0 +1,38 @@
++use alvr_common::anyhow::{bail, Result};
++
++#[derive(Debug, PartialEq)]
++pub struct PyroWaveConfig { pub width: u32, pub height: u32, pub full_range: bool }
++
++// Custom protocol v1: LE u32 width/height, 4:4:4 flag, full-range flag.
++// Validate before any allocation or native call. Only upstream CDF 9/7 is supported.
++pub fn parse_pyrowave_config(bytes: &[u8]) -> Result<PyroWaveConfig> {
++    if bytes.len() != 10 { bail!("Invalid PyroWave config length"); }
++    let width = u32::from_le_bytes(bytes[0..4].try_into()?);
++    let height = u32::from_le_bytes(bytes[4..8].try_into()?);
++    if !(64..=8192).contains(&width) || !(64..=8192).contains(&height)
++        || u64::from(width) * u64::from(height) > 40_000_000
++        || bytes[8] != 1 || bytes[9] > 1 {
++        bail!("Unsupported PyroWave geometry or pixel format");
++    }
++    Ok(PyroWaveConfig { width, height, full_range: bytes[9] == 1 })
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    fn config(w: u32, h: u32) -> Vec<u8> {
++        [w.to_le_bytes().as_slice(), h.to_le_bytes().as_slice(), &[1, 1]].concat()
++    }
++    #[test]
++    fn validates_before_native_allocation() {
++        assert_eq!(parse_pyrowave_config(&config(4096, 2048)).unwrap().width, 4096);
++        for (w, h) in [(0, 1), (63, 256), (8193, 1024), (8192, 8192), (u32::MAX, u32::MAX)] {
++            assert!(parse_pyrowave_config(&config(w, h)).is_err());
++        }
++        let mut data = config(4096, 2048);
++        for len in 0..10 { assert!(parse_pyrowave_config(&data[..len]).is_err()); }
++        data.push(0); assert!(parse_pyrowave_config(&data).is_err()); data.pop();
++        data[8] = 0; assert!(parse_pyrowave_config(&data).is_err());
++        data[8] = 1; data[9] = 2; assert!(parse_pyrowave_config(&data).is_err());
++    }
++}
+diff --git a/alvr/client_openxr/src/lib.rs b/alvr/client_openxr/src/lib.rs
+index 3e35add..2e7ab9e 100644
+--- a/alvr/client_openxr/src/lib.rs
++++ b/alvr/client_openxr/src/lib.rs
+@@ -1,3 +1,4 @@
++mod pcvr_request;
+ mod c_api;
+ mod extra_extensions;
+ mod graphics;
+@@ -262,6 +263,8 @@ pub fn entry_point() {
+         }
+ 
+         let capabilities = ClientCapabilities {
++            pcvr_request: pcvr_request::read(),
++            restart_deadline: Some(std::time::Instant::now() + Duration::from_secs(120)),
+             default_view_resolution,
+             refresh_rates,
+             foveated_encoding: platform != Platform::Unknown,
+diff --git a/alvr/client_openxr/src/pcvr_request.rs b/alvr/client_openxr/src/pcvr_request.rs
+new file mode 100644
+index 0000000..911dba0
+--- /dev/null
++++ b/alvr/client_openxr/src/pcvr_request.rs
+@@ -0,0 +1,31 @@
++use alvr_packets::PcvrRequest;
++#[cfg(target_os = "android")]
++fn android_request() -> alvr_common::anyhow::Result<PcvrRequest> {
++    use alvr_session::CodecType;
++    use jni::{objects::{JObject, JValue}, JavaVM};
++    let context = ndk_context::android_context();
++    let vm = unsafe { JavaVM::from_raw(context.vm().cast())? };
++    let mut env = vm.attach_current_thread()?;
++    let activity = unsafe { JObject::from_raw(context.context().cast()) };
++    let intent = env.call_method(&activity, "getIntent", "()Landroid/content/Intent;", &[])?.l()?;
++    let mut string = |key: &str| -> alvr_common::anyhow::Result<Option<CodecType>> {
++        let key = env.new_string(key)?;
++        let value = env.call_method(&intent, "getStringExtra", "(Ljava/lang/String;)Ljava/lang/String;", &[JValue::Object(&key)])?.l()?;
++        if value.is_null() { return Ok(None); }
++        let value: String = env.get_string(&value.into())?.into();
++        Ok(match value.as_str() { "PyroWave" => Some(CodecType::PyroWave), "AV1" => Some(CodecType::AV1), "Hevc" => Some(CodecType::Hevc), _ => None })
++    };
++    let codec = string("vq_pcvr_codec")?;
++    let fallback = string("vq_pcvr_fallback")?.filter(|codec| *codec != CodecType::PyroWave);
++    let mut boolean = |key: &str| -> alvr_common::anyhow::Result<bool> {
++        let key = env.new_string(key)?;
++        Ok(env.call_method(&intent, "getBooleanExtra", "(Ljava/lang/String;Z)Z", &[JValue::Object(&key), JValue::Bool(0)])?.z()?)
++    };
++    Ok(PcvrRequest { codec, fallback, travel: boolean("vq_pcvr_travel")?, allow_restart: boolean("vq_pcvr_allow_restart")? })
++}
++pub fn read() -> PcvrRequest {
++    #[cfg(target_os = "android")]
++    { android_request().unwrap_or_else(|error| { alvr_common::warn!("PCVR options unavailable: {error}"); PcvrRequest::default() }) }
++    #[cfg(not(target_os = "android"))]
++    { PcvrRequest::default() }
++}
+diff --git a/alvr/client_openxr/src/stream.rs b/alvr/client_openxr/src/stream.rs
+index ca32945..2bb3dfe 100644
+--- a/alvr/client_openxr/src/stream.rs
++++ b/alvr/client_openxr/src/stream.rs
+@@ -34,6 +34,7 @@ use std::{
+ const DECODER_MAX_TIMEOUT_MULTIPLIER: f32 = 0.8;
+ 
+ pub struct ParsedStreamConfig {
++    pub codec: CodecType,
+     pub view_resolution: UVec2,
+     pub refresh_rate_hint: f32,
+     pub use_full_range: bool,
+@@ -54,6 +55,7 @@ pub struct ParsedStreamConfig {
+ impl ParsedStreamConfig {
+     pub fn new(config: &StreamConfig) -> Self {
+         Self {
++            codec: config.negotiated_config.codec,
+             view_resolution: config.negotiated_config.view_resolution,
+             refresh_rate_hint: config.negotiated_config.refresh_rate_hint,
+             use_full_range: config.negotiated_config.use_full_range,
+@@ -199,7 +201,7 @@ impl StreamContext {
+             format,
+             config.foveated_encoding_config.clone(),
+             platform != Platform::Lynx && !((platform.is_pico()) && config.enable_hdr),
+-            config.use_full_range && !config.enable_hdr, // TODO: figure out why HDR doesn't need the limited range hackfix in staging?
++            config.codec != CodecType::PyroWave && config.use_full_range && !config.enable_hdr, // TODO: figure out why HDR doesn't need the limited range hackfix in staging?
+             config.encoding_gamma,
+             config.upscaling.clone(),
+         );
+@@ -314,13 +316,17 @@ impl StreamContext {
+         };
+ 
+         if let Some(config) = maybe_config {
+-            let (mut sink, source) = video_decoder::create_decoder(config.clone(), {
++            let result = video_decoder::create_decoder(config.clone(), {
+                 let ctx = Arc::clone(&self.core_context);
+                 move |maybe_timestamp: Result<Duration>| match maybe_timestamp {
+                     Ok(timestamp) => ctx.report_frame_decoded(timestamp),
+                     Err(e) => ctx.report_fatal_decoder_error(&e.to_string()),
+                 }
+             });
++            let (mut sink, source) = match result {
++                Ok(decoder) => decoder,
++                Err(error) => { self.core_context.report_fatal_decoder_error(&error.to_string()); return; }
++            };
+             self.decoder = Some((config, source));
+ 
+             self.core_context.set_decoder_input_callback(Box::new(
+diff --git a/alvr/packets/src/lib.rs b/alvr/packets/src/lib.rs
+index 995888e..6f8141e 100644
+--- a/alvr/packets/src/lib.rs
++++ b/alvr/packets/src/lib.rs
+@@ -31,12 +31,22 @@ pub struct VideoStreamingCapabilitiesLegacy {
+     pub microphone_sample_rate: u32,
+ }
+ 
++#[derive(Serialize, Deserialize, Clone, Default)]
++pub struct PcvrRequest {
++    pub codec: Option<CodecType>,
++    pub fallback: Option<CodecType>,
++    pub travel: bool,
++    pub allow_restart: bool,
++}
++
+ // Note: not a network packet
+ #[derive(Serialize, Deserialize, Clone)]
+ pub struct VideoStreamingCapabilities {
+     pub default_view_resolution: UVec2,
+     pub supported_refresh_rates: Vec<f32>, // todo rename
+     pub microphone_sample_rate: u32,
++    pub pcvr_request: PcvrRequest,
++    pub decoder_pyrowave: bool,
+     pub supports_foveated_encoding: bool, // todo rename
+     pub encoder_high_profile: bool,
+     pub encoder_10_bits: bool,
+@@ -94,6 +104,8 @@ pub fn decode_video_streaming_capabilities(
+         default_view_resolution: legacy.default_view_resolution,
+         supported_refresh_rates,
+         microphone_sample_rate: legacy.microphone_sample_rate,
++        pcvr_request: json::from_value(caps_json["pcvr_request"].clone()).unwrap_or_default(),
++        decoder_pyrowave: caps_json["decoder_pyrowave"].as_bool().unwrap_or(false),
+         supports_foveated_encoding: caps_json["supports_foveated_encoding"]
+             .as_bool()
+             .unwrap_or(true),
+@@ -124,6 +136,7 @@ pub enum ClientConnectionResult {
+ // Note: not a network packet
+ #[derive(Serialize, Deserialize, Clone)]
+ pub struct NegotiatedStreamingConfig {
++    pub codec: CodecType,
+     pub view_resolution: UVec2,
+     pub refresh_rate_hint: f32,
+     pub game_audio_sample_rate: u32,
+@@ -186,6 +199,7 @@ pub fn decode_stream_config(packet: &StreamConfigPacket) -> Result<StreamConfig>
+         server_version: session_config.server_version,
+         settings,
+         negotiated_config: NegotiatedStreamingConfig {
++            codec: json::from_value(negotiated_json["codec"].clone())?,
+             view_resolution,
+             refresh_rate_hint,
+             game_audio_sample_rate,
+diff --git a/alvr/server_core/src/connection.rs b/alvr/server_core/src/connection.rs
+index 3144dfe..55769c7 100644
+--- a/alvr/server_core/src/connection.rs
++++ b/alvr/server_core/src/connection.rs
+@@ -691,7 +691,7 @@ fn connection_pipeline(
+         streaming_caps.prefer_full_range
+     };
+ 
+-    let enable_hdr = if initial_settings
++    let mut enable_hdr = if initial_settings
+         .video
+         .encoder_config
+         .hdr
+@@ -712,21 +712,13 @@ fn connection_pipeline(
+         streaming_caps.preferred_encoding_gamma
+     };
+ 
+-    let codec = if initial_settings.video.preferred_codec == CodecType::AV1 {
+-        let codec = if streaming_caps.encoder_av1 {
+-            CodecType::AV1
+-        } else {
+-            CodecType::Hevc
+-        };
+-
+-        if codec != CodecType::AV1 {
+-            warn!("AV1 encoding is not supported by the client.");
+-        }
+-
+-        codec
+-    } else {
+-        initial_settings.video.preferred_codec
+-    };
++    let codec = crate::pcvr_codec::select(&streaming_caps.pcvr_request,
++        initial_settings.video.preferred_codec, streaming_caps.encoder_av1,
++        streaming_caps.decoder_pyrowave,
++        streaming_caps.decoder_pyrowave && crate::pcvr_codec::encoder_available());
++    // This bridge carries SDR RGB after decoding, with exactly one range conversion.
++    if codec == CodecType::PyroWave { enable_hdr = false; enable_10_bits_encoding = false; }
++    info!("PCVR selected codec: {codec:?}");
+ 
+     #[cfg_attr(target_os = "linux", allow(unused_variables))]
+     let game_audio_sample_rate = if let Switch::Enabled(game_audio_config) =
+@@ -773,6 +765,7 @@ fn connection_pipeline(
+     let stream_config_packet = alvr_packets::encode_stream_config(
+         session_manager_lock.session(),
+         &NegotiatedStreamingConfig {
++            codec,
+             view_resolution: stream_view_resolution,
+             refresh_rate_hint: fps,
+             game_audio_sample_rate,
+@@ -805,6 +798,9 @@ fn connection_pipeline(
+     new_openvr_config.codec = codec as _;
+ 
+     if session_manager_lock.session().openvr_config != new_openvr_config {
++        if !streaming_caps.pcvr_request.allow_restart {
++            con_bail!("PCVR settings require SteamVR restart. Reconnect from the headset and confirm the restart prompt.");
++        }
+         session_manager_lock.session_mut().openvr_config = new_openvr_config;
+ 
+         control_sender.send(&ServerControlPacket::Restarting).ok();
+@@ -1110,6 +1106,11 @@ fn connection_pipeline(
+         let client_hostname = client_hostname.clone();
+         move || {
+             while is_streaming(&client_hostname) {
++                if codec == CodecType::PyroWave && crate::pcvr_codec::failed() {
++                    control_sender.lock().send(&ServerControlPacket::Reserved("vq_pyrowave_failed".into())).ok();
++                    disconnect_notif.notify_one();
++                    return;
++                }
+                 if let Err(e) = control_sender.lock().send(&ServerControlPacket::KeepAlive) {
+                     info!("Client disconnected. Cause: {e:?}");
+ 
+diff --git a/alvr/server_core/src/lib.rs b/alvr/server_core/src/lib.rs
+index a102320..118279a 100644
+--- a/alvr/server_core/src/lib.rs
++++ b/alvr/server_core/src/lib.rs
+@@ -1,3 +1,4 @@
++pub mod pcvr_codec;
+ mod bitrate;
+ mod c_api;
+ mod connection;
+@@ -119,6 +120,7 @@ pub fn create_recording_file(connection_context: &ConnectionContext, settings: &
+         CodecType::H264 => "h264",
+         CodecType::Hevc => "h265",
+         CodecType::AV1 => "av1",
++        CodecType::PyroWave => "pyrowave",
+     };
+ 
+     let path = FILESYSTEM_LAYOUT.get().unwrap().log_dir.join(format!(
+diff --git a/alvr/server_core/src/pcvr_codec.rs b/alvr/server_core/src/pcvr_codec.rs
+new file mode 100644
+index 0000000..52948c9
+--- /dev/null
++++ b/alvr/server_core/src/pcvr_codec.rs
+@@ -0,0 +1,39 @@
++//! Per-connection choice. Saved dashboard preferences remain owned by ALVR.
++use alvr_packets::PcvrRequest;
++use alvr_session::CodecType;
++use std::sync::{atomic::{AtomicBool, Ordering}, OnceLock};
++static PROBE: OnceLock<fn() -> bool> = OnceLock::new();
++static FAILED: AtomicBool = AtomicBool::new(false);
++pub fn set_encoder_probe(probe: fn() -> bool) { let _ = PROBE.set(probe); }
++pub fn failed() -> bool { FAILED.load(Ordering::Acquire) }
++pub fn report_failure() { FAILED.store(true, Ordering::Release); }
++pub fn encoder_available() -> bool { !failed() && PROBE.get().is_some_and(|probe| probe()) }
++
++pub fn select(request: &PcvrRequest, preferred: CodecType, av1: bool, decoder_pyro: bool, encoder_pyro: bool) -> CodecType {
++    let standard = |codec| match codec { CodecType::PyroWave => if av1 { CodecType::AV1 } else { CodecType::Hevc },
++        CodecType::AV1 if !av1 => CodecType::Hevc, other => other };
++    let fallback = standard(request.fallback.unwrap_or(preferred));
++    let requested = if request.travel { fallback } else { request.codec.unwrap_or(preferred) };
++    match requested {
++        CodecType::PyroWave if decoder_pyro && encoder_pyro => CodecType::PyroWave,
++        CodecType::PyroWave => fallback,
++        codec => standard(codec),
++    }
++}
++#[cfg(test)]
++mod tests {
++    use super::*;
++    #[test]
++    fn intersects_caps_and_preserves_standard_fallback() {
++        let mut request = PcvrRequest { codec: Some(CodecType::PyroWave), fallback: Some(CodecType::Hevc), ..Default::default() };
++        assert_eq!(select(&request, CodecType::AV1, true, true, true), CodecType::PyroWave);
++        for (decoder, encoder) in [(false, true), (true, false), (false, false)] {
++            assert_eq!(select(&request, CodecType::AV1, true, decoder, encoder), CodecType::Hevc);
++        }
++        request.travel = true;
++        assert_eq!(select(&request, CodecType::AV1, true, true, true), CodecType::Hevc);
++        request.fallback = Some(CodecType::AV1);
++        assert_eq!(select(&request, CodecType::AV1, false, true, true), CodecType::Hevc);
++        assert_eq!(select(&PcvrRequest::default(), CodecType::H264, true, true, true), CodecType::H264);
++    }
++}
+diff --git a/alvr/server_openvr/build.rs b/alvr/server_openvr/build.rs
+index 2573d07..9839962 100644
+--- a/alvr/server_openvr/build.rs
++++ b/alvr/server_openvr/build.rs
+@@ -101,6 +101,17 @@ fn main() {
+     #[cfg(feature = "gpl")]
+     build.define("ALVR_GPL", None);
+ 
++    if platform_name == "windows" {
++        println!("cargo:rerun-if-env-changed=ALVR_PYROWAVE_DIR");
++        println!("cargo:rerun-if-env-changed=FXC");
++        let pyro = PathBuf::from(env::var("ALVR_PYROWAVE_DIR").expect("Pinned PyroWave source required"));
++        build.include(&pyro).include(pyro.join("Granite/third_party/khronos/vulkan-headers/include"));
++        let fxc = env::var("FXC").unwrap_or_else(|_| "fxc.exe".into());
++        let status = std::process::Command::new(fxc).args(["/nologo", "/T", "ps_5_0", "/E", "main", "/Fo"])
++            .arg(out_dir.join("rgbtoyuvplanar.cso"))
++            .arg("cpp/alvr_server/shader/RgbToYuvPlanar.hlsl").status().expect("Run Windows SDK fxc");
++        assert!(status.success(), "Planar shader compilation failed");
++    }
+     build.compile("bindings");
+ 
+     #[cfg(all(target_os = "linux", feature = "gpl"))]
+diff --git a/alvr/server_openvr/cpp/alvr_server/alvr_server.cpp b/alvr/server_openvr/cpp/alvr_server/alvr_server.cpp
+index 3e2bbb0..9513ff5 100644
+--- a/alvr/server_openvr/cpp/alvr_server/alvr_server.cpp
++++ b/alvr/server_openvr/cpp/alvr_server/alvr_server.cpp
+@@ -529,3 +529,7 @@ void CaptureFrame() {
+     }
+ #endif
+ }
++
++const unsigned char* RGBTOYUVPLANAR_CSO_PTR;
++unsigned int RGBTOYUVPLANAR_CSO_LEN;
++void (*ReportPyroWaveFailure)();
+diff --git a/alvr/server_openvr/cpp/alvr_server/bindings.h b/alvr/server_openvr/cpp/alvr_server/bindings.h
+index bcfc7d4..c49e1cc 100644
+--- a/alvr/server_openvr/cpp/alvr_server/bindings.h
++++ b/alvr/server_openvr/cpp/alvr_server/bindings.h
+@@ -172,3 +172,8 @@ void ParseFrameNals(
+ 
+ // CrashHandler.cpp
+ void HookCrashHandler();
++
++extern "C" const unsigned char* RGBTOYUVPLANAR_CSO_PTR;
++extern "C" unsigned int RGBTOYUVPLANAR_CSO_LEN;
++extern "C" void (*ReportPyroWaveFailure)();
++extern "C" bool PyroWaveEncoderAvailable();
+diff --git a/alvr/server_openvr/cpp/alvr_server/shader/RgbToYuvPlanar.hlsl b/alvr/server_openvr/cpp/alvr_server/shader/RgbToYuvPlanar.hlsl
+new file mode 100644
+index 0000000..b556605
+--- /dev/null
++++ b/alvr/server_openvr/cpp/alvr_server/shader/RgbToYuvPlanar.hlsl
+@@ -0,0 +1,51 @@
++// Planar BT.709 conversion; adapted from Galaxy XR ALVR Research (MIT).
++cbuffer YuvPlanarParams {
++	float4 offset; // .x = Y offset, .y = Cb offset, .z = Cr offset
++	float4 yCoeff;
++	float4 uCoeff;
++	float4 vCoeff;
++
++	uint srgbEncode; // 1 when the source SRV decodes sRGB for us, so we must re-encode
++	uint _padding0;
++	uint _padding1;
++	uint _padding2;
++};
++
++Texture2D<float4> sourceTexture;
++
++SamplerState pointSampler {
++	// 4:4:4 is a 1:1 mapping, so there is nothing to filter.
++	Filter = MIN_MAG_MIP_POINT;
++	AddressU = CLAMP;
++	AddressV = CLAMP;
++};
++
++struct PS_OUTPUT {
++	float plane_Y : SV_Target0;
++	float plane_Cb : SV_Target1;
++	float plane_Cr : SV_Target2;
++};
++
++// The composition texture is _UNORM_SRGB and is not TYPELESS, so a non-sRGB view of it cannot be
++// created; sampling therefore returns linear light. YCbCr coefficients expect gamma-encoded RGB,
++// so undo the hardware's sRGB decode. Exact at 8-bit: the intermediate is float32.
++float3 LinearToSrgb(float3 c) {
++	c = saturate(c);
++	float3 lo = c * 12.92;
++	float3 hi = 1.055 * pow(max(c, 1e-8), 1.0 / 2.4) - 0.055;
++	// Component-wise select without HLSL 2021's select().
++	return lerp(lo, hi, step(0.0031308, c));
++}
++
++PS_OUTPUT main(float2 uv : TEXCOORD0) {
++	float3 rgb = sourceTexture.Sample(pointSampler, uv).rgb;
++	if (srgbEncode != 0) {
++		rgb = LinearToSrgb(rgb);
++	}
++
++	PS_OUTPUT output;
++	output.plane_Y = dot(rgb, yCoeff.rgb) + offset.x;
++	output.plane_Cb = dot(rgb, uCoeff.rgb) + offset.y;
++	output.plane_Cr = dot(rgb, vCoeff.rgb) + offset.z;
++	return output;
++}
+diff --git a/alvr/server_openvr/cpp/platform/win32/CEncoder.cpp b/alvr/server_openvr/cpp/platform/win32/CEncoder.cpp
+index 933c720..8e47fd7 100644
+--- a/alvr/server_openvr/cpp/platform/win32/CEncoder.cpp
++++ b/alvr/server_openvr/cpp/platform/win32/CEncoder.cpp
+@@ -1,4 +1,6 @@
+ #include "CEncoder.h"
++#include "VideoEncoderPyroWave.h"
++#include "alvr_server/bindings.h"
+ 
+ CEncoder::CEncoder()
+     : m_bExiting(false)
+@@ -14,6 +16,23 @@ CEncoder::~CEncoder() {
+ }
+ 
+ void CEncoder::Initialize(std::shared_ptr<CD3DRender> d3dRender) {
++    if (Settings::Instance().m_codec == 3) {
++        try {
++            m_FrameRender = std::make_shared<FrameRender>(d3dRender);
++            m_FrameRender->Startup();
++            uint32_t width, height;
++            m_FrameRender->GetEncodingResolution(&width, &height);
++            ID3D11Texture2D* planes[3];
++            m_FrameRender->GetPlanarTextures(planes);
++            m_videoEncoder = std::make_shared<VideoEncoderPyroWave>(d3dRender, width, height, planes);
++            m_videoEncoder->Initialize();
++        } catch (const std::exception& error) {
++            Warn("PyroWave initialization failed: %s", error.what());
++            if (m_videoEncoder) { m_videoEncoder->Shutdown(); m_videoEncoder.reset(); }
++            ReportPyroWaveFailure();
++        }
++        return; // Never send a standard bitstream under the PyroWave codec label.
++    }
+     m_FrameRender = std::make_shared<FrameRender>(d3dRender);
+     m_FrameRender->Startup();
+     uint32_t encoderWidth, encoderHeight;
+@@ -97,6 +116,7 @@ bool CEncoder::CopyToStaging(
+     const std::string& message,
+     const std::string& debugText
+ ) {
++    if (!m_videoEncoder) return false;
+     m_presentationTime = presentationTime;
+     m_targetTimestampNs = targetTimestampNs;
+     m_FrameRender->Startup();
+@@ -116,13 +136,18 @@ void CEncoder::Run() {
+         if (m_bExiting)
+             break;
+ 
+-        if (m_FrameRender->GetTexture()) {
+-            m_videoEncoder->Transmit(
++        if (m_videoEncoder && m_FrameRender->GetTexture()) {
++            try { m_videoEncoder->Transmit(
+                 m_FrameRender->GetTexture().Get(),
+                 m_presentationTime,
+                 m_targetTimestampNs,
+                 m_scheduler.CheckIDRInsertion()
+-            );
++            ); } catch (const std::exception& error) {
++                if (Settings::Instance().m_codec != 3) throw;
++                Warn("PyroWave streaming failed: %s", error.what());
++                m_videoEncoder->Shutdown(); m_videoEncoder.reset();
++                ReportPyroWaveFailure();
++            }
+         }
+ 
+         m_encodeFinished.Set();
+diff --git a/alvr/server_openvr/cpp/platform/win32/FrameRender.cpp b/alvr/server_openvr/cpp/platform/win32/FrameRender.cpp
+index 44e6797..6da178d 100644
+--- a/alvr/server_openvr/cpp/platform/win32/FrameRender.cpp
++++ b/alvr/server_openvr/cpp/platform/win32/FrameRender.cpp
+@@ -544,6 +544,103 @@ bool FrameRender::Startup() {
+         m_pStagingTexture = yuvTexture;
+     }
+ 
++    // PyroWave path: three full-resolution YCbCr planes, 4:4:4. Built after FFE so the planes
++    // carry the foveated image, and instead of -- not alongside -- the NV12 pass, which PyroWave
++    // cannot consume correctly (importing a 2-plane NV12 texture misreads chroma).
++    enablePlanarYuv = (Settings::Instance().m_codec == 3) && !Settings::Instance().m_enableHdr;
++    if (enablePlanarYuv) {
++        uint32_t texWidth, texHeight;
++        GetEncodingResolution(&texWidth, &texHeight);
++
++        // Explicit desc rather than CreateTexture(shared=true): that helper sets only
++        // D3D11_RESOURCE_MISC_SHARED, which yields a legacy KMT handle. NT handles are the path
++        // verified end to end in tools/pyrowave_d3d11, so ask for those.
++        D3D11_TEXTURE2D_DESC planeDesc = {};
++        planeDesc.Width = texWidth;
++        planeDesc.Height = texHeight;
++        planeDesc.MipLevels = 1;
++        planeDesc.ArraySize = 1;
++        planeDesc.Format = DXGI_FORMAT_R8_UNORM;
++        planeDesc.SampleDesc.Count = 1;
++        planeDesc.Usage = D3D11_USAGE_DEFAULT;
++        planeDesc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
++        planeDesc.MiscFlags = D3D11_RESOURCE_MISC_SHARED | D3D11_RESOURCE_MISC_SHARED_NTHANDLE;
++        for (int i = 0; i < 3; i++) {
++            OK_OR_THROW(
++                m_pD3DRender->GetDevice()->CreateTexture2D(
++                    &planeDesc, nullptr, m_planarTextures[i].ReleaseAndGetAddressOf()
++                ),
++                L"Failed to create planar YCbCr texture."
++            );
++        }
++
++        struct YuvPlanarParams {
++            float offset[4];
++            float yCoeff[4];
++            float uCoeff[4];
++            float vCoeff[4];
++            uint32_t srgbEncode;
++            uint32_t padding[3];
++        };
++
++        // BT.709, which is what SDR content actually is. ALVR's existing NV12 path only carries
++        // BT.2020 sets because it is HDR-only.
++        // Chroma is scaled so that +-0.5 lands on 127/255 (full) or 112/255 (limited), matching
++        // the convention of the BT.2020 sets above.
++        const bool fullRange = Settings::Instance().m_useFullRangeEncoding;
++        YuvPlanarParams paramStruct;
++        if (fullRange) {
++            paramStruct = { { 0.0000000f, 0.5019608f, 0.5019608f, 0.0f },
++                            { 0.2126000f, 0.7152000f, 0.0722000f, 0.0f },
++                            { -0.1141230f, -0.3839162f, 0.4980392f, 0.0f },
++                            { 0.4980392f, -0.4523718f, -0.0456674f, 0.0f },
++                            0,
++                            { 0, 0, 0 } };
++        } else {
++            paramStruct = { { 0.0627451f, 0.5019608f, 0.5019608f, 0.0f },
++                            { 0.1825859f, 0.6142313f, 0.0620075f, 0.0f },
++                            { -0.1006437f, -0.3386034f, 0.4392157f, 0.0f },
++                            { 0.4392157f, -0.3989442f, -0.0402715f, 0.0f },
++                            0,
++                            { 0, 0, 0 } };
++        }
++
++        // The composition texture is _UNORM_SRGB and not TYPELESS, so its SRV decodes sRGB and
++        // sampling yields linear light; the shader has to re-encode before the matrix.
++        D3D11_TEXTURE2D_DESC stagingDesc;
++        m_pStagingTexture->GetDesc(&stagingDesc);
++        if (stagingDesc.Format == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB
++            || stagingDesc.Format == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB
++            || stagingDesc.Format == DXGI_FORMAT_B8G8R8X8_UNORM_SRGB) {
++            paramStruct.srgbEncode = 1;
++        }
++
++        // Error() rather than Info(): ALVR routes Info through its event stream, which the
++        // telemetry capture filters down to statistics, so Info lines never reach crash_log.txt.
++        Warn("[PYROWAVE] planar YCbCr 4:4:4 %ux%u, %s range, srgbEncode=%u\n",
++             texWidth,
++             texHeight,
++             fullRange ? "full" : "limited",
++             paramStruct.srgbEncode);
++
++        std::vector<uint8_t> planarShaderCSO(
++            RGBTOYUVPLANAR_CSO_PTR, RGBTOYUVPLANAR_CSO_PTR + RGBTOYUVPLANAR_CSO_LEN
++        );
++        ComPtr<ID3D11Buffer> planarParamBuffer
++            = CreateBuffer(m_pD3DRender->GetDevice(), paramStruct);
++
++        ID3D11Texture2D* planarTargets[3]
++            = { m_planarTextures[0].Get(), m_planarTextures[1].Get(), m_planarTextures[2].Get() };
++        m_planarPipeline = std::make_unique<RenderPipelinePlanar>(m_pD3DRender->GetDevice());
++        m_planarPipeline->Initialize(
++            { m_pStagingTexture.Get() },
++            quadVertexShader.Get(),
++            planarShaderCSO,
++            planarTargets,
++            planarParamBuffer.Get()
++        );
++    }
++
+     Debug("Staging Texture created\n");
+ 
+     return true;
+@@ -885,6 +982,8 @@ bool FrameRender::RenderFrame(
+         m_yuvPipeline->Render();
+     }
+ 
++    if (enablePlanarYuv) m_planarPipeline->Render();
++
+     m_pD3DRender->GetContext()->Flush();
+ 
+     return true;
+@@ -900,3 +999,7 @@ void FrameRender::GetEncodingResolution(uint32_t* width, uint32_t* height) {
+         *height = Settings::Instance().m_renderHeight;
+     }
+ }
++
++void FrameRender::GetPlanarTextures(ID3D11Texture2D* out[3]) {
++    for (int i = 0; i < 3; i++) out[i] = m_planarTextures[i].Get();
++}
+diff --git a/alvr/server_openvr/cpp/platform/win32/FrameRender.h b/alvr/server_openvr/cpp/platform/win32/FrameRender.h
+index 2041488..a7b5c8e 100644
+--- a/alvr/server_openvr/cpp/platform/win32/FrameRender.h
++++ b/alvr/server_openvr/cpp/platform/win32/FrameRender.h
+@@ -16,6 +16,7 @@
+ #include <windows.h>
+ 
+ #include "FFR.h"
++#include "d3d-render-utils/RenderPipelinePlanar.h"
+ #include "alvr_server/openvr_driver_wrap.h"
+ #include "d3d-render-utils/RenderPipelineYUV.h"
+ #include "shared/d3drender.h"
+@@ -63,6 +64,7 @@ public:
+     void GetEncodingResolution(uint32_t* width, uint32_t* height);
+ 
+     ComPtr<ID3D11Texture2D> GetTexture();
++    void GetPlanarTextures(ID3D11Texture2D* out[3]);
+ 
+ private:
+     std::shared_ptr<CD3DRender> m_pD3DRender;
+@@ -110,6 +112,9 @@ private:
+     bool enableFFE;
+ 
+     std::unique_ptr<d3d_render_utils::RenderPipelineYUV> m_yuvPipeline;
++    bool enablePlanarYuv = false;
++    ComPtr<ID3D11Texture2D> m_planarTextures[3];
++    std::unique_ptr<d3d_render_utils::RenderPipelinePlanar> m_planarPipeline;
+ 
+     static bool SetGpuPriority(ID3D11Device* device) {
+         typedef enum _D3DKMT_SCHEDULINGPRIORITYCLASS {
+diff --git a/alvr/server_openvr/cpp/platform/win32/VideoEncoderPyroWave.cpp b/alvr/server_openvr/cpp/platform/win32/VideoEncoderPyroWave.cpp
+new file mode 100644
+index 0000000..b420966
+--- /dev/null
++++ b/alvr/server_openvr/cpp/platform/win32/VideoEncoderPyroWave.cpp
+@@ -0,0 +1,194 @@
++// Selective codec port from Galaxy XR ALVR Research (MIT).
++#include "VideoEncoderPyroWave.h"
++#include "alvr_server/Logger.h"
++#include "alvr_server/Settings.h"
++#include "alvr_server/Utils.h"
++#include "alvr_server/bindings.h"
++#include "d3d-render-utils/RenderUtils.h"
++#include <dxgi1_2.h>
++#include <algorithm>
++#include <cstring>
++
++#define PW(call) do { auto result = (call); if (result != PYROWAVE_SUCCESS) \
++    throw MakeException("PyroWave %s failed (%d)", #call, int(result)); } while (0)
++
++namespace {
++// Address belongs to this driver, independent of process working directory.
++void ModuleAnchor() {}
++struct Handle {
++    HANDLE value = nullptr;
++    ~Handle() { if (value) CloseHandle(value); }
++    void imported() { value = nullptr; }
++};
++}
++
++bool PyroApi::Load() {
++    HMODULE driver = nullptr;
++    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
++            reinterpret_cast<LPCWSTR>(&ModuleAnchor), &driver)) return false;
++    wchar_t path[32768];
++    DWORD length = GetModuleFileNameW(driver, path, 32768);
++    if (!length || length >= 32768) return false;
++    std::wstring filename(path, length);
++    auto slash = filename.find_last_of(L"\\/");
++    if (slash == std::wstring::npos) return false;
++    filename.resize(slash + 1); filename += L"pyrowave-shared.dll";
++    module = LoadLibraryExW(filename.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
++    if (!module) return false;
++#define LOAD(name) name = reinterpret_cast<decltype(name)>(GetProcAddress(module, #name)); if (!name) return false;
++    LOAD(pyrowave_create_device_by_compat)
++    LOAD(pyrowave_device_confirm_interop_support)
++    LOAD(pyrowave_device_destroy)
++    LOAD(pyrowave_image_create)
++    LOAD(pyrowave_image_get_image_view)
++    LOAD(pyrowave_image_destroy)
++    LOAD(pyrowave_encoder_create)
++    LOAD(pyrowave_encoder_destroy)
++    LOAD(pyrowave_encoder_encode_gpu_synchronous)
++    LOAD(pyrowave_encoder_compute_num_packets)
++    LOAD(pyrowave_encoder_packetize)
++    LOAD(pyrowave_sync_object_create)
++    LOAD(pyrowave_sync_object_get_semaphore)
++    LOAD(pyrowave_sync_object_cpu_wait)
++    LOAD(pyrowave_sync_object_destroy)
++#undef LOAD
++    return true;
++}
++
++extern "C" bool PyroWaveEncoderAvailable() {
++    static const bool supported = [] {
++        PyroApi api;
++        if (!api.Load()) return false;
++        pyrowave_device device = nullptr;
++        if (api.pyrowave_create_device_by_compat(0, 0, nullptr, nullptr, nullptr, &device) != PYROWAVE_SUCCESS) return false;
++        pyrowave_encoder encoder = nullptr;
++        pyrowave_encoder_create_info info = { device, 64, 64, PYROWAVE_CHROMA_SUBSAMPLING_444 };
++        bool ok = api.pyrowave_device_confirm_interop_support(device)
++            && api.pyrowave_encoder_create(&info, &encoder) == PYROWAVE_SUCCESS;
++        if (encoder) api.pyrowave_encoder_destroy(encoder);
++        api.pyrowave_device_destroy(device);
++        return ok;
++    }();
++    return supported;
++}
++
++VideoEncoderPyroWave::VideoEncoderPyroWave(std::shared_ptr<CD3DRender> r, int w, int h, ID3D11Texture2D* input[3])
++    : render(r), width(w), height(h) {
++    if (w < 64 || h < 64 || w > 8192 || h > 8192 || uint64_t(w) * h > 40000000)
++        throw MakeException("Unsupported PyroWave geometry");
++    for (int i = 0; i < 3; ++i) {
++        if (!input[i]) throw MakeException("PyroWave requires SDR planar textures");
++        planes[i] = input[i];
++    }
++}
++VideoEncoderPyroWave::~VideoEncoderPyroWave() { Shutdown(); }
++
++void VideoEncoderPyroWave::Initialize() {
++    if (!api.Load()) throw MakeException("PyroWave library unavailable; select AV1 or HEVC");
++    OK_OR_THROW(QUERY(render->GetDevice(), device.GetAddressOf()), L"PyroWave needs ID3D11Device5");
++    OK_OR_THROW(QUERY(render->GetContext(), context.GetAddressOf()), L"PyroWave needs ID3D11DeviceContext4");
++    Microsoft::WRL::ComPtr<IDXGIDevice> dxgi;
++    Microsoft::WRL::ComPtr<IDXGIAdapter> adapter;
++    OK_OR_THROW(QUERY(render->GetDevice(), dxgi.GetAddressOf()), L"No DXGI device");
++    OK_OR_THROW(dxgi->GetAdapter(&adapter), L"No DXGI adapter");
++    DXGI_ADAPTER_DESC desc;
++    OK_OR_THROW(adapter->GetDesc(&desc), L"No adapter description");
++    static_assert(sizeof(LUID) == sizeof(pyrowave_luid));
++    PW(api.pyrowave_create_device_by_compat(0, 0, nullptr, nullptr,
++        reinterpret_cast<pyrowave_luid*>(&desc.AdapterLuid), &pyro));
++    if (!api.pyrowave_device_confirm_interop_support(pyro)) throw MakeException("PyroWave GPU interop unavailable");
++    for (int i = 0; i < 3; ++i) {
++        Microsoft::WRL::ComPtr<IDXGIResource1> resource;
++        OK_OR_THROW(QUERY(planes[i].Get(), resource.GetAddressOf()), L"Plane not shareable");
++        Handle handle;
++        OK_OR_THROW(resource->CreateSharedHandle(nullptr, GENERIC_ALL, nullptr, &handle.value), L"Plane handle failed");
++        VkImageCreateInfo image = { VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
++        image.imageType = VK_IMAGE_TYPE_2D; image.extent = {uint32_t(width), uint32_t(height), 1};
++        image.mipLevels = 1; image.arrayLayers = 1; image.format = VK_FORMAT_R8_UNORM;
++        image.samples = VK_SAMPLE_COUNT_1_BIT; image.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
++        image.tiling = VK_IMAGE_TILING_OPTIMAL;
++        image.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
++        pyrowave_image_create_info info = {};
++        info.device = pyro; info.external_handle = reinterpret_cast<pyrowave_os_handle>(handle.value);
++        info.handle_type = VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D11_TEXTURE_BIT; info.image_create_info = &image;
++        PW(api.pyrowave_image_create(&info, &images[i]));
++        handle.imported(); // successful import consumes the NT handle
++        PW(api.pyrowave_image_get_image_view(images[i], VK_IMAGE_ASPECT_PLANE_0_BIT,
++            VK_IMAGE_USAGE_SAMPLED_BIT, &buffers.planes[i]));
++    }
++    pyrowave_encoder_create_info info = { pyro, width, height, PYROWAVE_CHROMA_SUBSAMPLING_444 };
++    PW(api.pyrowave_encoder_create(&info, &encoder));
++    OK_OR_THROW(device->CreateFence(0, D3D11_FENCE_FLAG_NONE, __uuidof(ID3D11Fence),
++        reinterpret_cast<void**>(renderFence.GetAddressOf())), L"Render fence failed");
++    OK_OR_THROW(device->CreateFence(0, D3D11_FENCE_FLAG_SHARED, __uuidof(ID3D11Fence),
++        reinterpret_cast<void**>(completeFence.GetAddressOf())), L"Completion fence failed");
++    Handle handle;
++    OK_OR_THROW(completeFence->CreateSharedHandle(nullptr, GENERIC_ALL, nullptr, &handle.value), L"Completion handle failed");
++    pyrowave_sync_object_create_info sync = {};
++    sync.device = pyro; sync.external_handle = reinterpret_cast<pyrowave_os_handle>(handle.value);
++    sync.handle_type = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_D3D12_FENCE_BIT;
++    sync.semaphore_type = VK_SEMAPHORE_TYPE_TIMELINE;
++    PW(api.pyrowave_sync_object_create(&sync, &completion));
++    handle.imported();
++    fenceEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
++    if (!fenceEvent) throw MakeException("Render fence event failed");
++    bitstream.resize(8 * 1024 * 1024);
++    uint8_t config[10];
++    uint32_t w = width, h = height;
++    memcpy(config, &w, 4); memcpy(config + 4, &h, 4);
++    config[8] = 1; config[9] = Settings::Instance().m_useFullRangeEncoding ? 1 : 0;
++    SetVideoConfigNals(config, sizeof config, 3);
++    Info("PyroWave encoder ready: %dx%d 4:4:4 SDR", width, height);
++}
++
++void VideoEncoderPyroWave::Shutdown() {
++    if (pending) {
++        // GPU fault: don't free in-flight resources or wait forever inside SteamVR.
++        // Quarantine one failed instance until process exit, then use standard fallback.
++        api.module = nullptr;
++        for (auto &plane : planes) plane.Detach();
++        device.Detach(); context.Detach(); renderFence.Detach(); completeFence.Detach();
++        fenceEvent = nullptr; pyro = nullptr; encoder = nullptr; completion = nullptr;
++        for (auto &image : images) image = nullptr;
++        return;
++    }
++    if (encoder) { api.pyrowave_encoder_destroy(encoder); encoder = nullptr; }
++    for (auto &image : images) if (image) { api.pyrowave_image_destroy(image); image = nullptr; }
++    if (completion) { api.pyrowave_sync_object_destroy(completion); completion = nullptr; }
++    if (pyro) { api.pyrowave_device_destroy(pyro); pyro = nullptr; }
++    if (fenceEvent) { CloseHandle(fenceEvent); fenceEvent = nullptr; }
++}
++
++void VideoEncoderPyroWave::Transmit(ID3D11Texture2D*, uint64_t, uint64_t timestamp, bool) {
++    auto params = GetDynamicEncoderParams();
++    if (params.updated) { bitrate = uint64_t(params.bitrate_bps); fps = uint32_t(params.framerate); }
++    if (!bitrate || !fps) return;
++    pyrowave_rate_control rate = {};
++    rate.maximum_bitstream_size = size_t(std::clamp<uint64_t>(bitrate / 8 / fps, 1024, 4 * 1024 * 1024));
++    OK_OR_THROW(context->Signal(renderFence.Get(), ++fenceValue), L"Render fence signal failed");
++    render->GetContext()->Flush();
++    OK_OR_THROW(renderFence->SetEventOnCompletion(fenceValue, fenceEvent), L"Render wait failed");
++    if (WaitForSingleObject(fenceEvent, 1000) != WAIT_OBJECT_0) throw MakeException("Render GPU timed out");
++    pyrowave_gpu_external_reference refs[3] = {
++        {images[0], VK_QUEUE_FAMILY_EXTERNAL}, {images[1], VK_QUEUE_FAMILY_EXTERNAL}, {images[2], VK_QUEUE_FAMILY_EXTERNAL}
++    };
++    pyrowave_gpu_sync_operation acquire = {}, release = {};
++    acquire.images = refs; acquire.num_images = 3; release = acquire;
++    release.sync.semaphore = api.pyrowave_sync_object_get_semaphore(completion);
++    release.sync.value = fenceValue;
++    pending = true;
++    PW(api.pyrowave_encoder_encode_gpu_synchronous(encoder, &acquire, &release, &buffers, &rate));
++    // Signal follows the encoded-frame readback copy. Never enter packetizer's internal
++    // unbounded fence wait until this explicit one-second GPU completion succeeds.
++    PW(api.pyrowave_sync_object_cpu_wait(completion, fenceValue, 1000000000ull));
++    pending = false;
++    size_t count = 0;
++    PW(api.pyrowave_encoder_compute_num_packets(encoder, bitstream.size(), &count));
++    if (count != 1) throw MakeException("PyroWave frame packet exceeds transport limit");
++    pyrowave_packet packet = {};
++    size_t output = 0;
++    PW(api.pyrowave_encoder_packetize(encoder, &packet, bitstream.size(), &output, bitstream.data(), bitstream.size()));
++    if (output != 1 || packet.offset > bitstream.size() || packet.size > bitstream.size() - packet.offset)
++        throw MakeException("Invalid PyroWave packet bounds");
++    VideoSend(timestamp, bitstream.data() + packet.offset, int(packet.size), true);
++}
+diff --git a/alvr/server_openvr/cpp/platform/win32/VideoEncoderPyroWave.h b/alvr/server_openvr/cpp/platform/win32/VideoEncoderPyroWave.h
+new file mode 100644
+index 0000000..257a970
+--- /dev/null
++++ b/alvr/server_openvr/cpp/platform/win32/VideoEncoderPyroWave.h
+@@ -0,0 +1,61 @@
++#pragma once
++// Selective port from Galaxy XR ALVR Research (MIT); see native source notices.
++#include "VideoEncoder.h"
++#include <d3d11_4.h>
++#include <vulkan/vulkan.h>
++#include "pyrowave.h"
++#include <vector>
++#include <string>
++
++// Resolve lazily from the driver directory. Missing PyroWave/Vulkan DLLs never
++// prevent NVENC AV1/HEVC from loading.
++struct PyroApi {
++    HMODULE module = nullptr;
++#define PYRO_FN(name) decltype(&::name) name = nullptr;
++    PYRO_FN(pyrowave_create_device_by_compat)
++    PYRO_FN(pyrowave_device_confirm_interop_support)
++    PYRO_FN(pyrowave_device_destroy)
++    PYRO_FN(pyrowave_image_create)
++    PYRO_FN(pyrowave_image_get_image_view)
++    PYRO_FN(pyrowave_image_destroy)
++    PYRO_FN(pyrowave_encoder_create)
++    PYRO_FN(pyrowave_encoder_destroy)
++    PYRO_FN(pyrowave_encoder_encode_gpu_synchronous)
++    PYRO_FN(pyrowave_encoder_compute_num_packets)
++    PYRO_FN(pyrowave_encoder_packetize)
++    PYRO_FN(pyrowave_sync_object_create)
++    PYRO_FN(pyrowave_sync_object_get_semaphore)
++    PYRO_FN(pyrowave_sync_object_cpu_wait)
++    PYRO_FN(pyrowave_sync_object_destroy)
++#undef PYRO_FN
++    bool Load();
++    ~PyroApi() { if (module) FreeLibrary(module); }
++};
++
++class VideoEncoderPyroWave : public VideoEncoder {
++public:
++    VideoEncoderPyroWave(std::shared_ptr<CD3DRender>, int, int, ID3D11Texture2D* [3]);
++    ~VideoEncoderPyroWave();
++    void Initialize() override;
++    void Shutdown() override;
++    void Transmit(ID3D11Texture2D*, uint64_t, uint64_t, bool) override;
++private:
++    PyroApi api;
++    std::shared_ptr<CD3DRender> render;
++    int width, height;
++    Microsoft::WRL::ComPtr<ID3D11Texture2D> planes[3];
++    Microsoft::WRL::ComPtr<ID3D11Device5> device;
++    Microsoft::WRL::ComPtr<ID3D11DeviceContext4> context;
++    Microsoft::WRL::ComPtr<ID3D11Fence> renderFence, completeFence;
++    HANDLE fenceEvent = nullptr;
++    uint64_t fenceValue = 0;
++    pyrowave_device pyro = nullptr;
++    pyrowave_encoder encoder = nullptr;
++    pyrowave_sync_object completion = nullptr;
++    pyrowave_image images[3] = {};
++    pyrowave_gpu_buffers buffers = {};
++    std::vector<uint8_t> bitstream;
++    uint64_t bitrate = 0;
++    uint32_t fps = 0;
++    bool pending = false;
++};
+diff --git a/alvr/server_openvr/cpp/platform/win32/d3d-render-utils/RenderPipelinePlanar.cpp b/alvr/server_openvr/cpp/platform/win32/d3d-render-utils/RenderPipelinePlanar.cpp
+new file mode 100644
+index 0000000..33c7069
+--- /dev/null
++++ b/alvr/server_openvr/cpp/platform/win32/d3d-render-utils/RenderPipelinePlanar.cpp
+@@ -0,0 +1,107 @@
++#include "RenderPipelinePlanar.h"
++
++namespace d3d_render_utils {
++
++RenderPipelinePlanar::RenderPipelinePlanar(ID3D11Device* device) {
++    mDevice = device;
++    mDevice->GetImmediateContext(&mImmediateContext);
++}
++
++void RenderPipelinePlanar::Initialize(
++    std::vector<ID3D11Texture2D*> inputTextures,
++    ID3D11VertexShader* quadVertexShader,
++    std::vector<uint8_t>& pixelShaderCSO,
++    ID3D11Texture2D* renderTargets[3],
++    ID3D11Buffer* shaderBuffer
++) {
++    mInputTextureViews.clear();
++    for (auto tex : inputTextures) {
++        Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> resourceView;
++        OK_OR_THROW(
++            mDevice->CreateShaderResourceView(tex, nullptr, resourceView.GetAddressOf()),
++            "Failed to create input texture resource view."
++        );
++        mInputTextureViews.push_back(resourceView);
++    }
++
++    D3D11_TEXTURE2D_DESC firstDesc = {};
++    for (int i = 0; i < 3; i++) {
++        OK_OR_THROW(
++            mDevice->CreateRenderTargetView(renderTargets[i], nullptr, &mRenderTargetViews[i]),
++            "Failed to create plane ID3D11RenderTargetView."
++        );
++
++        D3D11_TEXTURE2D_DESC desc;
++        renderTargets[i]->GetDesc(&desc);
++        if (i == 0) {
++            firstDesc = desc;
++        } else if (desc.Width != firstDesc.Width || desc.Height != firstDesc.Height) {
++            // D3D11 requires every bound target to share dimensions, and silently clipping to the
++            // smallest would corrupt whichever plane is larger.
++            throw MakeException(
++                "Planar render targets must match: plane 0 is %ux%u, plane %d is %ux%u",
++                firstDesc.Width,
++                firstDesc.Height,
++                i,
++                desc.Width,
++                desc.Height
++            );
++        }
++    }
++
++    mViewport.Width = (FLOAT)firstDesc.Width;
++    mViewport.Height = (FLOAT)firstDesc.Height;
++    mViewport.MinDepth = 0.0f;
++    mViewport.MaxDepth = 1.0f;
++    mViewport.TopLeftX = 0.0f;
++    mViewport.TopLeftY = 0.0f;
++
++    mShaderBuffer = shaderBuffer;
++    mVertexShader = quadVertexShader;
++    mPixelShader = CreatePixelShader(mDevice.Get(), pixelShaderCSO);
++
++    // Plain overwrite. The planes are fully written every frame, so there is nothing to blend
++    // with, and each target carries one channel.
++    D3D11_BLEND_DESC blendDesc = { 0 };
++    for (int i = 0; i < 3; i++) {
++        blendDesc.RenderTarget[i].BlendEnable = FALSE;
++        blendDesc.RenderTarget[i].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
++    }
++    blendDesc.IndependentBlendEnable = TRUE;
++    OK_OR_THROW(
++        mDevice->CreateBlendState(&blendDesc, &mBlendState), "Failed to create blend state."
++    );
++}
++
++void RenderPipelinePlanar::Render(ID3D11DeviceContext* otherContext) {
++    ID3D11DeviceContext* context = otherContext != nullptr ? otherContext : mImmediateContext.Get();
++
++    ID3D11RenderTargetView* rtvs[3]
++        = { mRenderTargetViews[0].Get(), mRenderTargetViews[1].Get(), mRenderTargetViews[2].Get() };
++    context->OMSetRenderTargets(3, rtvs, nullptr);
++    context->RSSetViewports(1, &mViewport);
++    context->OMSetBlendState(mBlendState.Get(), nullptr, 0xffffffff);
++
++    if (mShaderBuffer != nullptr) {
++        context->PSSetConstantBuffers(0, 1, mShaderBuffer.GetAddressOf());
++    }
++
++    std::vector<ID3D11ShaderResourceView*> inputTextureViewPtrs;
++    for (auto texView : mInputTextureViews) {
++        inputTextureViewPtrs.push_back(texView.Get());
++    }
++    context->PSSetShaderResources(0, (UINT)inputTextureViewPtrs.size(), &inputTextureViewPtrs[0]);
++
++    context->VSSetShader(mVertexShader.Get(), nullptr, 0);
++    context->PSSetShader(mPixelShader.Get(), nullptr, 0);
++
++    context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
++    context->Draw(4, 0);
++
++    // Leave nothing bound: these targets are handed to PyroWave, and a still-bound RTV would make
++    // the later SRV bind a no-op.
++    ID3D11RenderTargetView* none[3] = { nullptr, nullptr, nullptr };
++    context->OMSetRenderTargets(3, none, nullptr);
++}
++
++}
+diff --git a/alvr/server_openvr/cpp/platform/win32/d3d-render-utils/RenderPipelinePlanar.h b/alvr/server_openvr/cpp/platform/win32/d3d-render-utils/RenderPipelinePlanar.h
+new file mode 100644
+index 0000000..55daafe
+--- /dev/null
++++ b/alvr/server_openvr/cpp/platform/win32/d3d-render-utils/RenderPipelinePlanar.h
+@@ -0,0 +1,40 @@
++#pragma once
++
++#include "RenderUtils.h"
++
++namespace d3d_render_utils {
++
++// A RenderPipeline variant that writes three single-component render targets in one pass, for
++// producing planar YCbCr. RenderPipeline binds exactly one target, and three passes over the same
++// input would be three times the sampling for no reason.
++//
++// All three targets must have the same dimensions, which is why this is 4:4:4 only. Subsampled
++// chroma would need either a second half-resolution pass or the differently-sized-target trick
++// rgbtoyuv420.hlsl relies on.
++class RenderPipelinePlanar {
++public:
++    RenderPipelinePlanar(ID3D11Device* device);
++
++    void Initialize(
++        std::vector<ID3D11Texture2D*> inputTextures,
++        ID3D11VertexShader* quadVertexShader,
++        std::vector<uint8_t>& pixelShaderCSO,
++        ID3D11Texture2D* renderTargets[3],
++        ID3D11Buffer* shaderBuffer = nullptr
++    );
++
++    void Render(ID3D11DeviceContext* otherContext = nullptr);
++
++private:
++    D3D11_VIEWPORT mViewport;
++
++    Microsoft::WRL::ComPtr<ID3D11Device> mDevice;
++    Microsoft::WRL::ComPtr<ID3D11DeviceContext> mImmediateContext;
++    std::vector<Microsoft::WRL::ComPtr<ID3D11ShaderResourceView>> mInputTextureViews;
++    Microsoft::WRL::ComPtr<ID3D11RenderTargetView> mRenderTargetViews[3];
++    Microsoft::WRL::ComPtr<ID3D11Buffer> mShaderBuffer;
++    Microsoft::WRL::ComPtr<ID3D11VertexShader> mVertexShader;
++    Microsoft::WRL::ComPtr<ID3D11PixelShader> mPixelShader;
++    Microsoft::WRL::ComPtr<ID3D11BlendState> mBlendState;
++};
++}
+diff --git a/alvr/server_openvr/src/graphics.rs b/alvr/server_openvr/src/graphics.rs
+index 1e27d97..1c7505d 100644
+--- a/alvr/server_openvr/src/graphics.rs
++++ b/alvr/server_openvr/src/graphics.rs
+@@ -1,3 +1,5 @@
++#[cfg(target_os = "windows")]
++static RGBTOYUVPLANAR_CSO: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/rgbtoyuvplanar.cso"));
+ static FRAME_RENDER_VS_CSO: &[u8] = include_bytes!("../cpp/platform/win32/FrameRenderVS.cso");
+ static FRAME_RENDER_PS_CSO: &[u8] = include_bytes!("../cpp/platform/win32/FrameRenderPS.cso");
+ static QUAD_SHADER_CSO: &[u8] = include_bytes!("../cpp/platform/win32/QuadVertexShader.cso");
+@@ -25,6 +27,8 @@ pub fn initialize_shaders() {
+         crate::COMPRESS_AXIS_ALIGNED_CSO_LEN = COMPRESS_AXIS_ALIGNED_CSO.len() as _;
+         crate::COLOR_CORRECTION_CSO_PTR = COLOR_CORRECTION_CSO.as_ptr();
+         crate::COLOR_CORRECTION_CSO_LEN = COLOR_CORRECTION_CSO.len() as _;
++        crate::RGBTOYUVPLANAR_CSO_PTR = RGBTOYUVPLANAR_CSO.as_ptr();
++        crate::RGBTOYUVPLANAR_CSO_LEN = RGBTOYUVPLANAR_CSO.len() as _;
+         crate::RGBTOYUV420_CSO_PTR = RGBTOYUV420_CSO.as_ptr();
+         crate::RGBTOYUV420_CSO_LEN = RGBTOYUV420_CSO.len() as _;
+         crate::QUAD_SHADER_COMP_SPV_PTR = QUAD_SHADER_COMP_SPV.as_ptr();
+diff --git a/alvr/server_openvr/src/lib.rs b/alvr/server_openvr/src/lib.rs
+index 8d66d79..16bc72a 100644
+--- a/alvr/server_openvr/src/lib.rs
++++ b/alvr/server_openvr/src/lib.rs
+@@ -317,13 +317,11 @@ extern "C" fn send_haptics(device_id: u64, duration_s: f32, frequency: f32, ampl
+ }
+ 
+ extern "C" fn set_video_config_nals(buffer_ptr: *const u8, len: i32, codec: i32) {
+-    let codec = if codec == 0 {
+-        CodecType::H264
+-    } else if codec == 1 {
+-        CodecType::Hevc
+-    } else {
+-        CodecType::AV1
++    let codec = match codec {
++        0 => CodecType::H264, 1 => CodecType::Hevc, 2 => CodecType::AV1,
++        3 => CodecType::PyroWave, _ => return,
+     };
++    if len < 0 || len > 65536 || buffer_ptr.is_null() { return; }
+ 
+     let mut config_buffer = vec![0; len as usize];
+ 
+@@ -477,6 +475,9 @@ pub unsafe extern "C" fn HmdDriverFactory(
+             RegisterButtons = Some(register_buttons);
+             DriverReadyIdle = Some(driver_ready_idle);
+             HapticsSend = Some(send_haptics);
++            ReportPyroWaveFailure = Some(report_pyrowave_failure);
++            #[cfg(target_os = "windows")]
++            alvr_server_core::pcvr_codec::set_encoder_probe(|| PyroWaveEncoderAvailable());
+             SetVideoConfigNals = Some(set_video_config_nals);
+             VideoSend = Some(send_video);
+             GetDynamicEncoderParams = Some(get_dynamic_encoder_params);
+@@ -502,3 +503,5 @@ pub unsafe extern "C" fn HmdDriverFactory(
+ 
+     CppOpenvrEntryPoint(interface_name, return_code)
+ }
++
++extern "C" fn report_pyrowave_failure() { alvr_server_core::pcvr_codec::report_failure(); }
+diff --git a/alvr/session/src/settings.rs b/alvr/session/src/settings.rs
+index 154ddb8..1f750da 100644
+--- a/alvr/session/src/settings.rs
++++ b/alvr/session/src/settings.rs
+@@ -560,6 +560,8 @@ pub enum CodecType {
+     Hevc = 1,
+     #[schema(strings(display_name = "AV1"))]
+     AV1 = 2,
++    #[schema(strings(display_name = "PyroWave (experimental)"))]
++    PyroWave = 3,
+ }
+ 
+ #[repr(u8)]
+diff --git a/alvr/xtask/src/main.rs b/alvr/xtask/src/main.rs
+index eedc468..b9b9e0d 100644
+--- a/alvr/xtask/src/main.rs
++++ b/alvr/xtask/src/main.rs
+@@ -229,7 +229,7 @@ fn main() {
+                     }
+                 }
+                 "build-streamer" => {
+-                    build::build_streamer(profile, gpl, None, false, profiling, keep_config)
++                    build::build_streamer(profile, gpl, None, true, profiling, keep_config)
+                 }
+                 "build-launcher" => build::build_launcher(profile, false),
+                 "build-server-lib" => build::build_server_lib(profile, None, false),
+@@ -242,7 +242,7 @@ fn main() {
+                 }
+                 "run-streamer" => {
+                     if !no_rebuild {
+-                        build::build_streamer(profile, gpl, None, false, profiling, keep_config);
++                        build::build_streamer(profile, gpl, None, true, profiling, keep_config);
+                     }
+                     run_streamer();
+                 }

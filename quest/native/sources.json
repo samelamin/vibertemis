@@ -1,0 +1,6 @@
+{
+  "alvr": {"url":"https://github.com/alvr-org/ALVR.git","commit":"a9f6542fa507a841f40ab4f3fcb531427cd02550"},
+  "pyrowave": {"url":"https://github.com/Themaister/pyrowave.git","commit":"d2997ac172bdc00e29c58e3f2938acb7e94580bf"},
+  "granite": {"url":"https://github.com/Themaister/Granite.git","commit":"842d9d5686ba8c799a7d34a78a68f98d6aeb5a68"},
+  "reference": {"url":"https://github.com/Terminal-ennui/galaxy-xr-alvr-pyrowave-444.git","commit":"54cc8519bddceff57e159e6f39914e373b512809"}
+}
