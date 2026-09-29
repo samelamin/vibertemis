@@ -28,23 +28,30 @@ import com.limelight.preferences.StreamSettings;
 /**
  * Panel-mode launch hub. NOT itself immersive / NOT an OpenXR activity.
  *
- * <p>Two rows, exposed only on capable devices:
+ * <p>The hub exposes a single primary <b>Connect</b> action whose target
+ * is decided by {@link VrCapabilities#isHeadset(android.content.Context)} —
+ * the {@code PackageManager.FEATURE_VR_HEADTRACKING} signal — and never
+ * by user-visible device names or heuristics:
  * <ul>
- *   <li><b>Screen gaming</b> — launches the existing {@link PcView}. The
- *       hub does NOT have to know whether the user is on a headset;
+ *   <li><b>Real headset (FEATURE_VR_HEADTRACKING true)</b> — Connect
+ *       routes into the authenticated PCVR+SteamVR start
+ *       ({@link SteamVrActivity}). Mic permission is requested up front
+ *       (instead of letting ALVR race with our NativeActivity subclass
+ *       over the same runtime grant dialog). On denial we do NOT launch;
+ *       the user sees a clear recovery dialog with an "Open app
+ *       settings" shortcut for permanent-denial states.</li>
+ *   <li><b>Phone / TV / other non-headset</b> — Connect routes into the
+ *       existing flat {@link PcView} start. The upstream
  *       {@code PreferenceConfiguration.readPreferences} gates
  *       {@code enableVrMode} against {@link VrCapabilities#isHeadset} so
- *       the upstream {@code ServerHelper} routes phones to flat
- *       {@code com.limelight.Game} and headsets to
- *       {@code com.limelight.GameXR}.</li>
- *   <li><b>SteamVR (PCVR)</b> — launches {@link SteamVrActivity} only if
- *       the device reports VR headtracking AND we hold
- *       {@code RECORD_AUDIO} permission. The hub requests mic permission
- *       up front (instead of letting ALVR race with our NativeActivity
- *       subclass over the same runtime grant dialog). On denial we do
- *       NOT launch; the user sees a clear recovery dialog with a
- *       "Open app settings" shortcut for permanent-denial states.</li>
+ *       phones never reach {@code com.limelight.GameXR}.</li>
  * </ul>
+ *
+ * <p>On a headset, an explicit <b>Screen gaming</b> row is the per-launch
+ * flat-screen override for the auto-detected PCVR target. On a phone,
+ * the same row is hidden — the primary Connect already goes to
+ * {@code PcView} and a second "screen" button would be a redundant
+ * duplicate of the primary action.
  *
  * <p>Mode switching is only valid from the idle hub. Both target
  * activities own their own XR session lifecycle; the hub does not try
@@ -125,47 +132,46 @@ public class MainHubActivity extends Activity {
             }
         });
 
+        Button connectBtn = findViewById(R.id.hub_btn_connect);
         Button screenBtn = findViewById(R.id.hub_btn_screen);
-        Button steamvrBtn = findViewById(R.id.hub_btn_steamvr);
         Button settingsBtn = findViewById(R.id.hub_btn_settings);
         Button setupBtn = findViewById(R.id.hub_btn_setup);
         TextView subtitle = findViewById(R.id.hub_subtitle);
-        TextView steamvrNote = findViewById(R.id.hub_steamvr_note);
+        TextView connectNote = findViewById(R.id.hub_connect_note);
+        TextView screenNote = findViewById(R.id.hub_screen_note);
 
-        boolean canSteamVr = VrCapabilities.isHeadset(this);
-        if (!canSteamVr) {
-            // On phones the PCVR row stays hidden entirely so no
-            // disabled-button affordance is offered.
-            steamvrBtn.setVisibility(View.GONE);
-            steamvrNote.setVisibility(View.GONE);
+        boolean isHeadset = VrCapabilities.isHeadset(this);
+        if (isHeadset) {
+            // Headset: primary Connect goes to authenticated PCVR; the
+            // Screen gaming row is the explicit per-launch flat
+            // override. The companion reminder is now attached to the
+            // connect-note row because every headset Connect opens
+            // PCVR.
+            subtitle.setText(R.string.hub_subtitle_detected_headset);
+            connectNote.setText(R.string.hub_steamvr_companion_reminder);
+            screenBtn.setVisibility(View.VISIBLE);
+            screenNote.setVisibility(View.VISIBLE);
         } else {
-            steamvrNote.setText(R.string.hub_steamvr_companion_reminder);
-            steamvrNote.setVisibility(View.VISIBLE);
+            // Phone / TV: primary Connect already opens PcView, so the
+            // separate Screen gaming row is hidden — surfacing it
+            // would be a redundant duplicate of the primary action.
+            // The companion reminder line is generic for both modes.
+            subtitle.setText(R.string.hub_subtitle_detected_phone);
+            connectNote.setText(R.string.hub_btn_connect_screen_summary);
+            screenBtn.setVisibility(View.GONE);
+            screenNote.setVisibility(View.GONE);
         }
 
+        connectBtn.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                onConnectTapped();
+            }
+        });
         screenBtn.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 launchScreenGaming();
-            }
-        });
-        steamvrBtn.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                if (!VrCapabilities.isHeadset(MainHubActivity.this)) {
-                    Toast.makeText(MainHubActivity.this,
-                            R.string.hub_steamvr_unsupported,
-                            Toast.LENGTH_LONG).show();
-                    return;
-                }
-                if (launchPending || requestPending || connectPending) {
-                    return;
-                }
-                if (hasMicPermission()) {
-                    launchSteamVr();
-                } else {
-                    requestMicForSteamVr();
-                }
             }
         });
         settingsBtn.setOnClickListener(new View.OnClickListener() {
@@ -180,8 +186,33 @@ public class MainHubActivity extends Activity {
                 launchSetup();
             }
         });
+    }
 
-        subtitle.setText(R.string.hub_subtitle_companion_required);
+    /**
+     * Primary Connect entry. The hub auto-detects device class and
+     * routes to the authenticated PCVR start (headset) or to the
+     * existing flat {@link PcView} start (everything else). Mic
+     * permission is only required on a headset — phone Connect never
+     * asks for it because the flat PcView path does not need it.
+     */
+    private void onConnectTapped() {
+        if (launchPending || requestPending || connectPending) {
+            return;
+        }
+        if (!VrCapabilities.isHeadset(this)) {
+            // Phone / TV: route the primary Connect to flat PcView.
+            // We intentionally do NOT request mic permission here — the
+            // flat path does not need it, and asking on a phone would
+            // surface an unrelated permission dialog that does not
+            // belong to the user's selected action.
+            launchScreenGaming();
+            return;
+        }
+        if (hasMicPermission()) {
+            launchSteamVr();
+        } else {
+            requestMicForSteamVr();
+        }
     }
 
     @Override

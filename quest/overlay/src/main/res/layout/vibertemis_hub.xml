@@ -7,6 +7,21 @@
   android:textColor on the buttons: the platform theme chooses
   foreground/background together so we never paint white text on a
   light native button.
+
+  Layout:
+    title
+    subtitle            (explains detected mode, set in code)
+    status
+    divider
+    Connect (primary)   (always shown)
+    connect summary     (explains what was detected)
+    Screen gaming       (headset only - explicit flat override)
+    screen summary      (headset only)
+    Streaming settings
+    Setup
+
+  No separate manual SteamVR (PCVR) button: the hub detects device
+  class via FEATURE_VR_HEADTRACKING and routes Connect automatically.
 -->
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
@@ -58,6 +73,25 @@
             android:background="#33FFFFFF" />
 
         <Button
+            android:id="@+id/hub_btn_connect"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:minHeight="56dp"
+            android:textSize="18sp"
+            android:text="@string/hub_btn_connect"
+            android:contentDescription="@string/hub_btn_connect" />
+
+        <TextView
+            android:id="@+id/hub_connect_note"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:layout_marginBottom="12dp"
+            android:textSize="16sp"
+            android:textColor="@color/hub_panel_subtle"
+            android:text="@string/hub_subtitle_companion_required" />
+
+        <Button
             android:id="@+id/hub_btn_screen"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -67,6 +101,7 @@
             android:contentDescription="@string/hub_btn_screen" />
 
         <TextView
+            android:id="@+id/hub_screen_note"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="6dp"
@@ -74,26 +109,6 @@
             android:textSize="16sp"
             android:textColor="@color/hub_panel_subtle"
             android:text="@string/hub_btn_screen_summary" />
-
-        <Button
-            android:id="@+id/hub_btn_steamvr"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:minHeight="56dp"
-            android:textSize="18sp"
-            android:text="@string/hub_btn_steamvr"
-            android:contentDescription="@string/hub_btn_steamvr" />
-
-        <TextView
-            android:id="@+id/hub_steamvr_note"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="6dp"
-            android:layout_marginBottom="12dp"
-            android:textSize="16sp"
-            android:textColor="@color/hub_panel_subtle"
-            android:visibility="gone"
-            android:text="@string/hub_steamvr_unsupported" />
 
         <Button
             android:id="@+id/hub_btn_settings"

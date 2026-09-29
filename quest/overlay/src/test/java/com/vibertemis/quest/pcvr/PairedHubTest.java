@@ -67,10 +67,10 @@ public class PairedHubTest {
   public void doubleTapOneRequestAndPauseDropsLateResult() throws Exception {
     ActivityController<TestHub> controller = Robolectric.buildActivity(TestHub.class).setup();
     TestHub hub = controller.get();
-    hub.findViewById(R.id.hub_btn_steamvr).performClick();
+    hub.findViewById(R.id.hub_btn_connect).performClick();
     PcvrTestActions.confirmRestartIfShown();
     assertTrue(entered.await(2, TimeUnit.SECONDS));
-    hub.findViewById(R.id.hub_btn_steamvr).performClick();
+    hub.findViewById(R.id.hub_btn_connect).performClick();
     PcvrTestActions.confirmRestartIfShown();
     hub.findViewById(R.id.hub_btn_screen).performClick();
     assertEquals(1, calls.get());
@@ -86,7 +86,7 @@ public class PairedHubTest {
   public void revokedPermissionBeforeResponseNeverEntersVr() throws Exception {
     ActivityController<TestHub> controller = Robolectric.buildActivity(TestHub.class).setup();
     TestHub hub = controller.get();
-    hub.findViewById(R.id.hub_btn_steamvr).performClick();
+    hub.findViewById(R.id.hub_btn_connect).performClick();
     PcvrTestActions.confirmRestartIfShown();
     assertTrue(entered.await(2, TimeUnit.SECONDS));
     Shadows.shadowOf(RuntimeEnvironment.getApplication())

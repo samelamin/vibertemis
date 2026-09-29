@@ -281,14 +281,14 @@ public class QuestUiScreenshotTest {
         int w = dp(360), h = dp(640);
         Bitmap b = snapshotActivity(c.get(), w, h);
         assertExactDimsAndNonBlank(b, w, h, "hub_phone_portrait");
-        assertTouchTargetHeight(c.get().findViewById(R.id.hub_btn_screen), 56,
-                "hub_btn_screen");
-        assertTouchTargetHeight(c.get().findViewById(R.id.hub_btn_steamvr), 56,
-                "hub_btn_steamvr");
+        assertTouchTargetHeight(c.get().findViewById(R.id.hub_btn_connect), 56,
+                "hub_btn_connect");
         assertTouchTargetHeight(c.get().findViewById(R.id.hub_btn_settings), 56,
                 "hub_btn_settings");
         assertTouchTargetHeight(c.get().findViewById(R.id.hub_btn_setup), 56,
                 "hub_btn_setup");
+        // The explicit flat-screen override is hidden on phones; the
+        // touch-target height assertion is therefore skipped here.
         writePng(b, new File(outDir, "hub_phone_360x640.png"));
     }
 
@@ -351,6 +351,16 @@ public class QuestUiScreenshotTest {
         int w = dp(1000), h = dp(700);
         Bitmap b = snapshotActivity(c.get(), w, h);
         assertExactDimsAndNonBlank(b, w, h, "hub_headset");
+        // On a headset all four primary rows are visible: Connect,
+        // Screen gaming (explicit flat override), Settings, Setup.
+        assertTouchTargetHeight(c.get().findViewById(R.id.hub_btn_connect), 56,
+                "hub_btn_connect");
+        assertTouchTargetHeight(c.get().findViewById(R.id.hub_btn_screen), 56,
+                "hub_btn_screen");
+        assertTouchTargetHeight(c.get().findViewById(R.id.hub_btn_settings), 56,
+                "hub_btn_settings");
+        assertTouchTargetHeight(c.get().findViewById(R.id.hub_btn_setup), 56,
+                "hub_btn_setup");
         writePng(b, new File(outDir, "hub_headset_1000x700.png"));
     }
 

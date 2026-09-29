@@ -9,10 +9,31 @@
     <string name="hub_status_screen_summary">Screen streaming: %1$s @ %2$s fps, %3$s Mbps, codec %4$s.</string>
     <string name="hub_status_unknown">Screen streaming: open Streaming settings to choose values.</string>
 
-    <string name="hub_btn_screen">Screen gaming</string>
-    <string name="hub_btn_screen_summary">Stream PC games to a virtual screen on the headset or phone. Optional synthetic 3D on headsets.</string>
+    <!-- Primary Connect button. The hub auto-detects device class via
+         PackageManager.FEATURE_VR_HEADTRACKING: a real headset routes
+         Connect into the authenticated PCVR start; a phone or other
+         non-headset device routes Connect into the existing flat
+         PcView start. There is no separate manual VR-mode choice for
+         normal Connect. The explicit Flat screen override below is
+         only shown on a headset, where the primary Connect is PCVR. -->
+    <string name="hub_btn_connect">Connect</string>
+    <string name="hub_btn_connect_screen_summary">Choose your paired PC, or add a PC to get started.</string>
+    <string name="hub_subtitle_detected_headset">VR headset detected. Connect to play SteamVR games.</string>
+    <string name="hub_subtitle_detected_phone">Connect to stream PC games.</string>
 
-    <string name="hub_btn_steamvr">SteamVR (PCVR)</string>
+    <!-- Explicit Flat screen override. Only shown on a real headset,
+         where it differs from the primary Connect target. Hidden on
+         phones because the primary Connect already routes to the
+         flat PcView there. -->
+    <string name="hub_btn_screen">Flat screen</string>
+    <string name="hub_btn_screen_summary">Play regular PC games on a virtual screen.</string>
+
+    <!-- Legacy names retained so the old resource references in
+         MainHubActivity (and any future copy that still uses them)
+         resolve cleanly. The hub no longer surfaces a separate manual
+         SteamVR (PCVR) button; the primary Connect handles headset
+         detection and routing automatically. -->
+    <string name="hub_btn_steamvr">Connect</string>
     <string name="hub_steamvr_unsupported">PCVR requires a VR headset.</string>
     <string name="hub_steamvr_companion_reminder">PCVR needs the matching Windows host from this release. See Setup for installation and automatic SteamVR startup.</string>
     <string name="hub_mic_denied">Microphone permission is required to start SteamVR. PCVR not started.</string>

@@ -45,7 +45,7 @@ public class NativeConsentTest {
     options.bitrate(true, 25);
     try (var controller = Robolectric.buildActivity(ManualNativeHub.class).setup()) {
       var hub = controller.get();
-      hub.findViewById(R.id.hub_btn_steamvr).performClick();
+      hub.findViewById(R.id.hub_btn_connect).performClick();
       assertNull(Shadows.shadowOf(hub).getNextStartedActivity());
       ShadowAlertDialog.getLatestAlertDialog()
           .getButton(AlertDialog.BUTTON_POSITIVE)
@@ -65,7 +65,7 @@ public class NativeConsentTest {
   public void leavingHubInvalidatesPendingConfirmation() {
     try (var controller = Robolectric.buildActivity(ManualNativeHub.class).setup()) {
       var hub = controller.get();
-      hub.findViewById(R.id.hub_btn_steamvr).performClick();
+      hub.findViewById(R.id.hub_btn_connect).performClick();
       AlertDialog dialog = ShadowAlertDialog.getLatestAlertDialog();
       controller.pause();
       dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick();

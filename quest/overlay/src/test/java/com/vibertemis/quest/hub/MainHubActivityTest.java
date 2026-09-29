@@ -37,6 +37,20 @@ import static org.junit.Assert.assertTrue;
  * the user actions and assert what
  * {@link ShadowApplication#getNextStartedActivity()} returns.
  *
+ * <p>The hub exposes a single primary <b>Connect</b> button that
+ * auto-detects device class:
+ * <ul>
+ *   <li>real headset (FEATURE_VR_HEADTRACKING true) + mic granted:
+ *       Connect routes to {@link SteamVrActivity} via the explicit
+ *       {@code ComponentName} with the immersive VR categories and
+ *       {@code FLAG_ACTIVITY_NEW_TASK}.</li>
+ *   <li>real headset + mic denied: Connect dispatches a permission
+ *       request first, and never starts {@link SteamVrActivity} on
+ *       denial.</li>
+ *   <li>phone / non-headset: Connect routes to the flat
+ *       {@link PcView} start. Mic permission is never requested.</li>
+ * </ul>
+ *
  * <p>The hub must:
  * <ul>
  *   <li>never launch PCVR when the device is not a headset,</li>
@@ -45,6 +59,8 @@ import static org.junit.Assert.assertTrue;
  *   <li>on a headset with the mic permission granted, start
  *       {@link SteamVrActivity} via the explicit {@code ComponentName}
  *       with the immersive VR categories and {@code FLAG_ACTIVITY_NEW_TASK}.</li>
+ *   <li>on a phone, route the primary Connect to {@link PcView}
+ *       without asking for mic permission,</li>
  *   <li>guard against in-flight permission requests and pending
  *       launches so rapid taps and duplicate callbacks cannot start two
  *       activities at once,</li>
@@ -94,28 +110,44 @@ public class MainHubActivityTest {
                 .equals(i.getComponent().getClassName());
     }
 
+    private static boolean isPcViewIntent(Intent i) {
+        if (i == null || i.getComponent() == null) return false;
+        return PcView.class.getName().equals(i.getComponent().getClassName());
+    }
+
     /**
-     * On a phone (no headtracking), tapping the SteamVR row must NOT
-     * launch SteamVrActivity.
+     * On a phone (no headtracking), tapping the primary Connect must
+     * route to the flat PcView, NOT to SteamVrActivity. The hub must
+     * also hide the explicit flat-screen override because it would be
+     * redundant with the primary Connect on a non-headset.
      */
     @Test
-    public void phone_tapSteamVr_doesNotLaunchPcvr() {
+    public void phone_tapConnect_routesToPcView_notPcvr() {
         setHeadset(false);
         ActivityController<MainHubActivity> c = startHub();
 
-        View root = c.get().findViewById(R.id.hub_btn_steamvr);
+        // The explicit flat override is hidden on phones — the
+        // primary Connect already routes to flat.
+        View screen = c.get().findViewById(R.id.hub_btn_screen);
+        assertEquals("Flat override must be hidden on phones",
+                View.GONE, screen.getVisibility());
+
+        View root = c.get().findViewById(R.id.hub_btn_connect);
         root.performClick();
         com.vibertemis.quest.pcvr.PcvrTestActions.confirmRestartIfShown();
 
-        // Walk every started activity Robolectric captured; none must
-        // target SteamVrActivity.
+        // Walk every started activity Robolectric captured; one must
+        // target PcView and none must target SteamVrActivity.
         ShadowApplication app = ShadowApplication.getInstance();
         Intent i;
         boolean sawPcvr = false;
+        boolean sawPcView = false;
         while ((i = app.getNextStartedActivity()) != null) {
             if (isSteamVrIntent(i)) sawPcvr = true;
+            if (isPcViewIntent(i)) sawPcView = true;
         }
         assertFalse("Phone must not launch SteamVrActivity", sawPcvr);
+        assertTrue("Phone Connect must launch PcView", sawPcView);
     }
 
     /**
@@ -130,7 +162,7 @@ public class MainHubActivityTest {
         grantMic(false);
         ActivityController<MainHubActivity> c = startHub();
 
-        View root = c.get().findViewById(R.id.hub_btn_steamvr);
+        View root = c.get().findViewById(R.id.hub_btn_connect);
         root.performClick();
         com.vibertemis.quest.pcvr.PcvrTestActions.confirmRestartIfShown();
 
@@ -178,7 +210,13 @@ public class MainHubActivityTest {
         grantMic(true);
         ActivityController<MainHubActivity> c = startHub();
 
-        View root = c.get().findViewById(R.id.hub_btn_steamvr);
+        // The explicit flat override is visible on a headset because
+        // it differs from the primary Connect target there.
+        View screen = c.get().findViewById(R.id.hub_btn_screen);
+        assertEquals("Flat override must be visible on headsets",
+                View.VISIBLE, screen.getVisibility());
+
+        View root = c.get().findViewById(R.id.hub_btn_connect);
         root.performClick();
         com.vibertemis.quest.pcvr.PcvrTestActions.confirmRestartIfShown();
 
@@ -202,47 +240,48 @@ public class MainHubActivityTest {
     }
 
     /**
-     * Screen gaming row launches the upstream PcView regardless of
-     * headset / mic state.
+     * Explicit flat override on a headset: tapping Screen gaming
+     * launches the flat PcView, NOT SteamVrActivity. The flat path
+     * must not require mic permission because it does not start
+     * SteamVR.
      */
     @Test
-    public void screenGaming_tap_launchesPcView() {
-        setHeadset(false);
+    public void headset_tapFlatOverride_launchesPcView() {
+        setHeadset(true);
         grantMic(false);
         ActivityController<MainHubActivity> c = startHub();
 
-        View root = c.get().findViewById(R.id.hub_btn_screen);
-        root.performClick();
+        View screen = c.get().findViewById(R.id.hub_btn_screen);
+        screen.performClick();
         com.vibertemis.quest.pcvr.PcvrTestActions.confirmRestartIfShown();
 
         ShadowApplication app = ShadowApplication.getInstance();
-        Intent pc = null;
         Intent i;
+        boolean sawPcvr = false;
+        boolean sawPcView = false;
         while ((i = app.getNextStartedActivity()) != null) {
-            if (i.getComponent() != null
-                    && PcView.class.getName().equals(
-                            i.getComponent().getClassName())) {
-                pc = i;
-                break;
-            }
+            if (isSteamVrIntent(i)) sawPcvr = true;
+            if (isPcViewIntent(i)) sawPcView = true;
         }
-        assertNotNull(pc);
-        assertEquals(PcView.class.getName(), pc.getComponent().getClassName());
+        assertFalse("Explicit flat override on a headset must NOT launch PCVR",
+                sawPcvr);
+        assertTrue("Explicit flat override on a headset must launch PcView",
+                sawPcView);
     }
 
     /**
-     * Rapid double-tap on the PCVR row with mic already granted must
-     * not start two SteamVrActivity instances. The launch guard is
-     * set on the first tap and only released when the user returns
-     * to the hub.
+     * Rapid double-tap on Connect with mic already granted must not
+     * start two SteamVrActivity instances. The launch guard is set on
+     * the first tap and only released when the user returns to the
+     * hub.
      */
     @Test
-    public void rapidTapSteamVr_doesNotLaunchTwice() {
+    public void rapidTapConnect_doesNotLaunchTwice() {
         setHeadset(true);
         grantMic(true);
         ActivityController<MainHubActivity> c = startHub();
 
-        View root = c.get().findViewById(R.id.hub_btn_steamvr);
+        View root = c.get().findViewById(R.id.hub_btn_connect);
         root.performClick();
         com.vibertemis.quest.pcvr.PcvrTestActions.confirmRestartIfShown();
         // Second tap before the first launch has been consumed by the
@@ -268,12 +307,12 @@ public class MainHubActivityTest {
      * second tap until the first result returns.
      */
     @Test
-    public void rapidTapSteamVr_micNotGranted_dispatchesOneRequest() {
+    public void rapidTapConnect_micNotGranted_dispatchesOneRequest() {
         setHeadset(true);
         grantMic(false);
         ActivityController<MainHubActivity> c = startHub();
 
-        View root = c.get().findViewById(R.id.hub_btn_steamvr);
+        View root = c.get().findViewById(R.id.hub_btn_connect);
         root.performClick();
         com.vibertemis.quest.pcvr.PcvrTestActions.confirmRestartIfShown();
         root.performClick();
@@ -302,8 +341,8 @@ public class MainHubActivityTest {
         grantMic(false);
         ActivityController<MainHubActivity> c = startHub();
 
-        // Dispatch a SteamVR tap so a permission request is in flight.
-        View root = c.get().findViewById(R.id.hub_btn_steamvr);
+        // Dispatch a Connect tap so a permission request is in flight.
+        View root = c.get().findViewById(R.id.hub_btn_connect);
         root.performClick();
         com.vibertemis.quest.pcvr.PcvrTestActions.confirmRestartIfShown();
 
@@ -334,7 +373,7 @@ public class MainHubActivityTest {
         grantMic(false);
         ActivityController<MainHubActivity> c = startHub();
 
-        View root = c.get().findViewById(R.id.hub_btn_steamvr);
+        View root = c.get().findViewById(R.id.hub_btn_connect);
         root.performClick();
         com.vibertemis.quest.pcvr.PcvrTestActions.confirmRestartIfShown();
         c.get().onRequestPermissionsResult(
@@ -362,7 +401,7 @@ public class MainHubActivityTest {
         grantMic(true);
         ActivityController<MainHubActivity> c = startHub();
 
-        View root = c.get().findViewById(R.id.hub_btn_steamvr);
+        View root = c.get().findViewById(R.id.hub_btn_connect);
         root.performClick();
         com.vibertemis.quest.pcvr.PcvrTestActions.confirmRestartIfShown();
 
@@ -392,7 +431,7 @@ public class MainHubActivityTest {
 
     /**
      * Granting phone-style mic (CAMERA, not RECORD_AUDIO) for the
-     * request code path that goes through the SteamVR button must not
+     * request code path that goes through the Connect button must not
      * launch PCVR. The hub keys the result on the permission NAME, not
      * the request code alone.
      */
@@ -402,7 +441,7 @@ public class MainHubActivityTest {
         grantMic(false);
         ActivityController<MainHubActivity> c = startHub();
 
-        View root = c.get().findViewById(R.id.hub_btn_steamvr);
+        View root = c.get().findViewById(R.id.hub_btn_connect);
         root.performClick();
         com.vibertemis.quest.pcvr.PcvrTestActions.confirmRestartIfShown();
 
@@ -472,7 +511,7 @@ public class MainHubActivityTest {
         grantMic(false);
         ActivityController<MainHubActivity> c = startHub();
 
-        View root = c.get().findViewById(R.id.hub_btn_steamvr);
+        View root = c.get().findViewById(R.id.hub_btn_connect);
         root.performClick();
         com.vibertemis.quest.pcvr.PcvrTestActions.confirmRestartIfShown();
 
@@ -496,7 +535,7 @@ public class MainHubActivityTest {
         // "no launches because no permission". With the flag, we
         // can additionally assert: re-tapping while the request is
         // still pending does NOT dispatch a second permission request.
-        View rootReborn = reborn.get().findViewById(R.id.hub_btn_steamvr);
+        View rootReborn = reborn.get().findViewById(R.id.hub_btn_connect);
         // First result — granted. Test still denies, but the request
         // flag is consumed by the first delivery.
         reborn.get().onRequestPermissionsResult(
@@ -549,10 +588,10 @@ public class MainHubActivityTest {
         ShadowApplication app = ShadowApplication.getInstance();
         Intent i;
 
-        // Tap PCVR — dispatch sends a permission request and sets
+        // Tap Connect — dispatch sends a permission request and sets
         // requestPending. No SteamVrActivity launch yet (mic denied).
-        View pcvr = c.get().findViewById(R.id.hub_btn_steamvr);
-        pcvr.performClick();
+        View connect = c.get().findViewById(R.id.hub_btn_connect);
+        connect.performClick();
         com.vibertemis.quest.pcvr.PcvrTestActions.confirmRestartIfShown();
         int pcvrBeforeGrant = 0;
         while ((i = app.getNextStartedActivity()) != null) {
@@ -587,7 +626,7 @@ public class MainHubActivityTest {
         // NOT launch anything — the hub never observed a real
         // launched-activity pause for the FIRST tap, so launchLeftHub
         // is still false and launchPending is still true.
-        pcvr.performClick();
+        connect.performClick();
         com.vibertemis.quest.pcvr.PcvrTestActions.confirmRestartIfShown();
         int pcvrDouble = 0;
         while ((i = app.getNextStartedActivity()) != null) {
@@ -645,9 +684,9 @@ public class MainHubActivityTest {
         ShadowApplication app = ShadowApplication.getInstance();
         Intent i;
 
-        // Tap PCVR — launches SteamVrActivity, sets launchPending.
-        View steamvr = c.get().findViewById(R.id.hub_btn_steamvr);
-        steamvr.performClick();
+        // Tap Connect — launches SteamVrActivity, sets launchPending.
+        View connect = c.get().findViewById(R.id.hub_btn_connect);
+        connect.performClick();
         com.vibertemis.quest.pcvr.PcvrTestActions.confirmRestartIfShown();
         int first = 0;
         while ((i = app.getNextStartedActivity()) != null) {
@@ -698,5 +737,40 @@ public class MainHubActivityTest {
         }
         assertEquals("Setup after actual leave-and-return must launch", 1,
                 setupAfterReturn);
+    }
+
+    /**
+     * Phone Connect must never request mic permission. The flat
+     * PcView path does not need RECORD_AUDIO; asking for it would
+     * surface an unrelated permission dialog.
+     */
+    @Test
+    public void phone_connect_doesNotRequestMicPermission() {
+        setHeadset(false);
+        grantMic(false);
+        ActivityController<MainHubActivity> c = startHub();
+
+        View connect = c.get().findViewById(R.id.hub_btn_connect);
+        connect.performClick();
+        com.vibertemis.quest.pcvr.PcvrTestActions.confirmRestartIfShown();
+
+        ShadowApplication app = ShadowApplication.getInstance();
+        Intent i;
+        boolean sawPermissionRequest = false;
+        boolean sawPcView = false;
+        while ((i = app.getNextStartedActivity()) != null) {
+            // Robolectric records permission requests via the
+            // ShadowApplication too — any non-null component means
+            // the hub tried to start a permission flow.
+            if (i.getComponent() == null) {
+                sawPermissionRequest = true;
+            }
+            if (isPcViewIntent(i)) {
+                sawPcView = true;
+            }
+        }
+        assertFalse("Phone Connect must not dispatch a permission request",
+                sawPermissionRequest);
+        assertTrue("Phone Connect must launch PcView", sawPcView);
     }
 }
