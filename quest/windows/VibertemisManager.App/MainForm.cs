@@ -294,9 +294,11 @@ public sealed partial class MainForm : Form
         // ABOVE the footer so the action row + code stay visible
         // while the scroll area above scrolls if the form is
         // short).
-        Controls.Add(footer);
-        Controls.Add(_panelApproval);
+        // WinForms docks in reverse z-order: reserve bottom panels first,
+        // then let the scroll host fill only the remaining visible space.
         Controls.Add(scrollHost);
+        Controls.Add(_panelApproval);
+        Controls.Add(footer);
         foreach (Control c in root.Controls)
         {
             if (c is Label or CheckBox or Button) c.AutoSize = true;

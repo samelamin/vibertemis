@@ -419,6 +419,15 @@ try {
     [RecoverySmokeUi]::Click($resumeBtn)
     Wait-Until { [RecoverySmokeUi]::Find($script:managerProcess.Id,'Host ready: receiving pairing requests is ON.') -ne [IntPtr]::Zero } 'resumed label'
 
+    # Approved results remain retrievable for the challenge TTL, even after
+    # pause/resume. Wait for natural expiry; Cancel would revoke the saved
+    # credential and would not test retention across the following restart.
+    Wait-Until {
+        $snapshot = Send-Admin '/pairing/admin/pending' $null
+        if ($snapshot.devices -lt 1) { throw 'Approved device was lost before the next pairing' }
+        return $snapshot.state -eq 'waiting'
+    } 'approved result expires while paired device is retained' 210
+
     # A rejected admin decision must preserve the pending request so the
     # owner can still make a valid decision through the visible UI.
     $begin2 = New-LanBegin -Address $adapter.Address
