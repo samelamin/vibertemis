@@ -122,9 +122,9 @@ function Capture-ManagerScreenshot {
         $bmp.Save($Path, [System.Drawing.Imaging.ImageFormat]::Png)
     } finally { $bmp.Dispose() }
 }
-function Wait-Until([scriptblock]$Check, [string]$Label, [int]$Seconds=60) {
+function Wait-Until([scriptblock]$Check, [string]$Label, [int]$Seconds=60, [int]$PollMilliseconds=300) {
     $until = [DateTime]::UtcNow.AddSeconds($Seconds)
-    do { if (& $Check) { return }; Start-Sleep -Milliseconds 300 } while ([DateTime]::UtcNow -lt $until)
+    do { if (& $Check) { return }; Start-Sleep -Milliseconds $PollMilliseconds } while ([DateTime]::UtcNow -lt $until)
     throw "Timed out: $Label"
 }
 $settingsDir = Join-Path $env:LOCALAPPDATA 'VibertemisVRHostManager'
@@ -422,11 +422,12 @@ try {
     # Approved results remain retrievable for the challenge TTL, even after
     # pause/resume. Wait for natural expiry; Cancel would revoke the saved
     # credential and would not test retention across the following restart.
+    # Poll slowly: this shares the loopback request budget with the manager.
     Wait-Until {
         $snapshot = Send-Admin '/pairing/admin/pending' $null
         if ($snapshot.devices -lt 1) { throw 'Approved device was lost before the next pairing' }
         return $snapshot.state -eq 'waiting'
-    } 'approved result expires while paired device is retained' 210
+    } 'approved result expires while paired device is retained' 210 3000
 
     # A rejected admin decision must preserve the pending request so the
     # owner can still make a valid decision through the visible UI.
