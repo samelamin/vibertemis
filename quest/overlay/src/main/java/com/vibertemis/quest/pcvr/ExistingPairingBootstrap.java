@@ -37,6 +37,7 @@ public final class ExistingPairingBootstrap {
         LinkedHashSet<ComputerDetails.AddressTuple> addresses = new LinkedHashSet<>();
         addresses.add(pc.activeAddress); addresses.add(pc.manualAddress); addresses.add(pc.localAddress);
         addresses.add(pc.remoteAddress); addresses.add(pc.ipv6Address); addresses.remove(null);
+        boolean vrTransportFailed = false;
         for (ComputerDetails.AddressTuple address : addresses) {
             if (cancelled) throw new IOException("Cancelled");
             URL base;
@@ -70,13 +71,15 @@ public final class ExistingPairingBootstrap {
             } catch (SetupFailure e) { throw e; }
             catch (Exception e) {
                 if (cancelled) throw new IOException("Cancelled");
-                throw new SetupFailure("Could not reach the VR host. Use your home network or a VPN to home; GameStream port forwarding alone does not carry VR.");
+                vrTransportFailed = true;
+                continue;
             }
             validateRedemption(result, grant);
             result.put("host_address",new ComputerDetails.AddressTuple(base.getHost(),grant.getInt("port")).toString());
             return HostPairing.parse(result.toString());
         }
         if (cancelled) throw new IOException("Cancelled");
+        if (vrTransportFailed) throw new SetupFailure("Could not reach the VR host. Use your home network or a VPN to home; GameStream port forwarding alone does not carry VR.");
         throw new SetupFailure("Could not reach the paired PC. Check its address and network, and make sure the VR-enabled Vibeshine update is installed.");
     }
 

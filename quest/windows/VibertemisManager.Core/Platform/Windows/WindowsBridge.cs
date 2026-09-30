@@ -336,7 +336,7 @@ public sealed class WindowsBridgeKeyWriter : IBridgeKeyWriter
             using (var created = baseKey.CreateSubKey(subKey, Microsoft.Win32.RegistryKeyPermissionCheck.Default)) {
                 if (created is null) return BridgeWriteOutcome.AccessDenied;
             }
-            key = baseKey.OpenSubKey(subKey,
+            key = baseKey.OpenSubKey(subKey, Microsoft.Win32.RegistryKeyPermissionCheck.ReadWriteSubTree,
                 System.Security.AccessControl.RegistryRights.ReadKey | System.Security.AccessControl.RegistryRights.WriteKey |
                 System.Security.AccessControl.RegistryRights.ChangePermissions | System.Security.AccessControl.RegistryRights.TakeOwnership);
             if (key is null) return BridgeWriteOutcome.AccessDenied;
