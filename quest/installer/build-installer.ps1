@@ -55,7 +55,7 @@ if (-not (Test-Path $vcRedistOut)) {
     try {
         Invoke-WebRequest -Uri $vcRedistUrl -OutFile $vcRedistOut -MaximumRedirection 5 -UseBasicParsing
     } catch {
-        throw "Failed to download bundled vc_redist.x64.exe from $vcRedistUrl: $($_.Exception.Message)"
+        throw "Failed to download bundled vc_redist.x64.exe from ${vcRedistUrl}: $($_.Exception.Message)"
     }
 }
 if (-not (Test-Path $vcRedistOut)) { throw "vc_redist.x64.exe was not downloaded." }
