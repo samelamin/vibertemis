@@ -78,3 +78,7 @@ peer trust, native identity and Tailscale boundary. Codex independently checked
 the installed-version probe, retained processes/events, failure reporting and
 test coverage. Local results: Android128, Core161, Go race/vet passed; signed APK
 version6 preserves the existing signer. Real Windows CI remains the release gate.
+
+Agy also approved the final UX delta: visible download progress text, actionable
+missing-SteamVR setup guidance and an error dialog when an attempted install
+cannot reopen the app. Revalidation: Core161 and Windows cross-build passed.

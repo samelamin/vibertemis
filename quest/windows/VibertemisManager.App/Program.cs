@@ -153,7 +153,7 @@ internal static class Program
 
     private static int RunApplyUpdate(string jobPath)
     {
-        // The worker never uses Windows Forms or the app mutex. It
+        // The worker never acquires the app mutex. It
         // runs with the assembly's TFM-appropriate entry point and
         // avoids touching anything that would interfere with the
         // installer's BusyReason check or the running manager.
@@ -165,6 +165,10 @@ internal static class Program
             var outcomePath = DefaultOutcomePath();
             var inputs = UpdateJobInputs.For(jobPath, paths.UpdateCacheDir, env.CurrentExecutablePath);
             var result = worker.Run(inputs, outcomePath);
+            if (!result.Outcome.IsSuccess && result.InstallerLaunched && result.RestartedPid is null)
+                MessageBox.Show("The update could not finish and the manager could not reopen.\n\n" + result.Outcome.Detail
+                    + "\n\nOpen VibertemisVR Host Manager again, or run the release installer manually.\nInstaller log: " + result.Outcome.InstallerLogPath,
+                    "Vibertemis update needs attention", MessageBoxButtons.OK, MessageBoxIcon.Error);
             return result.Outcome.IsSuccess ? 0 : 1;
         }
         catch (Exception ex)
@@ -182,6 +186,7 @@ internal static class Program
                     InstallerLogPath: "",
                     Detail: ex.Message,
                     Timestamp: DateTime.UtcNow);
+                Directory.CreateDirectory(Path.GetDirectoryName(DefaultOutcomePath())!);
                 File.WriteAllText(DefaultOutcomePath(), fallback.Serialize());
             }
             catch { }

@@ -203,10 +203,9 @@ public sealed partial class MainForm : Form
         root.Controls.Add(readinessHint, 0, 10);
         root.SetColumnSpan(readinessHint, 2);
 
-        var updatePanel = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true };
-        updatePanel.Controls.Add(_updateProgressLabel);
         var progressRow = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, FlowDirection = FlowDirection.LeftToRight };
         progressRow.Controls.Add(_updateProgress);
+        progressRow.Controls.Add(_updateProgressLabel);
         root.Controls.Add(new Label { Text = "Update download" }, 0, 11);
         root.Controls.Add(progressRow, 1, 11);
 

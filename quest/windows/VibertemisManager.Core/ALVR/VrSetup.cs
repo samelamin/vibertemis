@@ -23,8 +23,13 @@ public sealed class VrSetup
     }
 
     private string Runtime => Path.Combine(_root, "runtime");
-    private JsonObject ReadPaths() => JsonNode.Parse(File.ReadAllText(_vrpaths)) as JsonObject
-        ?? throw new InvalidDataException("SteamVR paths are unreadable. Open SteamVR once, close it, then retry.");
+    private JsonObject ReadPaths()
+    {
+        if (!File.Exists(_vrpaths))
+            throw new FileNotFoundException("Install SteamVR through Steam, open it once, close it, then retry Prepare VR.");
+        return JsonNode.Parse(File.ReadAllText(_vrpaths)) as JsonObject
+            ?? throw new InvalidDataException("SteamVR paths are unreadable. Open SteamVR once, close it, then retry.");
+    }
     private static string[] Entries(JsonObject paths, string key) =>
         (paths[key] as JsonArray)?.Select(n => n?.GetValue<string>()
             ?? throw new InvalidDataException("Invalid SteamVR path")).ToArray() ?? [];
