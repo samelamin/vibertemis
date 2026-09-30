@@ -178,8 +178,8 @@ public sealed partial class MainForm : Form
         root.Controls.Add(_lblVcRedist, 0, 4);
         root.Controls.Add(_btnVcRedistPage, 1, 4);
 
-        _lblCompanion.Text = "Host companion: idle";
-        _btnCompanionToggle.Text = "Start companion";
+        _lblCompanion.Text = "Hosting: stopped";
+        _btnCompanionToggle.Text = "Start hosting";
         _btnCompanionToggle.Enabled = false;
         root.Controls.Add(_lblCompanion, 0, 5);
         root.Controls.Add(_btnCompanionToggle, 1, 5);
@@ -259,6 +259,8 @@ public sealed partial class MainForm : Form
         foreach (Control c in root.Controls)
         {
             if (c is Label or CheckBox or Button) c.AutoSize = true;
+            if (c is Label && root.GetColumn(c) == 0 && root.GetColumnSpan(c) == 1)
+                c.MaximumSize = new Size(192, 0);
             c.Margin = new Padding(4, 7, 4, 7);
         }
         foreach (var button in new[] { _btnRefreshAdapters, _btnOpenSteamPage, _btnInstallSteamVr,
@@ -494,7 +496,7 @@ public sealed partial class MainForm : Form
         var s = _svc.Steam.Locate();
         if (s.Installed)
         {
-            _lblSteam.Text = $"Steam installed: {s.SteamPath}";
+            _lblSteam.Text = "Steam: installed";
             _btnOpenSteamPage.Enabled = false;
         }
         else
@@ -521,7 +523,7 @@ public sealed partial class MainForm : Form
         _cmbAdapter.Enabled = !running;
         _btnRefreshAdapters.Enabled = !running;
         _btnExportPairing.Enabled = running && _recovery.RunningSpec is not null;
-        _btnCompanionToggle.Text = running || (_recovery.DesiredRunning && !blocked) ? "Stop companion" : "Start companion";
+        _btnCompanionToggle.Text = running || (_recovery.DesiredRunning && !blocked) ? "Stop hosting" : "Start hosting";
         _btnCompanionToggle.Enabled = running || RuntimeReady();
     }
 
@@ -711,7 +713,7 @@ public sealed partial class MainForm : Form
             if (enabled) _svc.AutoStart.Enable(StartupCommand()); else _svc.AutoStart.Disable();
             StartupPreference.Apply(_settings, enabled);
             _svc.SettingsStore.Save(_settings);
-            LogStatus(enabled ? "Automatic hosting enabled after Windows sign-in." : "Automatic startup disabled. Stop companion also stops this session.");
+            LogStatus(enabled ? "Automatic hosting enabled after Windows sign-in." : "Automatic startup disabled. Stop hosting also stops this session.");
             return true;
         }
         catch (Exception ex)

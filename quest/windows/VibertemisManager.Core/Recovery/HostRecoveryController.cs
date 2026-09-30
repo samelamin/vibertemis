@@ -45,7 +45,7 @@ public sealed class HostRecoveryController
         {
             _desired = false; // Publish intent before the process can exit.
             var result = _runner.Stop(CompanionStopReason.ExplicitExit, TimeSpan.FromSeconds(2));
-            if (Stopped(result)) { _bound = null; Set(HostRecoveryState.Stopped, "Stopped by you. Start companion to resume."); }
+            if (Stopped(result)) { _bound = null; Set(HostRecoveryState.Stopped, "Stopped by you. Start hosting to resume."); }
             else Set(HostRecoveryState.StopFailed, "Could not stop host service. Retry Stop: " + result.Error);
             return result;
         }
@@ -74,7 +74,7 @@ public sealed class HostRecoveryController
             if (_suspended) return _status;
             if (!_desired)
             {
-                if (!_runner.IsRunning) { _bound = null; Set(HostRecoveryState.Stopped, "Stopped by you. Start companion to resume."); }
+                if (!_runner.IsRunning) { _bound = null; Set(HostRecoveryState.Stopped, "Stopped by you. Start hosting to resume."); }
                 return _status;
             }
             if (_integrityBlocked) return _status;
