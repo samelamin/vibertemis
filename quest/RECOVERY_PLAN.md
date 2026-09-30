@@ -66,7 +66,9 @@ identity-file concerns do not apply. Exact owned listener address is asserted.
   install/reinstall/tamper/busy refusal/uninstall retention checks remain.
 - Final Agy Gemini 3.1 Pro (High) implementation review: APPROVE, no P0/P1.
   Remaining observations: up to one-second tray wake delay and deliberate
-  reselection if a physical NIC is replaced. Windows CI still gates publication.
+  reselection if a physical NIC is replaced. Windows CI passed all installed
+  recovery checks. Follow-up removes redundant Load/Shown hiding (Program already
+  starts tray mode without showing a window); CI also asserts wake stays visible.
 
 ## Owner end-to-end test (Quest 3 / Windows 11 / RTX 4090)
 

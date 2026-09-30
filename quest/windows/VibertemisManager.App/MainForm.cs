@@ -50,7 +50,6 @@ namespace VibertemisManager.App;
 public sealed class MainForm : Form
 {
     private readonly AppServices _svc;
-    private readonly CliArgs _args;
     private NotifyIcon? _tray;
     private readonly Button _btnUpdate = new() { Text = "Check for updates", AutoSize = true };
     private readonly Button _btnCancelUpdate = new() { Text = "Cancel download", AutoSize = true, Visible = false };
@@ -90,7 +89,6 @@ public sealed class MainForm : Form
     public MainForm(AppServices svc, CliArgs args)
     {
         _svc = svc;
-        _args = args;
         Text = "VibertemisVR Host Manager";
         Width = 720;
         Height = 640;
@@ -102,7 +100,6 @@ public sealed class MainForm : Form
         WireEvents();
         _ = Handle; // Create the UI handle even for tray-only ApplicationContext startup.
         InitialPopulation();
-        Shown += (_, _) => { if (_args.TrayOnly || _args.Silent) HideToTray(); };
         _statusTimer.Tick += (_, _) => {
             if (_wake.WaitOne(0)) { Show(); ShowInTaskbar = true; WindowState = FormWindowState.Normal; Activate(); }
             ReconcileHost();
@@ -228,7 +225,6 @@ public sealed class MainForm : Form
 
     private void WireEvents()
     {
-        Load += (_, _) => OnLoad();
         FormClosing += OnFormClosing;
         Resize += OnResize;
 
@@ -265,11 +261,6 @@ public sealed class MainForm : Form
         }
         if (_settings.RestoreCompanionOnStartup) _recovery.RequestStart();
         ReconcileHost();
-    }
-
-    private void OnLoad()
-    {
-        if (_args.Silent || _args.TrayOnly) BeginInvoke(new Action(HideToTray));
     }
 
     private void OnResize(object? sender, EventArgs e)

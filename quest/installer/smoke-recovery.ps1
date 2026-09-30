@@ -10,6 +10,7 @@ using System.Text;
 using System.Runtime.InteropServices;
 public static class RecoverySmokeUi {
  public delegate bool EnumProc(IntPtr h, IntPtr l);
+ [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
  [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc p, IntPtr l);
  [DllImport("user32.dll")] public static extern bool EnumChildWindows(IntPtr parent, EnumProc p, IntPtr l);
  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
@@ -21,6 +22,11 @@ public static class RecoverySmokeUi {
    EnumChildWindows(h,(c,x)=> { var s=new StringBuilder(512); IntPtr result; if(ReadText(c,0xD,(IntPtr)512,s,2,2000,out result)!=IntPtr.Zero && s.ToString()==label) found=c; return true; },IntPtr.Zero);
    return true;
   },IntPtr.Zero); return found;
+ }
+ public static bool Visible(int pid) {
+  bool visible=false;
+  EnumWindows((h,l)=> { uint p; GetWindowThreadProcessId(h,out p); if(p==(uint)pid && IsWindowVisible(h)) visible=true; return true; },IntPtr.Zero);
+  return visible;
  }
  public static void Click(IntPtr h) { IntPtr result; if(h==IntPtr.Zero || SendMessageTimeout(h,0xF5,IntPtr.Zero,IntPtr.Zero,2,15000,out result)==IntPtr.Zero) throw new Exception("GUI control click failed"); }
 }
@@ -84,6 +90,9 @@ try {
     if (-not $wake.WaitForExit(15000)) { throw 'Second instance did not signal existing manager' }
     if ($wake.ExitCode -ne 0) { throw 'Second instance failed' }
     $wake.Dispose()
+    Wait-Until { [RecoverySmokeUi]::Visible($script:managerProcess.Id) } 'tray wake visibility'
+    Start-Sleep -Seconds 2
+    if (-not [RecoverySmokeUi]::Visible($script:managerProcess.Id)) { throw 'Tray wake immediately hid the manager again' }
     # Production startup checkbox must register the exact installed executable.
     $readyLabel = 'Keep host ready after Windows sign-in'
     Wait-Until { [RecoverySmokeUi]::Find($script:managerProcess.Id,$readyLabel) -ne [IntPtr]::Zero } 'automatic hosting control'
