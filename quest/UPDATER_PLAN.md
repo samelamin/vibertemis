@@ -26,3 +26,10 @@ no MSIX migration, Restart Manager termination of VR, or new trust-key override.
   path, installed version, integrity, reopened GUI and unchanged user state.
 - Existing users whose updater is already broken may need one manual installation.
   No hardware stream-quality guarantee follows from installer tests.
+
+Final review: Agy approved after resolving missing-file compile false positives.
+Codex caught two bugs in MiniMax's draft before release: probing installer rather
+than installed-manager version, and verifying the download while its write handle
+was open. Regression tests now cover the correct installed path and fresh download.
+These draft defects are not asserted as the cause on the owner's already-installed
+build; the old build's unmonitored installer handoff was confirmed separately.

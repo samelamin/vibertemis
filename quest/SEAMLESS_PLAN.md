@@ -70,3 +70,11 @@ public-address rejection, Android routing/identity/path/consent tests, .NET
 driver/conflict/defaults/adapter tests, native Rust schema deserialization, and
 Windows installed-manager/installer tests. Hardware stream quality and controller
 tracking require the owner's Quest3/Windows11/RTX4090 end-to-end test.
+
+Final Agy review (2026-09-30): approved, no P0/P1 blockers. Initial compile
+claims were adjudicated with the omitted partial class and actual Uri type;
+Windows cross-build passed. Agy confirmed the repaired download-handle lifetime,
+peer trust, native identity and Tailscale boundary. Codex independently checked
+the installed-version probe, retained processes/events, failure reporting and
+test coverage. Local results: Android128, Core161, Go race/vet passed; signed APK
+version6 preserves the existing signer. Real Windows CI remains the release gate.
