@@ -3,7 +3,7 @@
 ## Automated tests (build host)
 
 `./gradlew testNonRootDebugUnitTest` runs the unit suite. The build
-host runs 115 tests, 0 failures. Tests cover prefs, routing, mic,
+host has passed 153 tests, 0 failures for preview7. Tests cover prefs, routing, mic,
 capability gating, per-instance SettingsController wiring, top status
 preference observer refresh, hub launch / request / permission guards,
 PackageManager launcher-category resolution, the inflated
@@ -96,3 +96,30 @@ bounds. Go tests cover authenticated startup, replay/transaction ownership,
 read-only custom-host configuration and protected pairing export. Windows
 runtime CI is required in addition to Linux race tests. Device testing remains
 outstanding until the owner supplies results.
+
+## Preview 7 guided-setup acceptance
+
+1. Upgrade Vibeshine, Windows VR Host Manager, and Quest without uninstalling.
+   Confirm existing screen pairing and saved stream settings remain intact.
+2. With SteamVR closed, choose **Setup VR** on Windows. Missing VC++ should
+   offer the bundled Microsoft runtime automatically; an already adequate
+   runtime must not prompt again. Finish missing Steam/SteamVR setup if shown.
+3. Choose **Setup VR** on Quest and select the already-paired PC. Enrollment
+   must succeed without a pairing file. Cancellation or a rejected attempt
+   must retain the previous working VR pairing. Pairing alone must not start VR.
+4. Connect for VR. Verify SteamVR sees the headset and both controllers. Close
+   VR, then connect a phone or use **Flat screen**; SteamVR must stay closed.
+5. Remove the Quest's screen pairing in Vibeshine, then attempt a new VR
+   request: inherited VR credentials must fail closed. Pair again and repeat
+   Setup VR to recover. Existing sessions need separate disconnect testing.
+6. Enable startup, reboot, sign in, and connect without opening the manager.
+   Test Wi-Fi loss/recovery, headset sleep/wake, and PC address changes.
+7. Open each app and verify automatic update status. A cached newer release
+   should offer Download/Install directly. Keep a verified download through an
+   offline launch; cancellation or active VR must not discard it.
+8. For travel, connect both devices to a reachable VPN route and select its PC
+   adapter under Advanced. Repeat setup/connect from another network. Forwarded
+   GameStream ports alone do not provide tracked VR. Record latency and loss.
+9. Compare Home PyroWave and Standard AV1/HEVC, plus Travel at 30 Mbps; check
+   actual decoded codec, tracking, controllers, audio, frame pacing, and desktop
+   restoration. Do not infer stream quality from a successful setup test.
