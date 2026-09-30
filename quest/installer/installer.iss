@@ -1,5 +1,5 @@
 #define MyAppName "VibertemisVR Host Manager"
-#define MyAppVersion "0.1.0.5"
+#define MyAppVersion "0.1.0.6"
 #define MyAppPublisher "Vibertemis"
 
 [Setup]

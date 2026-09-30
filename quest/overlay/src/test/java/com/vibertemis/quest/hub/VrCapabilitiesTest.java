@@ -37,6 +37,14 @@ import static org.junit.Assert.assertTrue;
  */
 @RunWith(RobolectricTestRunner.class)
 public class VrCapabilitiesTest {
+    @org.junit.Test public void exactQuestFallbackDoesNotClassifyPhonesAsHeadsets() {
+        assertTrue(VrCapabilities.identifiesHeadset(false, "Oculus", "Quest 3"));
+        assertTrue(VrCapabilities.identifiesHeadset(false, "Meta", "Quest 3S"));
+        assertTrue(VrCapabilities.identifiesHeadset(true, "Pico", "headset"));
+        assertFalse(VrCapabilities.identifiesHeadset(false, "Samsung", "Quest 3"));
+        assertFalse(VrCapabilities.identifiesHeadset(false, "Meta", "phone"));
+        assertFalse(VrCapabilities.identifiesHeadset(false, null, null));
+    }
 
     @Test
     public void phoneLikeDevice_lacksVrHeadtracking() {

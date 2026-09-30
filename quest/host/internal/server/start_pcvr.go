@@ -159,6 +159,23 @@ func (s *Server) handleStartPcvr1(w http.ResponseWriter, r *http.Request) {
 		writeStartPcvr(w, resp)
 	}
 
+	// Bind the already authenticated headset to the native driver before launch.
+	// Older clients omit this field and retain their existing manual pairing.
+	if req.ClientHostname != "" {
+		if req.NativeProtocol != alvr.NativeVersion {
+			failStart(StartPcvrResponse{State: StateDenied, Error: ErrAlvrVersion, Message: "Update both devices to the matching VR build."})
+			return
+		}
+		if err := s.deps.Adapter.EnsurePeer(req.ClientHostname, r.RemoteAddr); err != nil {
+			code := StartPcvrError("HEADSET_SETUP")
+			if errors.Is(err, alvr.ErrPeerAddress) {
+				code = "HEADSET_NETWORK"
+			}
+			failStart(StartPcvrResponse{State: StateReconnectRequired, Error: code, Message: err.Error()})
+			return
+		}
+	}
+
 	// Probe vrserver (fail-closed on error).
 	runningVR, err := s.deps.Launcher.VRServerRunning()
 	if err != nil {

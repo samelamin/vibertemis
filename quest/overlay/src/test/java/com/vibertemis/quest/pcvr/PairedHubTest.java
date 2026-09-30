@@ -23,6 +23,7 @@ public class PairedHubTest {
   static AtomicInteger calls;
 
   public static class TestHub extends MainHubActivity {
+    @Override protected String loadNativeHeadsetIdentity() { return "test.client"; }
     @Override
     protected boolean hasPairedHost() {
       return true;

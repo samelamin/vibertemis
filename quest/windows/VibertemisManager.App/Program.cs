@@ -15,6 +15,7 @@ using VibertemisManager.Core.Platform.Windows;
 using VibertemisManager.Core.Settings;
 using VibertemisManager.Core.SingleInstance;
 using VibertemisManager.Core.Steam;
+using VibertemisManager.Core.Update;
 
 namespace VibertemisManager.App;
 
@@ -26,6 +27,17 @@ internal static class Program
     [STAThread]
     public static int Main(string[] args)
     {
+        // The --apply-update worker mode is detected BEFORE any
+        // ApplicationConfiguration.Initialize, single-instance mutex,
+        // settings store, integrity verifier, or service wiring. It
+        // runs in a renamed copy of this same exe and must not
+        // contend with the running manager over the app mutex.
+        var applyUpdateJob = TryFindArgValue(args, "--apply-update");
+        if (!string.IsNullOrEmpty(applyUpdateJob))
+        {
+            return RunApplyUpdate(applyUpdateJob);
+        }
+
         var parsed = CliArgs.Parse(args);
         if (Array.Exists(args, a => a == "--verify-install"))
         {
@@ -139,6 +151,58 @@ internal static class Program
         return 0;
     }
 
+    private static int RunApplyUpdate(string jobPath)
+    {
+        // The worker never uses Windows Forms or the app mutex. It
+        // runs with the assembly's TFM-appropriate entry point and
+        // avoids touching anything that would interfere with the
+        // installer's BusyReason check or the running manager.
+        try
+        {
+            var paths = new EnvironmentPathResolver();
+            var env = new WindowsUpdateEnvironment();
+            var worker = new UpdateWorker(env, SignedRelease.EmbeddedPublicKey(), paths.UpdateCacheDir);
+            var outcomePath = DefaultOutcomePath();
+            var inputs = UpdateJobInputs.For(jobPath, paths.UpdateCacheDir, env.CurrentExecutablePath);
+            var result = worker.Run(inputs, outcomePath);
+            return result.Outcome.IsSuccess ? 0 : 1;
+        }
+        catch (Exception ex)
+        {
+            try
+            {
+                var fallback = new UpdateOutcome(
+                    Schema: UpdateOutcome.CurrentSchema,
+                    ExpectedVersion: "",
+                    PreviousVersion: SignedRelease.CurrentVersion,
+                    Kind: UpdateOutcomeKind.WorkerError,
+                    InstallerExitCode: null,
+                    InstalledFileVersion: null,
+                    VerifyInstallExitCode: null,
+                    InstallerLogPath: "",
+                    Detail: ex.Message,
+                    Timestamp: DateTime.UtcNow);
+                File.WriteAllText(DefaultOutcomePath(), fallback.Serialize());
+            }
+            catch { }
+            return 1;
+        }
+    }
+
+    public static string DefaultOutcomePath()
+    {
+        var local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        return Path.Combine(local, "VibertemisVRHostManager", "updates", "last-update.json");
+    }
+
+    private static string? TryFindArgValue(string[] args, string key)
+    {
+        for (var i = 0; i < args.Length - 1; i++)
+            if (string.Equals(args[i], key, StringComparison.Ordinal))
+                return args[i + 1];
+        return null;
+    }
+
     private static IDisposable? BuildSingleInstanceGuard(CliArgs args)
     {
 #if WINDOWS
@@ -168,11 +232,23 @@ internal static class Program
 
 }
 
-public sealed record CliArgs(bool TrayOnly, bool Silent)
+public sealed record CliArgs(bool TrayOnly, bool Silent, string? ApplyUpdateJob)
 {
-    public static CliArgs Parse(string[] argv) => new(
-        Array.Exists(argv, a => a == "--tray-only"),
-        Array.Exists(argv, a => a == "--silent"));
+    public static CliArgs Parse(string[] argv)
+    {
+        var apply = TryFindArg(argv, "--apply-update");
+        return new(
+            Array.Exists(argv, a => a == "--tray-only"),
+            Array.Exists(argv, a => a == "--silent"),
+            apply);
+    }
+
+    private static string? TryFindArg(string[] argv, string key)
+    {
+        for (var i = 0; i < argv.Length - 1; i++)
+            if (string.Equals(argv[i], key, StringComparison.Ordinal)) return argv[i + 1];
+        return null;
+    }
 }
 
 public sealed record AppServices(

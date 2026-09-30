@@ -47,9 +47,7 @@ public class NativeConsentTest {
       var hub = controller.get();
       hub.findViewById(R.id.hub_btn_connect).performClick();
       assertNull(Shadows.shadowOf(hub).getNextStartedActivity());
-      ShadowAlertDialog.getLatestAlertDialog()
-          .getButton(AlertDialog.BUTTON_POSITIVE)
-          .performClick();
+      PcvrTestActions.confirmRestartIfShown();
       Shadows.shadowOf(android.os.Looper.getMainLooper()).idle();
       Intent intent = Shadows.shadowOf(hub).getNextStartedActivity();
       assertNotNull(intent);
@@ -71,6 +69,20 @@ public class NativeConsentTest {
       dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick();
       Shadows.shadowOf(android.os.Looper.getMainLooper()).idle();
       assertNull(Shadows.shadowOf(hub).getNextStartedActivity());
+    }
+  }
+
+  @Test
+  public void unpairedQuestOpensVrSetupInsteadOfUnreachableNativeLobby() {
+    try (var controller = Robolectric.buildActivity(ManualNativeHub.class).setup()) {
+      var hub = controller.get();
+      hub.findViewById(R.id.hub_btn_connect).performClick();
+      assertNull(Shadows.shadowOf(hub).getNextStartedActivity());
+      AlertDialog setup = ShadowAlertDialog.getLatestAlertDialog();
+      assertEquals("Pair VR host", setup.getButton(AlertDialog.BUTTON_POSITIVE).getText().toString());
+      setup.getButton(AlertDialog.BUTTON_POSITIVE).performClick();
+      Shadows.shadowOf(android.os.Looper.getMainLooper()).idle();
+      assertEquals(PcvrSettingsActivity.class.getName(), Shadows.shadowOf(hub).getNextStartedActivity().getComponent().getClassName());
     }
   }
 

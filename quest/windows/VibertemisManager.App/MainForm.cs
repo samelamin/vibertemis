@@ -19,6 +19,12 @@
 //   - Close-to-tray is the default; the first time it happens
 //     the manager shows a one-shot explanation. Explicit Exit
 //     owns/stops only the owned companion child.
+//   - Updates use a three-stage UX:
+//       Check -> Download (cached in per-user state) -> Install.
+//     The verified update is held in memory until the user
+//     explicitly clicks "Install update". Cancellation is
+//     available only during check/download; install is a single
+//     confirmation, not a re-check.
 //
 // SteamVR is NEVER started by the manager. The "Install SteamVR"
 // button is a steam://install/250820 URL dispatch; the user runs
@@ -39,6 +45,8 @@ using VibertemisManager.Core.AutoStart;
 using VibertemisManager.Core.Companion;
 using VibertemisManager.Core.Firewall;
 using VibertemisManager.Core.Network;
+using VibertemisManager.Core.Paths;
+using VibertemisManager.Core.Platform.Abstractions;
 using VibertemisManager.Core.Settings;
 using VibertemisManager.Core.Steam;
 using VibertemisManager.Core.Update;
@@ -47,20 +55,28 @@ using System.Net.NetworkInformation;
 
 namespace VibertemisManager.App;
 
-public sealed class MainForm : Form
+public sealed partial class MainForm : Form
 {
     private readonly AppServices _svc;
     private NotifyIcon? _tray;
     private readonly Button _btnUpdate = new() { Text = "Check for updates", AutoSize = true };
-    private readonly Button _btnCancelUpdate = new() { Text = "Cancel download", AutoSize = true, Visible = false };
+    private readonly Button _btnCancelUpdate = new() { Text = "Cancel", AutoSize = true, Visible = false };
+    private readonly Button _btnInstallUpdate = new() { Text = "Install update", AutoSize = true, Visible = false, Enabled = false };
+    private readonly ProgressBar _updateProgress = new() { Visible = false, Width = 220, Height = 16, Minimum = 0, Maximum = 100, Style = ProgressBarStyle.Continuous };
+    private readonly Label _updateProgressLabel = new() { Visible = false, AutoSize = true, Text = "" };
     private readonly ReleaseClient _updates = new();
     private CancellationTokenSource? _updateCancellation;
     private bool _updateBusy;
+    private SignedRelease? _pendingUpdate;
+    private byte[]? _pendingManifestBytes;
+    private byte[]? _pendingSignatureBytes;
+    private string? _pendingUpdateFile;
     private readonly EventWaitHandle _wake = new(false, EventResetMode.AutoReset, Program.MutexName + "-Wake");
     private readonly System.Windows.Forms.Timer _statusTimer = new() { Interval = 1000 };
     private HostRecoveryController _recovery = null!;
     private string? _lastRecoveryMessage;
     private bool _populatingAdapters;
+    private bool _installHandOffInFlight;
 
     private readonly Label _lblHeader = new();
     private readonly Label _lblAdapter = new();
@@ -91,9 +107,9 @@ public sealed class MainForm : Form
         _svc = svc;
         Text = "VibertemisVR Host Manager";
         Width = 720;
-        Height = 640;
+        Height = 700;
         StartPosition = FormStartPosition.CenterScreen;
-        MinimumSize = new Size(720, 640);
+        MinimumSize = new Size(720, 700);
         AutoScaleMode = AutoScaleMode.Dpi;
 
         BuildLayout();
@@ -107,6 +123,7 @@ public sealed class MainForm : Form
         };
         NetworkChange.NetworkAddressChanged += OnNetworkChanged;
         _statusTimer.Start();
+        SurfacePriorOutcome();
     }
 
     private void BuildLayout()
@@ -115,13 +132,13 @@ public sealed class MainForm : Form
         {
             Dock = DockStyle.Fill,
             ColumnCount = 2,
-            RowCount = 12,
+            RowCount = 13,
             Padding = new Padding(12),
             AutoSize = false,
         };
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 200));
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        for (var i = 0; i < 11; i++) root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        for (var i = 0; i < 12; i++) root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
         _lblHeader.Text = "VibertemisVR Host Manager";
@@ -174,8 +191,8 @@ public sealed class MainForm : Form
         root.Controls.Add(new Label { Text = "Pairing export" }, 0, 7);
         root.Controls.Add(_btnExportPairing, 1, 7);
 
-        _btnSetupNetwork.Text = "Setup Network Access";
-        root.Controls.Add(new Label { Text = "Firewall" }, 0, 8);
+        _btnSetupNetwork.Text = "Prepare VR";
+        root.Controls.Add(new Label { Text = "VR setup" }, 0, 8);
         root.Controls.Add(_btnSetupNetwork, 1, 8);
 
         _chkAutoStart.Text = "Keep host ready after Windows sign-in";
@@ -186,9 +203,16 @@ public sealed class MainForm : Form
         root.Controls.Add(readinessHint, 0, 10);
         root.SetColumnSpan(readinessHint, 2);
 
+        var updatePanel = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true };
+        updatePanel.Controls.Add(_updateProgressLabel);
+        var progressRow = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, FlowDirection = FlowDirection.LeftToRight };
+        progressRow.Controls.Add(_updateProgress);
+        root.Controls.Add(new Label { Text = "Update download" }, 0, 11);
+        root.Controls.Add(progressRow, 1, 11);
+
         _lstStatus.Dock = DockStyle.Fill;
         _lstStatus.HorizontalScrollbar = true;
-        root.Controls.Add(_lstStatus, 0, 11);
+        root.Controls.Add(_lstStatus, 0, 12);
         root.SetColumnSpan(_lstStatus, 2);
 
         var footer = new TableLayoutPanel
@@ -201,14 +225,16 @@ public sealed class MainForm : Form
         };
         footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        _lblVersion.Text = "0.1.0.5-quest-preview";
+        _lblVersion.Text = SignedRelease.CurrentVersion + "-quest-preview";
         _lblVersion.AutoSize = true;
         var updateActions = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill };
         updateActions.Controls.Add(_btnUpdate);
         updateActions.Controls.Add(_btnCancelUpdate);
+        updateActions.Controls.Add(_btnInstallUpdate);
         footer.Controls.Add(updateActions, 0, 0);
         _btnUpdate.Click += async (_, _) => await CheckForUpdates();
         _btnCancelUpdate.Click += (_, _) => _updateCancellation?.Cancel();
+        _btnInstallUpdate.Click += (_, _) => InstallPendingUpdate();
         footer.Controls.Add(_lblVersion, 1, 0);
 
         Controls.Add(root);
@@ -236,7 +262,7 @@ public sealed class MainForm : Form
         _btnCompanionToggle.Click += (_, _) => ToggleCompanion();
         _btnOpenDashboard.Click += (_, _) => OpenDashboard();
         _btnExportPairing.Click += (_, _) => ExportPairing();
-        _btnSetupNetwork.Click += (_, _) => SetupNetworkAccess();
+        _btnSetupNetwork.Click += async (_, _) => await PrepareVr();
         _chkAutoStart.CheckedChanged += (_, _) => OnAutoStartToggled();
     }
 
@@ -263,6 +289,46 @@ public sealed class MainForm : Form
         ReconcileHost();
     }
 
+    private void SurfacePriorOutcome()
+    {
+        try
+        {
+            var path = Program.DefaultOutcomePath();
+            if (!File.Exists(path)) return;
+            var outcome = UpdateOutcome.TryLoad(path);
+            if (outcome is null) return;
+            switch (outcome.Kind)
+            {
+                case UpdateOutcomeKind.Success when outcome.ExpectedVersion == SignedRelease.CurrentVersion
+                    && outcome.InstalledFileVersion == SignedRelease.CurrentVersion
+                    && outcome.InstallerExitCode == 0 && outcome.VerifyInstallExitCode == 0:
+                    LogStatus($"Update to {outcome.ExpectedVersion} completed on {outcome.Timestamp.ToLocalTime():yyyy-MM-dd HH:mm}.");
+                    if (!string.IsNullOrEmpty(outcome.InstallerLogPath))
+                        LogStatus("Installer log: " + outcome.InstallerLogPath);
+                    break;
+                case UpdateOutcomeKind.Success:
+                    LogStatus($"Update needs checking: this manager is {SignedRelease.CurrentVersion}; the requested update was {outcome.ExpectedVersion}.");
+                    break;
+                case UpdateOutcomeKind.InstallerFailed:
+                case UpdateOutcomeKind.InstallerCanceled:
+                case UpdateOutcomeKind.VerificationFailed:
+                case UpdateOutcomeKind.ParentTimeout:
+                case UpdateOutcomeKind.WorkerError:
+                case UpdateOutcomeKind.JobInvalid:
+                    LogStatus($"Last update to {outcome.ExpectedVersion} failed: {outcome.Detail}");
+                    if (!string.IsNullOrEmpty(outcome.InstallerLogPath))
+                        LogStatus("Installer log: " + outcome.InstallerLogPath);
+                    break;
+            }
+            // Surface once; remove so a later launch starts clean.
+            try { File.Move(path, path + ".seen", overwrite: true); } catch { /* keep for retry */ }
+        }
+        catch (Exception ex)
+        {
+            LogStatus("Could not read prior update outcome: " + ex.Message);
+        }
+    }
+
     private void OnResize(object? sender, EventArgs e)
     {
         if (WindowState == FormWindowState.Minimized) HideToTray();
@@ -272,6 +338,12 @@ public sealed class MainForm : Form
 
     private void OnFormClosing(object? sender, FormClosingEventArgs e)
     {
+        if (_installHandOffInFlight)
+        {
+            // The update worker has the manager copy and job; do not
+            // intercept the close.
+            return;
+        }
         if (e.CloseReason == CloseReason.UserClosing && !_exitRequested)
         {
             // Tray close.
@@ -341,7 +413,7 @@ public sealed class MainForm : Form
             // Suggest the first NIC only for initial setup. Never persist a
             // programmatic fallback over a temporarily missing saved NIC.
             if (selected is null && string.IsNullOrEmpty(_settings.LastSelectedAdapterId) && string.IsNullOrEmpty(_settings.LastSelectedAdapterAddress))
-                selected = adapters.FirstOrDefault();
+                selected = adapters.OrderBy(a => a.IsTailscale).FirstOrDefault();
             if (selected is not null) _cmbAdapter.SelectedItem = selected;
         }
         catch (Exception ex) { LogStatus("Network list unavailable; automatic recovery will retry: " + ex.Message); }
@@ -450,6 +522,7 @@ public sealed class MainForm : Form
 
     private void ToggleCompanion()
     {
+        if (_preparingVr || _installHandOffInFlight) return;
         if (_svc.Companion.IsRunning || (_recovery.DesiredRunning && _recovery.Status.State != HostRecoveryState.IntegrityBlocked))
         {
             RememberCompanion(false);
@@ -469,6 +542,7 @@ public sealed class MainForm : Form
 
     private void OpenDashboard()
     {
+        if (_preparingVr || _installHandOffInFlight) return;
         var busy = _svc.BusyChecker.Check();
         if (busy.IsBusy)
         {
@@ -548,7 +622,7 @@ public sealed class MainForm : Form
         }
     }
 
-    private async void SetupNetworkAccess()
+    private async Task<bool> SetupNetworkAccess()
     {
         var helper = Path.Combine(_svc.Paths.ProgramsRoot, "manager", "VibertemisNetworkHelper.exe");
         try
@@ -556,20 +630,30 @@ public sealed class MainForm : Form
             if (!_svc.IntegrityVerifier.Verify(helper, out _))
             {
                 LogStatus("Network helper integrity check failed. Reinstall the host package.");
-                return;
+                return false;
             }
         }
-        catch (Exception ex) { LogStatus("Cannot verify network helper: " + ex.Message); return; }
+        catch (Exception ex) { LogStatus("Cannot verify network helper: " + ex.Message); return false; }
         _btnSetupNetwork.Enabled = false;
         LogStatus("Approve the Windows prompt to configure network access...");
         try
         {
-            var result = await Task.Run(() => _svc.UacHelper.Launch(helper, "--setup-network"));
-            if (IsDisposed || Disposing) return;
+            var adapter = _cmbAdapter.SelectedItem as NetworkAdapter;
+            var arguments = adapter?.IsTailscale == true
+                ? "--setup-tailscale " + TailscaleNetwork.ParseAddress(adapter.Address.ToString()).ToString()
+                : "--setup-network";
+            var result = await Task.Run(() => _svc.UacHelper.Launch(helper, arguments));
+            if (IsDisposed || Disposing) return false;
             if (result.Launched && result.Completed && result.ExitCode == 0)
-                LogStatus("Network access configured for trusted Private/Domain networks.");
+            {
+                LogStatus(adapter?.IsTailscale == true
+                    ? "VPN access configured for this PC's Tailscale address. Connect Quest to the same tailnet before importing pairing."
+                    : "Network access configured for trusted Private/Domain networks.");
+                return true;
+            }
             else
                 LogStatus(result.Error.Length > 0 ? result.Error : "Network setup did not complete. Retry when ready.");
+            return false;
         }
         finally { if (!IsDisposed) _btnSetupNetwork.Enabled = true; }
     }
@@ -631,52 +715,59 @@ public sealed class MainForm : Form
         SaveSettings();
     }
 
+    // Stage 1: check the GitHub release list for a newer compatible
+    // signed release. Stage 2: download (with progress). The verified
+    // release + downloaded file are remembered so the user can install
+    // later without re-checking the network.
     private async Task CheckForUpdates()
     {
-        if (_updateBusy) return;
+        if (_updateBusy || _installHandOffInFlight || _preparingVr) return;
         _updateBusy = true;
         _btnUpdate.Enabled = false;
         _btnCancelUpdate.Visible = true;
+        _btnCancelUpdate.Enabled = true;
+        _btnInstallUpdate.Visible = false;
+        _btnInstallUpdate.Enabled = false;
         using var cancellation = new CancellationTokenSource();
         _updateCancellation = cancellation;
         try
         {
             LogStatus("Checking signed Quest preview releases...");
-            var release = await _updates.CheckAsync(cancellation.Token);
+            var checkResult = await _updates.CheckAsync(cancellation.Token,
+                new Progress<UpdateProgress>(p => ReportStage(p.Stage)));
             if (IsDisposed || Disposing) return;
-            if (release is null) { LogStatus("No newer compatible signed Quest preview is available."); return; }
-            if (MessageBox.Show(this, $"Download host update {release.Version}? Your settings and pairing will be kept.",
-                "Host update", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
-            LogStatus($"Downloading {release.Version} ({release.Windows.Bytes / 1048576} MB)...");
-            var file = await _updates.DownloadAsync(release, _svc.Paths.UpdateCacheDir, cancellation.Token);
-            if (IsDisposed || Disposing) return;
-            if (_svc.BusyChecker.Check().IsBusy)
+            if (checkResult is null)
             {
-                LogStatus("Update downloaded. Close SteamVR and ALVR Dashboard, then check for updates again to install.");
+                LogStatus("No newer compatible signed Quest preview is available.");
                 return;
             }
-            if (MessageBox.Show(this, "Install the verified update now? The host manager will close and the setup wizard will open.",
-                "Install update", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
-            if (_svc.BusyChecker.Check().IsBusy) { LogStatus("Close SteamVR and ALVR Dashboard before updating."); return; }
-            // Recheck cached bytes at the execution boundary, then stop only our
-            // own companion. Failure keeps this manager open and usable.
-            ReleaseClient.VerifyFile(file, release.Windows);
-            var stopped = _recovery.SuspendAndStop();
-            if (stopped.Outcome is CompanionStopOutcome.Denied or CompanionStopOutcome.Timeout)
+            var release = checkResult.Release;
+            if (MessageBox.Show(this,
+                $"Download host update {release.Version}? Your settings and pairing will be kept.",
+                "Host update", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+            SetProgressUi(visible: true);
+            LogStatus($"Downloading {release.Version} ({release.Windows.Bytes / 1048576} MB)...");
+            var progress = new Progress<UpdateProgress>(p => ReportProgress(p));
+            var file = await _updates.DownloadAsync(release, _svc.Paths.UpdateCacheDir, cancellation.Token, progress);
+            if (IsDisposed || Disposing) return;
+            _pendingUpdate = release;
+            _pendingManifestBytes = checkResult.Manifest;
+            _pendingSignatureBytes = checkResult.Signature;
+            _pendingUpdateFile = file;
+            SetProgressUi(visible: false);
+            // Surface readiness to install.
+            var busy = _svc.BusyChecker.Check();
+            if (busy.IsBusy)
             {
-                _recovery.Resume();
-                throw new InvalidOperationException("Could not stop the host companion. " + stopped.Error);
+                LogStatus($"Update {release.Version} downloaded. Close SteamVR and ALVR Dashboard, then click Install update.");
             }
-            try
+            else
             {
-                var start = new ProcessStartInfo(file) { UseShellExecute = true };
-                start.ArgumentList.Add("/UPDATEPID=" + Environment.ProcessId);
-                start.ArgumentList.Add("/DIR=" + _svc.Paths.ProgramsRoot);
-                using var installer = Process.Start(start) ?? throw new IOException("Setup did not start");
-                _exitRequested = true;
-                Close();
+                LogStatus($"Update {release.Version} downloaded. Click Install update to apply it.");
             }
-            catch { _recovery.Resume(); ReconcileHost(); throw; }
+            _btnInstallUpdate.Visible = true;
+            _btnInstallUpdate.Enabled = true;
+            _btnInstallUpdate.Text = $"Install update {release.Version}";
         }
         catch (OperationCanceledException) { if (!IsDisposed) LogStatus("Update cancelled or timed out. Your current installation is unchanged."); }
         catch (Exception ex) { if (!IsDisposed) LogStatus("Update unavailable: " + ex.Message); }
@@ -684,8 +775,203 @@ public sealed class MainForm : Form
         {
             _updateCancellation = null;
             _updateBusy = false;
-            if (!IsDisposed) { _btnUpdate.Enabled = true; _btnCancelUpdate.Visible = false; }
+            if (!IsDisposed)
+            {
+                _btnUpdate.Enabled = true;
+                _btnCancelUpdate.Visible = false;
+                SetProgressUi(visible: false);
+            }
         }
+    }
+
+    private void ClearPending()
+    {
+        _pendingUpdate = null;
+        _pendingManifestBytes = null;
+        _pendingSignatureBytes = null;
+        _pendingUpdateFile = null;
+        _btnInstallUpdate.Visible = false;
+        _btnInstallUpdate.Enabled = false;
+        _btnInstallUpdate.Text = "Install update";
+    }
+
+    // Stage 3: install. Single explicit confirmation. Re-verify the
+    // cached bytes at the execution boundary; refuse if VR is busy
+    // and request the user close it; stop only the owned companion
+    // (Steam / SteamVR are never killed by the manager); copy the
+    // manager exe to a per-user cache UUID subdirectory under a
+    // helper basename so the installer's BusyReason cannot mistake
+    // the worker for the running manager; write the bounded job
+    // JSON; launch the worker; wait for the worker's readiness
+    // event before exiting so the worker has the job in hand.
+    private async void InstallPendingUpdate()
+    {
+        if (_installHandOffInFlight || _preparingVr) return;
+        if (_pendingUpdate is null || _pendingUpdateFile is null
+            || _pendingManifestBytes is null || _pendingSignatureBytes is null) return;
+        if (_updateBusy) return;
+        var release = _pendingUpdate;
+        var file = _pendingUpdateFile;
+        var manifestBytes = _pendingManifestBytes;
+        var signatureBytes = _pendingSignatureBytes;
+        try
+        {
+            // Re-verify the cached bytes at the execution boundary.
+            try
+            {
+                ReleaseClient.VerifyFile(file, release.Windows);
+            }
+            catch (System.Security.Cryptography.CryptographicException ex)
+            {
+                LogStatus("Cached update failed integrity check: " + ex.Message + ". Re-check for updates.");
+                ClearPending();
+                return;
+            }
+
+            var busy = _svc.BusyChecker.Check();
+            if (busy.IsBusy)
+            {
+                LogStatus("Refusing to install: " + busy.Reason +
+                    " (" + string.Join(", ", busy.ActiveProcessNames) +
+                    "). Close SteamVR and ALVR Dashboard, then click Install update again. No further download is required.");
+                return;
+            }
+
+            if (MessageBox.Show(this,
+                $"Install host update {release.Version} now? The manager will close and the installer will run silently. Your settings and pairing will be kept.",
+                "Install update", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+
+            // Re-check busy after the user has had time to close things.
+            busy = _svc.BusyChecker.Check();
+            if (busy.IsBusy)
+            {
+                LogStatus("Close SteamVR and ALVR Dashboard before installing.");
+                return;
+            }
+
+            // Stop only our own companion.
+            var stopped = _recovery.SuspendAndStop();
+            if (stopped.Outcome is CompanionStopOutcome.Denied or CompanionStopOutcome.Timeout)
+            {
+                _recovery.Resume();
+                LogStatus("Could not stop the host companion: " + stopped.Error + ". Retry Install update.");
+                return;
+            }
+
+            await LaunchUpdateHandoffAsync(release, file, manifestBytes, signatureBytes);
+        }
+        catch (Exception ex)
+        {
+            LogStatus("Install failed: " + ex.Message);
+            if (!_exitRequested && !IsDisposed && !Disposing) _recovery?.Resume();
+        }
+    }
+
+    private async Task LaunchUpdateHandoffAsync(SignedRelease release, string file, byte[] manifestBytes, byte[] signatureBytes)
+    {
+        _installHandOffInFlight = true;
+        _btnUpdate.Enabled = false;
+        _btnInstallUpdate.Enabled = false;
+        _btnCancelUpdate.Visible = false;
+        _btnCancelUpdate.Enabled = false;
+        LogStatus($"Handing off update {release.Version} to update worker...");
+        UpdateHandoffResult? result = null;
+        try
+        {
+            result = await Task.Run(() => UpdateHandoff.Launch(
+                _svc.Paths, _svc.Paths.UpdateCacheDir, file, release,
+                manifestBytes, signatureBytes));
+        }
+        catch (Exception ex)
+        {
+            LogStatus("Update handoff failed: " + ex.Message);
+            RestoreUiAfterFailedHandoff();
+            return;
+        }
+        if (result is null || !result.WorkerStarted)
+        {
+            LogStatus("Update worker did not start. The current installation is unchanged.");
+            RestoreUiAfterFailedHandoff();
+            return;
+        }
+        if (!result.ReadySignaled)
+        {
+            LogStatus("Update worker did not signal readiness in time. The current installation is unchanged.");
+            RestoreUiAfterFailedHandoff();
+            return;
+        }
+        // Worker has read+validated the job. Send the COMMIT signal so
+        // the worker is allowed to install when the parent exits. After
+        // COMMIT we close this manager.
+        LogStatus("Update worker is ready; committing and closing manager to apply update.");
+        if (!result.CommitSignaled)
+        {
+            LogStatus("Update worker did not receive commit signal. Aborting.");
+            RestoreUiAfterFailedHandoff();
+            return;
+        }
+        _exitRequested = true;
+        Close();
+    }
+
+    private void RestoreUiAfterFailedHandoff()
+    {
+        if (!_exitRequested && !IsDisposed && !Disposing) _recovery?.Resume();
+        _installHandOffInFlight = false;
+        if (!IsDisposed && !Disposing)
+        {
+            _btnUpdate.Enabled = !_updateBusy && !_preparingVr;
+            _btnInstallUpdate.Enabled = _pendingUpdate != null;
+            _btnInstallUpdate.Visible = _pendingUpdate != null;
+            _btnCancelUpdate.Visible = false;
+        }
+    }
+
+    private void ReportStage(string stage)
+    {
+        if (IsDisposed || Disposing) return;
+        if (BeginInvokeSafe(() => _updateProgressLabel.Text = stage)) return;
+    }
+
+    private void ReportProgress(UpdateProgress p)
+    {
+        if (IsDisposed || Disposing) return;
+        BeginInvokeSafe(() =>
+        {
+            _updateProgressLabel.Text = $"{p.Stage} {p.BytesDone / 1048576} / {p.BytesTotal / 1048576} MB";
+            var pct = p.BytesTotal > 0 ? (int)Math.Min(100, (p.BytesDone * 100) / p.BytesTotal) : 0;
+            _updateProgress.Value = pct;
+            if (p.Completed) _updateProgress.Value = 100;
+        });
+    }
+
+    private void SetProgressUi(bool visible)
+    {
+        if (IsDisposed || Disposing) return;
+        BeginInvokeSafe(() =>
+        {
+            _updateProgress.Visible = visible;
+            _updateProgressLabel.Visible = visible;
+            if (!visible)
+            {
+                _updateProgress.Value = 0;
+                _updateProgressLabel.Text = "";
+            }
+        });
+    }
+
+    private bool BeginInvokeSafe(Action action)
+    {
+        if (IsDisposed || Disposing) return true;
+        try
+        {
+            if (InvokeRequired) BeginInvoke(action);
+            else action();
+        }
+        catch (ObjectDisposedException) { return true; }
+        catch (InvalidOperationException) { return true; }
+        catch (System.ComponentModel.Win32Exception) { return true; }
+        return false;
     }
 
     private void OpenUrl(string url)
@@ -730,5 +1016,98 @@ public sealed class MainForm : Form
             _tray?.Dispose();
         }
         base.Dispose(disposing);
+    }
+}
+
+public sealed record UpdateHandoffResult(bool WorkerStarted, bool ReadySignaled, bool CommitSignaled, string? JobPath);
+
+public static class UpdateHandoff
+{
+    public static readonly TimeSpan ReadyHandshakeTimeout = TimeSpan.FromSeconds(30);
+    public static readonly TimeSpan CommitSendTimeout = TimeSpan.FromSeconds(5);
+
+    // Build the per-user cache UUID directory, copy the running
+    // manager exe under a helper basename (so BusyReason never
+    // matches it), write the bounded UpdateJob JSON, launch the
+    // worker, wait for READY, then send COMMIT. The worker only
+    // installs after both signals are observed and the original
+    // PID has exited.
+    public static UpdateHandoffResult Launch(
+        IPathResolver paths,
+        string cacheRoot,
+        string installerFile,
+        SignedRelease release,
+        byte[] manifestBytes,
+        byte[] signatureBytes)
+    {
+        var ourExe = System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName
+            ?? throw new InvalidOperationException("Could not determine current executable path");
+        if (!UpdateJobParser.IsSafeAbsolutePath(cacheRoot))
+            return new UpdateHandoffResult(false, false, false, "Cache root is not fully qualified");
+        var uuid = Guid.NewGuid().ToString("N");
+        var cacheDir = Path.Combine(cacheRoot, uuid);
+        Directory.CreateDirectory(cacheDir);
+        var helperPath = Path.Combine(cacheDir, UpdateWorker.HelperExeName);
+        File.Copy(ourExe, helperPath, overwrite: true);
+        var installerInCache = Path.Combine(cacheDir, release.Windows.Filename);
+        File.Copy(installerFile, installerInCache, overwrite: true);
+        var originalHash = System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(ourExe));
+        var readyEvent = "Local\\VibertemisUpdateWorker-" + uuid + "-Ready";
+        var commitEvent = "Local\\VibertemisUpdateWorker-" + uuid + "-Commit";
+        var job = new UpdateJob(
+            Schema: 1,
+            ExpectedVersion: release.Version,
+            ExpectedSequence: release.Sequence,
+            OriginalManagerPath: ourExe,
+            ProgramsRoot: paths.ProgramsRoot,
+            ParentPid: Environment.ProcessId,
+            CacheDir: cacheDir,
+            InstallerFilename: release.Windows.Filename,
+            InstallerSha256: release.Windows.Sha256,
+            InstallerBytes: release.Windows.Bytes,
+            ManifestBytes: manifestBytes,
+            SignatureBytes: signatureBytes,
+            ReadyEventName: readyEvent,
+            CommitEventName: commitEvent,
+            OriginalManagerHash: originalHash);
+        var jobPath = Path.Combine(cacheDir, "update-job.json");
+        File.WriteAllText(jobPath, UpdateJobWriter.Serialize(job));
+
+        var psi = new ProcessStartInfo
+        {
+            FileName = helperPath,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            WorkingDirectory = cacheDir,
+        };
+        psi.ArgumentList.Add("--apply-update");
+        psi.ArgumentList.Add(jobPath);
+        using var readyHandle = new EventWaitHandle(false, EventResetMode.AutoReset, readyEvent);
+        using var commitHandle = new EventWaitHandle(false, EventResetMode.AutoReset, commitEvent);
+        System.Diagnostics.Process? worker;
+        try { worker = System.Diagnostics.Process.Start(psi); }
+        catch (Exception ex)
+        {
+            return new UpdateHandoffResult(false, false, false, "Worker start failed: " + ex.Message);
+        }
+        if (worker is null) return new UpdateHandoffResult(false, false, false, "Worker process null");
+        using var workerHandle = worker;
+
+        bool ready;
+        try
+        {
+            ready = readyHandle.WaitOne(ReadyHandshakeTimeout);
+        }
+        catch { ready = false; }
+        if (!ready) return new UpdateHandoffResult(true, false, false, jobPath);
+
+        bool committed;
+        try
+        {
+            commitHandle.Set();
+            committed = true;
+        }
+        catch { committed = false; }
+        return new UpdateHandoffResult(true, ready, committed, jobPath);
     }
 }

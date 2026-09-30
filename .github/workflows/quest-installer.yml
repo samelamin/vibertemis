@@ -43,10 +43,13 @@ jobs:
       - name: Install, refuse busy sessions, retain settings, uninstall
         shell: pwsh
         run: ./quest/installer/smoke-windows.ps1
+      - name: Real signed update handoff and verification
+        shell: pwsh
+        run: ./quest/installer/smoke-update.ps1
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: vibertemisvr-hostmanager-setup-0.1.0.5
-          path: build/installer/VibertemisVR-HostManager-Setup-0.1.0.5.exe
+          name: vibertemisvr-hostmanager-setup-0.1.0.6
+          path: build/installer/VibertemisVR-HostManager-Setup-0.1.0.6.exe
           if-no-files-found: error
           retention-days: 14
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a

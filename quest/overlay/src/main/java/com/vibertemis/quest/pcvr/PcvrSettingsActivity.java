@@ -46,8 +46,7 @@ public final class PcvrSettingsActivity extends Activity {
     setContentView(root);
     label("PCVR connection", 24);
     label(
-        "Pair your Windows PC to start SteamVR when you choose PCVR. Screen gaming never starts"
-            + " SteamVR.",
+        "One-time setup: on Windows choose Prepare VR, then Export pairing in VibertemisVR Host Manager. Import that file here. Vibeshine screen pairing is separate. After setup, Connect starts SteamVR automatically from this headset.",
         16);
     status = label("Checking pairing…", 16);
     body.addView(
@@ -194,7 +193,7 @@ public final class PcvrSettingsActivity extends Activity {
       HostPairing pairing = store.load();
       text =
           pairing == null
-              ? "No PC paired. Choose the pairing file created on your PC."
+              ? "VR host not paired yet. Import the Windows VR manager's pairing file."
               : "Paired PC: " + pairing.address;
     } catch (Exception e) {
       text = "Pairing unavailable. Import a fresh pairing file from your PC.";

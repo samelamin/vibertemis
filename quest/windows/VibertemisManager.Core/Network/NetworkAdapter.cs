@@ -42,7 +42,8 @@ public sealed record NetworkAdapter(
         return new List<string> { cidrText };
     }
 
-    public override string ToString() => $"{Name} ({Address})";
+    public bool IsTailscale => TailscaleNetwork.IsAdapter(Name, Description) && TailscaleNetwork.IsAddress(Address);
+    public override string ToString() => $"{Name} ({Address})" + (IsTailscale ? " — VPN" : "");
 }
 
 public interface IAdapterEnumerator
@@ -83,6 +84,7 @@ public sealed class SystemAdapterEnumerator : IAdapterEnumerator
     {
         var desc = ni.Description ?? "";
         var name = ni.Name ?? "";
+        if (TailscaleNetwork.IsAdapter(name, desc)) return false;
         // Conservative heuristic: ignore well-known virtual adapters
         // so the user doesn't accidentally bind to one. Real
         // Hyper-V / WSL bridges still show up; only the ones that

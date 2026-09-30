@@ -6,10 +6,16 @@ namespace VibertemisManager.Core.Update;
 public sealed record ReleaseAsset(string Filename, Uri Url, long Bytes, string Sha256);
 public sealed record SignedRelease(long Sequence, string Version, string NativeProtocol, ReleaseAsset Windows)
 {
-    public const long CurrentSequence = 5;
+    public const long CurrentSequence = 6;
+    public const string CurrentVersion = "0.1.0.6";
     public const string Channel = "quest-preview";
     public const string Protocol = "20.14.1-vibertemis-pyro.1";
     public const string Repository = "https://github.com/samelamin/vibertemis/releases/download/";
+    public const string TagPrefix = "quest-preview-v";
+
+    private static readonly Version CurrentVersionValue = new(CurrentVersion);
+
+    public static Version CurrentVersionReference => CurrentVersionValue;
 
     public static string EmbeddedPublicKey()
     {
@@ -17,6 +23,21 @@ public sealed record SignedRelease(long Sequence, string Version, string NativeP
             ?? throw new InvalidDataException("Update trust key missing");
         using var reader = new StreamReader(stream);
         return reader.ReadToEnd();
+    }
+
+    // Parses "0.1.0.6" out of "quest-preview-v0.1.0.6". Returns false for
+    // anything that is not a numeric four-component version. Strict enough
+    // to reject non-tag inputs and forgiving enough to ignore trailing junk.
+    public static bool TryParseTagVersion(string tag, out Version version)
+    {
+        version = new Version(0, 0);
+        if (string.IsNullOrEmpty(tag)) return false;
+        if (!tag.StartsWith(TagPrefix, StringComparison.Ordinal)) return false;
+        var suffix = tag.Substring(TagPrefix.Length);
+        if (!Regex.IsMatch(suffix, @"\A[0-9]{1,5}\.[0-9]{1,5}\.[0-9]{1,5}\.[0-9]{1,5}\z"))
+            return false;
+        version = new Version(suffix);
+        return true;
     }
 
     public static SignedRelease Verify(byte[] body, byte[] signature, string trustedPem)
@@ -43,7 +64,7 @@ public sealed record SignedRelease(long Sequence, string Version, string NativeP
         var filename = Text(windows, "filename");
         if (filename != $"VibertemisVR-HostManager-Setup-{version}.exe")
             throw new InvalidDataException("Unexpected installer name");
-        var expectedUrl = Repository + "quest-preview-v" + version + "/" + filename;
+        var expectedUrl = Repository + TagPrefix + version + "/" + filename;
         if (Text(windows, "url") != expectedUrl) throw new InvalidDataException("Unexpected update source");
         var size = windows.GetProperty("bytes").GetInt64();
         var hash = Text(windows, "sha256");

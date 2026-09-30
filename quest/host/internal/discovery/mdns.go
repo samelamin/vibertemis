@@ -16,7 +16,7 @@ func Records(pin, protocol string) ([]string, error) {
 	if !regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(pin) {
 		return nil, fmt.Errorf("invalid discovery identity")
 	}
-	return []string{"certpin=" + pin, "protocol=" + protocol, "version=0.1.0.5", "sequence=5"}, nil
+	return []string{"certpin=" + pin, "protocol=" + protocol, "version=0.1.0.6", "sequence=6"}, nil
 }
 func Start(address, pin, protocol string) (*zeroconf.Server, error) {
 	endpoint, err := netip.ParseAddrPort(address)

@@ -460,13 +460,38 @@ public class MainHubActivity extends Activity {
     protected boolean hasPairedHost() { return new PairingStore(this).hasPairing(); }
     protected HostPairing loadHostPairing() throws Exception { return new PairingStore(getApplicationContext()).load(); }
     protected HostClient createHostClient() { return new HostClient(); }
+    protected String loadNativeHeadsetIdentity() throws Exception {
+        return com.vibertemis.quest.pcvr.NativePeerIdentity.loadOrCreate(getApplicationContext());
+    }
 
     protected boolean usesNativeRuntime() { return PcvrOptions.PYROWAVE_BUILD; }
 
     private void launchSteamVr() {
         if (launchPending || connectPending || !VrCapabilities.isHeadset(this) || !hasMicPermission()) return;
+        if (!hasPairedHost()) { showVrSetup(); return; }
         if (!usesNativeRuntime()) { startPcvrConnection(); return; }
         confirmPcvrRestart(this::startPcvrConnection);
+    }
+
+    private void showVrSetup() {
+        connectPending = true;
+        final int generation = ++connectGeneration;
+        connectDialog = new android.app.AlertDialog.Builder(this)
+            .setTitle("Set up VR on your PC")
+            .setMessage("This is a VR headset. Vibeshine pairing connects flat-screen games; VR needs the Windows VR host too.\n\n1. In VibertemisVR Host Manager, choose Prepare VR.\n2. Export pairing and import that file in PCVR settings here.\n3. Return and choose Connect. SteamVR will start automatically.")
+            .setNegativeButton("Cancel", (d,w) -> cancelHostConnection())
+            .setOnCancelListener(d -> cancelHostConnection())
+            .setPositiveButton("Pair VR host", (d,w) -> {
+                if (generation != connectGeneration || !resumed) return;
+                finishHostConnection();
+                startActivity(new Intent(this, PcvrSettingsActivity.class));
+            })
+            .setNeutralButton("Manual VR", (d,w) -> {
+                if (generation != connectGeneration || !resumed) return;
+                finishHostConnection();
+                if (usesNativeRuntime()) confirmPcvrRestart(this::dispatchSteamVr);
+                else dispatchSteamVr();
+            }).show();
     }
 
     private void confirmPcvrRestart(Runnable connect) {
@@ -488,7 +513,7 @@ public class MainHubActivity extends Activity {
 
     private void startPcvrConnection() {
         if (launchPending || connectPending || !VrCapabilities.isHeadset(this) || !hasMicPermission()) return;
-        if (!hasPairedHost()) { dispatchSteamVr(); return; }
+        if (!hasPairedHost()) { showVrSetup(); return; }
         connectPending = true;
         final int generation = ++connectGeneration;
         final HostClient client = createHostClient();
@@ -515,6 +540,8 @@ public class MainHubActivity extends Activity {
                     new PairingStore(getApplicationContext()).updateAddress(pairing, candidate);
                     pairing = candidate;
                 }
+                if (usesNativeRuntime()) client.setHeadsetHostname(
+                    loadNativeHeadsetIdentity());
                 client.start(pairing, new PcvrOptions(getApplicationContext()).requestedCodec());
                 runOnUiThread(() -> {
                     if (generation != connectGeneration || !connectPending) return;

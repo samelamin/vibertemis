@@ -107,6 +107,7 @@ type StartPcvrResponse struct {
 
 // StartPcvrRequest is the request payload.
 type StartPcvrRequest struct {
+	ClientHostname string `json:"client_hostname,omitempty"`
 	NativeProtocol string `json:"native_protocol,omitempty"`
 	Role           string `json:"role"`
 	Mode           string `json:"mode"`
@@ -386,7 +387,7 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(CapabilitiesResponse{
-		Version: "0.1.0.5", Sequence: 5, NativeProtocol: alvr.NativeVersion,
+		Version: "0.1.0.6", Sequence: 6, NativeProtocol: alvr.NativeVersion,
 		Codecs:          res.Codecs,
 		PyroWave:        res.PyroWave,
 		PyroWaveReason:  res.PyroWaveReason,

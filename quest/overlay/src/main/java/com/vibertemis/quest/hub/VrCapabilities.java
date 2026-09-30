@@ -3,6 +3,7 @@ package com.vibertemis.quest.hub;
 import android.content.Context;
 import android.content.pm.PackageManager;
 import android.util.Log;
+import android.os.Build;
 
 /**
  * Capability gating for the two launch modes.
@@ -34,9 +35,18 @@ public final class VrCapabilities {
      */
     public static boolean isHeadset(Context ctx) {
         PackageManager pm = ctx.getPackageManager();
-        boolean has = pm.hasSystemFeature(PackageManager.FEATURE_VR_HEADTRACKING);
+        boolean has = identifiesHeadset(pm.hasSystemFeature(PackageManager.FEATURE_VR_HEADTRACKING),
+                Build.MANUFACTURER, Build.MODEL);
         Log.d(TAG, "FEATURE_VR_HEADTRACKING=" + has);
         return has;
+    }
+
+    static boolean identifiesHeadset(boolean headtracking, String manufacturer, String model) {
+        if (headtracking) return true;
+        if (!("Oculus".equalsIgnoreCase(manufacturer) || "Meta".equalsIgnoreCase(manufacturer))) return false;
+        return "Quest".equalsIgnoreCase(model) || "Quest 2".equalsIgnoreCase(model)
+                || "Quest Pro".equalsIgnoreCase(model) || "Quest 3".equalsIgnoreCase(model)
+                || "Quest 3S".equalsIgnoreCase(model);
     }
 
     /**

@@ -31,7 +31,7 @@ final class UpdateTransport {
                 throw new IOException("Untrusted update redirect");
             HttpURLConnection c = (HttpURLConnection) url.openConnection(); active = c;
             c.setInstanceFollowRedirects(false); c.setConnectTimeout(10000); c.setReadTimeout(15000);
-            c.setRequestProperty("User-Agent", "VibertemisQuest/0.1.0.5");
+            c.setRequestProperty("User-Agent", "VibertemisQuest/0.1.0.6");
             int code = c.getResponseCode();
             if (code == 301 || code == 302 || code == 303 || code == 307 || code == 308) {
                 String next = c.getHeaderField("Location"); c.disconnect();
@@ -72,7 +72,7 @@ final class UpdateTransport {
             byte[] sig=read(UpdateManifest.PREFIX+tag+"/quest-update.json.sig",384);
             UpdateManifest m=UpdateManifest.verify(body,sig,trustedKey);
             if (!tag.equals("quest-preview-v"+m.version)) throw new IOException("Signed release tag mismatch");
-            if (m.sequence > 5 && m.versionCode > currentVersion && (newest == null || m.sequence > newest.sequence)) {
+            if (m.sequence > 6 && m.versionCode > currentVersion && (newest == null || m.sequence > newest.sequence)) {
                 newest=m; manifestBytes=body; signatureBytes=sig;
             }
         }

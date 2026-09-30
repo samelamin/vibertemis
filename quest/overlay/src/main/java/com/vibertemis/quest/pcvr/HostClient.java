@@ -30,6 +30,9 @@ public class HostClient {
 
   private volatile boolean cancelled;
   private HttpsURLConnection active;
+  private String headsetHostname;
+
+  public void setHeadsetHostname(String hostname) { headsetHostname = hostname; }
 
   public synchronized void cancel() {
     cancelled = true;
@@ -165,9 +168,21 @@ public class HostClient {
   }
 
   public void start(HostPairing pairing, String codec) throws Exception {
+    start(pairing, codec, headsetHostname);
+  }
+
+  public void start(HostPairing pairing, String codec, String hostname) throws Exception {
+    if (hostname != null) {
+      JSONObject capabilities = request(pairing, "GET", "/capabilities", new byte[0]);
+      if (capabilities.optInt("sequence", 0) < 6
+          || !"20.14.1-vibertemis-pyro.1".equals(capabilities.optString("native_protocol", ""))) {
+        throw new Failure("HOST_UPDATE", "Update VibertemisVR Host Manager on Windows to preview6 or later, then choose Prepare VR once. Your pairing will be kept.");
+      }
+    }
     byte[] body =
         new JSONObject()
             .put("role", "headset")
+            .put("client_hostname", hostname)
             .put("mode", "pcvr")
             .put("requested_codec", codec)
             .put("native_protocol", PcvrOptions.PYROWAVE_BUILD ? "20.14.1-vibertemis-pyro.1" : "")
@@ -225,6 +240,10 @@ public class HostClient {
 
   private static Failure failure(String code) {
     switch (code) {
+      case "HEADSET_NETWORK":
+        return new Failure(code, "VR needs the same local network or an encrypted VPN between Quest and PC. Forwarded Vibeshine ports support flat-screen streaming only.");
+      case "HEADSET_SETUP":
+        return new Failure(code, "Close SteamVR and ALVR Dashboard on your PC, then reconnect once to register this headset. If this is your first connection, complete Prepare VR in the Windows manager.");
       case "AUTH_FAILED":
         return new Failure(
             code,

@@ -19,5 +19,6 @@
   </ItemGroup>
   <ItemGroup>
     <EmbeddedResource Include="../../update/public-key.pem" LogicalName="Vibertemis.Update.PublicKey" />
+    <EmbeddedResource Include="Resources/VR/default-session.json" LogicalName="Vibertemis.VR.DefaultSession" />
   </ItemGroup>
 </Project>

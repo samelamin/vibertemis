@@ -2,76 +2,145 @@ using System.Net;
 using System.Net.Http;
 using System.Security.Cryptography;
 using System.Text.Json;
-using System.Text.RegularExpressions;
 namespace VibertemisManager.Core.Update;
+
+public sealed record UpdateProgress(long BytesDone, long BytesTotal, string Stage, bool Completed);
+
+public sealed record CheckResult(SignedRelease Release, byte[] Manifest, byte[] Signature);
 
 public sealed class ReleaseClient : IDisposable
 {
-    private readonly HttpClient _http = new(new HttpClientHandler { AllowAutoRedirect = false })
-    { Timeout = TimeSpan.FromMinutes(10) };
-    public ReleaseClient() { _http.DefaultRequestHeaders.UserAgent.ParseAdd("VibertemisVR/0.1.0.5"); }
+    private readonly HttpClient _http;
+    public ReleaseClient() : this(new HttpClientHandler { AllowAutoRedirect = false }, disposeHandler: true) { }
+    public ReleaseClient(HttpMessageHandler handler) : this(handler, disposeHandler: false) { }
+
+    private ReleaseClient(HttpMessageHandler handler, bool disposeHandler)
+    {
+        if (handler is null) throw new ArgumentNullException(nameof(handler));
+        _http = new HttpClient(handler, disposeHandler)
+        {
+            Timeout = TimeSpan.FromMinutes(10)
+        };
+        _http.DefaultRequestHeaders.UserAgent.ParseAdd("VibertemisVR/" + SignedRelease.CurrentVersion);
+    }
+
     public void Dispose() => _http.Dispose();
 
-    public async Task<SignedRelease?> CheckAsync(CancellationToken cancellation)
+    // Returns the verified newer release plus the exact signed bytes
+    // it came from. Callers must keep the bytes for the eventual
+    // update job so the worker re-verifies them itself.
+    public async Task<CheckResult?> CheckAsync(CancellationToken cancellation,
+        IProgress<UpdateProgress>? progress = null, string? publicKeyOverride = null)
     {
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
         deadline.CancelAfter(TimeSpan.FromSeconds(45));
         cancellation = deadline.Token;
+        progress?.Report(new UpdateProgress(0, 0, "checking", false));
         // Quest preview releases only. Never use the desktop /latest endpoint.
-        var body = await ReadBoundedAsync(new Uri("https://api.github.com/repos/samelamin/vibertemis/releases?per_page=100"), 2*1024*1024, cancellation);
+        var body = await ReadBoundedAsync(new Uri("https://api.github.com/repos/samelamin/vibertemis/releases?per_page=100"), 2 * 1024 * 1024, cancellation);
         using var releases = JsonDocument.Parse(body);
-        SignedRelease? newest = null;
+        var candidates = new List<(string Tag, JsonElement Element)>();
         foreach (var release in releases.RootElement.EnumerateArray())
         {
             if (release.GetProperty("draft").GetBoolean()) continue;
             var tag = release.GetProperty("tag_name").GetString() ?? "";
-            if (!Regex.IsMatch(tag, @"\Aquest-preview-v[0-9]{1,5}\.[0-9]{1,5}\.[0-9]{1,5}\.[0-9]{1,5}\z")) continue;
+            // Tag prefix + numeric version filter BEFORE any manifest
+            // download so older releases cost nothing.
+            if (!SignedRelease.TryParseTagVersion(tag, out var parsed)) continue;
+            if (parsed <= SignedRelease.CurrentVersionReference) continue;
             var names = release.GetProperty("assets").EnumerateArray().Select(x => x.GetProperty("name").GetString()).ToHashSet();
             if (!names.Contains("quest-update.json") || !names.Contains("quest-update.json.sig")) continue;
-            var prefix = SignedRelease.Repository + tag + "/";
-            var manifest = await ReadBoundedAsync(new Uri(prefix + "quest-update.json"), 65536, cancellation);
-            var signature = await ReadBoundedAsync(new Uri(prefix + "quest-update.json.sig"), 384, cancellation);
-            var verified = SignedRelease.Verify(manifest, signature, SignedRelease.EmbeddedPublicKey());
-            if (tag != "quest-preview-v" + verified.Version) throw new InvalidDataException("Release tag does not match signed metadata");
-            if (verified.Sequence > SignedRelease.CurrentSequence && new Version(verified.Version) > new Version("0.1.0.5") && (newest is null || verified.Sequence > newest.Sequence)) newest = verified;
+            candidates.Add((tag, release));
         }
-        return newest;
+        candidates.Sort((a, b) =>
+        {
+            SignedRelease.TryParseTagVersion(a.Tag, out var va);
+            SignedRelease.TryParseTagVersion(b.Tag, out var vb);
+            return vb!.CompareTo(va);
+        });
+        var trustKey = publicKeyOverride ?? SignedRelease.EmbeddedPublicKey();
+        for (var i = 0; i < candidates.Count; i++)
+        {
+            var (currentTag, _) = candidates[i];
+            var prefix = SignedRelease.Repository + currentTag + "/";
+            byte[] manifest;
+            byte[] signature;
+            try
+            {
+                manifest = await ReadBoundedAsync(new Uri(prefix + "quest-update.json"), 65536, cancellation);
+                signature = await ReadBoundedAsync(new Uri(prefix + "quest-update.json.sig"), 384, cancellation);
+            }
+            catch (InvalidDataException) when (i > 0)
+            {
+                continue; // older manifest missing/unreadable: skip silently
+            }
+            SignedRelease verified;
+            try
+            {
+                verified = SignedRelease.Verify(manifest, signature, trustKey);
+            }
+            catch (Exception) when (i > 0)
+            {
+                continue; // older broken signature/metadata: skip silently
+            }
+            if (currentTag != SignedRelease.TagPrefix + verified.Version)
+                throw new InvalidDataException("Release tag does not match signed metadata");
+            if (verified.Sequence <= SignedRelease.CurrentSequence) continue;
+            if (new Version(verified.Version) <= SignedRelease.CurrentVersionReference) continue;
+            progress?.Report(new UpdateProgress(0, 0, "checked", true));
+            return new CheckResult(verified, manifest, signature);
+        }
+        progress?.Report(new UpdateProgress(0, 0, "checked", true));
+        return null;
     }
 
-    public async Task<string> DownloadAsync(SignedRelease release, string cache, CancellationToken cancellation)
+    public async Task<string> DownloadAsync(SignedRelease release, string cache, CancellationToken cancellation,
+        IProgress<UpdateProgress>? progress = null)
     {
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
         deadline.CancelAfter(TimeSpan.FromMinutes(10));
         cancellation = deadline.Token;
-        if (release.Sequence <= SignedRelease.CurrentSequence || new Version(release.Version) <= new Version("0.1.0.5")) throw new InvalidDataException("Update would downgrade this installation");
+        if (release.Sequence <= SignedRelease.CurrentSequence
+            || new Version(release.Version) <= SignedRelease.CurrentVersionReference)
+            throw new InvalidDataException("Update would downgrade this installation");
         Directory.CreateDirectory(cache);
         var final = Path.Combine(cache, release.Windows.Filename);
         if (File.Exists(final))
         {
-            try { VerifyFile(final, release.Windows); return final; }
-            catch (CryptographicException) { }
+            try
+            {
+                VerifyFile(final, release.Windows);
+                progress?.Report(new UpdateProgress(release.Windows.Bytes, release.Windows.Bytes, "verified", true));
+                return final;
+            }
+            catch (CryptographicException)
+            {
+                File.Delete(final);
+            }
         }
         var partial = final + "." + Guid.NewGuid().ToString("N") + ".part";
         try
         {
-            using (var response = await OpenAsync(release.Windows.Url, cancellation))
-            await using (var input = await response.Content.ReadAsStreamAsync(cancellation))
-            await using (var output = new FileStream(partial, FileMode.CreateNew, FileAccess.Write, FileShare.None, 65536, true))
+            using var response = await OpenAsync(release.Windows.Url, cancellation);
+            await using var input = await response.Content.ReadAsStreamAsync(cancellation);
+            await using var output = new FileStream(partial, FileMode.CreateNew, FileAccess.Write, FileShare.None, 65536, true);
+            var buffer = new byte[65536];
+            long total = 0;
+            int read;
+            while ((read = await input.ReadAsync(buffer, cancellation)) != 0)
             {
-                var buffer = new byte[65536];
-                long total = 0;
-                int read;
-                while ((read = await input.ReadAsync(buffer, cancellation)) != 0)
-                {
-                    total += read;
-                    if (total > release.Windows.Bytes) throw new InvalidDataException("Update exceeds its signed size");
-                    await output.WriteAsync(buffer.AsMemory(0, read), cancellation);
-                }
-                if (total != release.Windows.Bytes) throw new InvalidDataException("Incomplete update download");
-                await output.FlushAsync(cancellation);
+                total += read;
+                if (total > release.Windows.Bytes) throw new InvalidDataException("Update exceeds its signed size");
+                await output.WriteAsync(buffer.AsMemory(0, read), cancellation);
+                if (progress is not null && (total == release.Windows.Bytes || (total / 65536) % 16 == 0))
+                    progress.Report(new UpdateProgress(total, release.Windows.Bytes, "downloading", false));
             }
+            if (total != release.Windows.Bytes) throw new InvalidDataException("Incomplete update download");
+            await output.FlushAsync(cancellation);
+            await output.DisposeAsync();
             VerifyFile(partial, release.Windows);
             File.Move(partial, final, overwrite: true);
+            progress?.Report(new UpdateProgress(release.Windows.Bytes, release.Windows.Bytes, "downloaded", true));
             return final;
         }
         finally { if (File.Exists(partial)) File.Delete(partial); }
