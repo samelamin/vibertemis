@@ -35,7 +35,7 @@
          detection and routing automatically. -->
     <string name="hub_btn_steamvr">Connect</string>
     <string name="hub_steamvr_unsupported">PCVR requires a VR headset.</string>
-    <string name="hub_steamvr_companion_reminder">First connection? Choose Setup VR to reuse your paired Vibeshine PC. The matching Windows VR Host Manager must be installed.</string>
+    <string name="hub_steamvr_companion_reminder">First connection? In Windows VR Host Manager, choose Pair headset. Here, choose Setup VR, compare the code and approve once on the PC.</string>
     <string name="hub_mic_denied">Microphone permission is required to start SteamVR. PCVR not started.</string>
 
     <string name="hub_btn_settings">Streaming settings</string>
@@ -73,19 +73,19 @@
     <string name="setup_pcvr_mode_title">PCVR (Quest 3)</string>
     <string name="setup_pcvr_mode_body">Stream SteamVR with head and Touch controller tracking. Install the matching custom Windows host from this app release. Stock ALVR builds cannot connect to this preview.</string>
     <string name="setup_pcvr_steps_pc">Steps on the PC:</string>
-    <string name="setup_pcvr_step1">Install the VR-enabled Vibeshine preview and matching VibertemisVR Host Manager from this release.</string>
+    <string name="setup_pcvr_step1">Install VibertemisVR Host Manager from this release. Keep your existing Vibeshine installation for screen gaming.</string>
     <string name="setup_pcvr_step2">Open Host Manager and choose Setup VR. It checks the Windows runtime automatically; approve setup when prompted.</string>
     <string name="setup_pcvr_step3">If Steam or SteamVR needs setup, use the displayed action, then retry Setup VR. Close SteamVR and ALVR Dashboard first.</string>
     <string name="setup_pcvr_step4">Enable Keep host ready after Windows sign-in. Leave the manager in the tray; SteamVR starts when you connect for VR.</string>
     <string name="setup_pcvr_steps_headset">Steps on the headset:</string>
-    <string name="setup_pcvr_headset_step1">Choose Setup VR on the home screen and select your already-paired Vibeshine PC. If needed, pair in Screen gaming first. No pairing file is required.</string>
+    <string name="setup_pcvr_headset_step1">Choose Pair headset in Windows VR Host Manager. On this app’s home screen, choose Setup VR and select your PC. Compare every character of the code and approve on the PC once. No pairing file is required.</string>
     <string name="setup_pcvr_headset_step2">Choose Connect, grant microphone access, and confirm any restart. Save running VR games first.</string>
     <string name="setup_pcvr_headset_step3">Once connected, launch a VR game from the SteamVR library in the headset.</string>
 
     <string name="setup_pcvr_mic_note">This preview build requires microphone permission to start SteamVR. You can control voice chat in the ALVR dashboard.</string>
     <string name="setup_pcvr_wan_note">Remote VR needs a reachable PC route, such as a VPN on both devices. Select the PC VPN adapter under Windows Advanced and repeat Setup VR. Forwarded GameStream ports alone do not carry tracked VR.</string>
     <string name="setup_pcvr_tuning_note">PCVR settings offers PyroWave for Home, Standard AV1/HEVC, Travel mode and bitrate limits. Home allows up to 200 Mbps; Travel starts at 30 Mbps. Use ALVR Dashboard for resolution, refresh and fixed foveation. Start at 72 Hz and test your network.</string>
-    <string name="setup_pcvr_troubleshoot_note">If setup fails, check that Vibeshine supports the VR bridge, the matching Windows manager is running, and both are reachable. Retry Setup VR. Manual pairing for older hosts remains under Advanced.</string>
+    <string name="setup_pcvr_troubleshoot_note">If setup fails, check that the matching Windows VR Host Manager is hosting and reachable. Reopen Pair headset on the PC, then retry Setup VR here. Vibeshine needs no changes. Manual pairing remains under Advanced.</string>
 
     <string name="setup_open_link">Open</string>
     <string name="setup_copy_link">Copy link</string>
@@ -95,7 +95,7 @@
     <string name="setup_downloads_title">Downloads</string>
     <string name="setup_url_alvr_windows">Windows VR Host Manager</string>
     <string name="setup_url_pcvr_guide">Windows setup guide</string>
-    <string name="setup_url_sunshine">VR-enabled Vibeshine host</string>
+    <string name="setup_url_sunshine">Sunshine (screen gaming)</string>
     <string name="setup_url_apollo">Apollo</string>
     <string name="setup_url_requirements">ALVR PC requirements (CPU, GPU, network)</string>
 

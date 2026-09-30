@@ -47,7 +47,7 @@ public final class PcvrSettingsActivity extends Activity {
     setContentView(root);
     label("PCVR connection", 24);
     label(
-        "Choose Setup VR in the Windows Host Manager once. Then use Setup VR on this app’s home screen to select your already-paired Vibeshine PC. No pairing file needed. Connect starts SteamVR for this headset.",
+        "In Windows VR Host Manager, choose Setup VR, then Pair headset. Here, return home and choose Setup VR. Compare the code and approve once on the PC. Vibeshine stays unchanged. Connect starts SteamVR for this headset.",
         16);
     status = label("Checking pairing…", 16);
     LinearLayout manualPairing = new LinearLayout(this);

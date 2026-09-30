@@ -31,8 +31,8 @@ import (
 	"time"
 
 	"github.com/vibertemis/quest-codec-control/host/internal/alvr"
-	"github.com/vibertemis/quest-codec-control/host/internal/bridge"
 	"github.com/vibertemis/quest-codec-control/host/internal/discovery"
+	"github.com/vibertemis/quest-codec-control/host/internal/enrollment"
 	"github.com/vibertemis/quest-codec-control/host/internal/pairing"
 	"github.com/vibertemis/quest-codec-control/host/internal/server"
 	"github.com/vibertemis/quest-codec-control/host/internal/state"
@@ -132,71 +132,42 @@ func main() {
 	ipLimiter := state.NewRateLimiterFactory(100, 30*time.Second, 1024, time.Now)
 	actionLimiter := state.NewRateLimiterFactory(3, 30*time.Second, 1024, time.Now)
 
-	// Bridge: per-device credentials + redeem endpoint +
-	// pipe runner. The companion issues grants via the
-	// pipe and accepts redemptions over HTTPS. The bridge
-	// does not break legacy pairing — it lives alongside
-	// the global token.
-	bridgeService := bridge.New(st.CertPEM, extractPort(*listenAddr))
-	persist := &bridge.FilePersist{Dir: *stateDir}
-	if devices, err := bridge.LoadDevicesFromFile(*stateDir); err != nil {
-		log.Printf("bridge: load devices: %v (continuing without restored credentials)", err)
-	} else if len(devices) > 0 {
-		bridgeService.LoadDevices(devices)
-		log.Printf("bridge: restored %d device credential(s)", len(devices))
+	store := enrollment.FileStore{Dir: *stateDir}
+	records, err := store.Load()
+	if err != nil {
+		log.Fatalf("load standalone pairings: %v", err)
 	}
-	// Wire the persist implementation into the service so
-	// inbound revoke persists too. Redeem uses its own
-	// Persist from RedeemInput for testability; both go
-	// through the same persistMu.
-	bridgeService.SetInboundPersist(persist)
+	pairingService, err := enrollment.New(st.CertPEM, st.CertPin, records, store, time.Now)
+	if err != nil {
+		log.Fatalf("standalone pairing state: %v", err)
+	}
 
 	srv, err := server.New(server.Deps{
-		Token:                st.Token,
-		Cert:                 tlsCert,
-		Adapter:              adapter,
-		Launcher:             launcher,
-		NonceLRU:             nonceLRU,
-		IPLimiter:            ipLimiter,
-		ActionLimiter:        actionLimiter,
-		SteamPath:            *steamPath,
-		MaxSkew:              *maxSkew,
-		DeviceLookup:         bridgeService,
-		DeviceIdentityLookup: &bridgeIdentityAdapter{svc: bridgeService},
-		FreshAuthorizer:      bridgeService,
+		Token:         st.Token,
+		Cert:          tlsCert,
+		Adapter:       adapter,
+		Launcher:      launcher,
+		NonceLRU:      nonceLRU,
+		IPLimiter:     ipLimiter,
+		ActionLimiter: actionLimiter,
+		SteamPath:     *steamPath,
+		MaxSkew:       *maxSkew,
+
+		DeviceIdentityLookup: &standaloneIdentityAdapter{svc: pairingService},
+		FreshAuthorizer:      pairingService,
 	})
 	if err != nil {
 		log.Fatalf("server: %v", err)
 	}
-	// Attach /pairing/redeem. The handler reads the live
-	// authorizer from the service so a fresh authority
-	// round trip happens whenever a Vibeshine pipe is
-	// active.
-	srv.RegisterRedeem(&server.RedeemHandler{
-		Service: bridgeService,
-		Persist: persist,
-	})
-
+	srv.RegisterEnrollment(pairingService)
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-
-	// Bridge IPC pipe. On Windows this opens
-	// \\.\pipe\VibertemisVRBridge-<session> and serves
-	// inbound issue_grant / revoke + outbound authorize.
-	// A failed bridge start is logged but does NOT stop
-	// the companion — legacy pairing keeps working.
-
-	runner := bridge.NewRunner()
-	pipeDone := make(chan struct{})
+	adminDone := make(chan struct{})
 	go func() {
-		defer close(pipeDone)
-		pipeCtx, pipeCancel := context.WithCancel(ctx)
-		defer pipeCancel()
-		err := runner.Run(pipeCtx, bridge.PipeConfig{
-			Service: bridgeService,
-		})
-		if err != nil && !errors.Is(err, bridge.ErrUnsupported) && pipeCtx.Err() == nil {
-			log.Printf("bridge pipe stopped: %v", err)
+		defer close(adminDone)
+		if err := srv.ServeEnrollmentAdmin(ctx, pairingService); err != nil && ctx.Err() == nil {
+			pairingService.Close()
+			log.Printf("Local headset pairing unavailable (127.0.0.1:28541): %v", err)
 		}
 	}()
 
@@ -216,15 +187,15 @@ func main() {
 	} else {
 		log.Printf("  steam path   : (URL dispatch)")
 	}
-	log.Printf("  bridge pipe  : active Windows console session")
+	log.Printf("  VR pairing   : independent, local PC approval required")
 	if err := srv.ListenAndServe(ctx, *listenAddr); err != nil {
 		log.Printf("serve: %v", err)
 	}
 	cancel()
 	select {
-	case <-pipeDone:
+	case <-adminDone:
 	case <-time.After(2 * time.Second):
-		log.Printf("bridge pipe did not exit within 2s; continuing shutdown")
+		log.Printf("pairing manager listener did not exit within 2s; continuing shutdown")
 	}
 }
 
@@ -241,24 +212,16 @@ func extractPort(addr string) int {
 	return port
 }
 
-// bridgeIdentityAdapter adapts a *bridge.Service to the
-// server's DeviceIdentityLookup interface. The adapter
-// keeps the server package free of bridge-specific type
-// names.
-type bridgeIdentityAdapter struct{ svc *bridge.Service }
+// Standalone records are a separate authority; inherited host grants are never
+// promoted into this store. Every device request consults current local state.
+type standaloneIdentityAdapter struct{ svc *enrollment.Service }
 
-func (a *bridgeIdentityAdapter) LookupDeviceIdentity(deviceID string) (server.PairDeviceIdentity, bool) {
-	d, ok := a.svc.LookupDeviceIdentity(deviceID)
+func (a *standaloneIdentityAdapter) LookupDeviceIdentity(id string) (server.PairDeviceIdentity, bool) {
+	r, ok := a.svc.Lookup(id)
 	if !ok {
 		return server.PairDeviceIdentity{}, false
 	}
-	return server.PairDeviceIdentity{
-		DeviceID:         d.DeviceID,
-		Token:            d.Token,
-		ClientUUID:       d.ClientUUID,
-		ClientCertSHA:    d.ClientCertSHA,
-		CompanionCertSHA: d.CompanionCertSHA,
-	}, true
+	return server.PairDeviceIdentity{DeviceID: r.ID, Token: r.Token, PublicKeySHA: r.KeySHA, CompanionCertSHA: r.CertSHA}, true
 }
 
 // validateAdvertisedAddr refuses wildcard / loopback addresses

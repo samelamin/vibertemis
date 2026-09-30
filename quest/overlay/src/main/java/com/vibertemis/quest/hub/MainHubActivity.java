@@ -99,7 +99,7 @@ public class MainHubActivity extends Activity {
     private com.vibertemis.quest.update.UpdateRepository updateRepository;
     private com.vibertemis.quest.update.UpdateRepository.Observer updateObserver;
     private volatile HostClient hostClient;
-    private com.vibertemis.quest.pcvr.ExistingPairingBootstrap vrBootstrap;
+    private com.vibertemis.quest.pcvr.StandalonePairingClient vrBootstrap;
     private android.app.AlertDialog connectDialog;
     private final java.util.concurrent.ExecutorService connectWorker = java.util.concurrent.Executors.newSingleThreadExecutor();
     private boolean launchPending;
@@ -111,6 +111,7 @@ public class MainHubActivity extends Activity {
      * clear {@code launchPending}.
      */
     private boolean launchLeftHub;
+    private String pairingNotice;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -261,6 +262,10 @@ public class MainHubActivity extends Activity {
     protected void onResume() {
         super.onResume();
         resumed = true;
+        if (pairingNotice != null) {
+            new android.app.AlertDialog.Builder(this).setTitle("VR pairing").setMessage(pairingNotice).setPositiveButton("Done", null).show();
+            pairingNotice = null;
+        }
         settingsController.refresh();
         settingsController.register();
         renderStatus();
@@ -285,7 +290,9 @@ public class MainHubActivity extends Activity {
     protected void onPause() {
         super.onPause();
         resumed = false;
-        cancelHostConnection();
+        // Removing the headset to approve on the PC must not cancel enrollment.
+        // Actual VR launch requests still cancel when leaving the foreground.
+        if (vrBootstrap == null) cancelHostConnection();
         settingsController.unregister();
         // Mark that we actually left for a launched activity. A
         // permission dialog pause may arrive BEFORE launchPending is
@@ -518,7 +525,7 @@ public class MainHubActivity extends Activity {
         finally { db.close(); }
         if (paired.isEmpty()) {
             new android.app.AlertDialog.Builder(this).setTitle("Pair your PC first")
-                .setMessage("Add and pair your PC in Screen gaming. Then return to Setup VR; the existing pairing will be reused.")
+                .setMessage("Add your PC in Screen gaming, then return here. In Windows VR Host Manager, choose Pair headset. VR pairing uses a separate approval; Vibeshine stays unchanged.")
                 .setPositiveButton("Screen gaming", (d,w) -> { if(resumed) launchScreenGaming(); })
                 .setNeutralButton("Advanced pairing", (d,w) -> showVrAdvanced())
                 .setNegativeButton("Cancel",null).show();
@@ -526,7 +533,7 @@ public class MainHubActivity extends Activity {
         }
         String[] names = new String[paired.size()];
         for (int i=0;i<names.length;i++) names[i]=paired.get(i).name;
-        new android.app.AlertDialog.Builder(this).setTitle("Set up VR with a paired PC")
+        new android.app.AlertDialog.Builder(this).setTitle("Choose your PC for VR")
             .setItems(names,(d,which)->enrollVrHost(paired.get(which)))
             .setNeutralButton("Advanced pairing",(d,w)->showVrAdvanced())
             .setNegativeButton("Cancel",null).show();
@@ -536,43 +543,45 @@ public class MainHubActivity extends Activity {
         if (connectPending || launchPending || !resumed) return;
         connectPending=true;
         final int generation=++connectGeneration;
-        final com.vibertemis.quest.pcvr.ExistingPairingBootstrap bootstrap =
-            new com.vibertemis.quest.pcvr.ExistingPairingBootstrap(getApplicationContext());
+        final com.vibertemis.quest.pcvr.StandalonePairingClient bootstrap =
+            new com.vibertemis.quest.pcvr.StandalonePairingClient();
         vrBootstrap=bootstrap;
         connectDialog=new android.app.AlertDialog.Builder(this).setTitle("Setting up VR")
-            .setMessage("Connecting to "+pc.name+" using your existing pairing…")
+            .setMessage("Connecting to "+pc.name+". In Windows VR Host Manager, choose Pair headset…")
             .setNegativeButton("Cancel",(d,w)->cancelHostConnection())
             .setOnCancelListener(d->cancelHostConnection()).show();
         connectWorker.execute(()->{
             try {
-                HostPairing existing = new PairingStore(getApplicationContext()).load();
-                HostPairing enrolled;
-                String selectedPin=HostPairing.hex(java.security.MessageDigest.getInstance("SHA-256").digest(pc.serverCert.getEncoded()));
-                boolean reused=false;
-                if (existing!=null && selectedPin.equals(existing.hostCertificatePin)) {
-                    HostClient check=createHostClient();hostClient=check;
-                    try { check.request(existing,"GET","/status",new byte[0]);reused=true; }
-                    catch(Exception ignored) { if (generation!=connectGeneration) return; }
-                }
-                enrolled=reused ? existing : bootstrap.enroll(pc);
+                HostPairing enrolled = bootstrap.enroll(pc, code -> runOnUiThread(() -> {
+                    if (generation != connectGeneration || isFinishing() || isDestroyed() || connectDialog == null) return;
+                    connectDialog.setTitle("Compare codes, then approve on PC");
+                    connectDialog.setMessage(code + "\n\nIn Windows VR Host Manager, approve only if every character matches. Reject any mismatch. This approval is needed once.");
+                    android.widget.TextView message = connectDialog.findViewById(android.R.id.message);
+                    if (message != null) message.setTypeface(android.graphics.Typeface.MONOSPACE);
+                }));
                 final HostPairing result=enrolled;
                 runOnUiThread(()->{
-                    if (generation!=connectGeneration || !resumed || isFinishing()) return;
+                    if (generation!=connectGeneration || isFinishing() || isDestroyed()) return;
                     try { new PairingStore(getApplicationContext()).save(result); }
                     catch(Exception e) {
                         finishHostConnection();Toast.makeText(this,"Could not save VR pairing. Retry Setup VR.",Toast.LENGTH_LONG).show();return;
                     }
                     finishHostConnection();
+                    if (!resumed) {
+                        pairingNotice = "VR pairing ready. Choose Connect when you’re ready; SteamVR starts from the headset.";
+                        return;
+                    }
                     new android.app.AlertDialog.Builder(this).setTitle("VR pairing ready")
                         .setMessage("Your PC is paired for VR. Choose Connect when you’re ready; SteamVR starts from the headset.")
                         .setPositiveButton("Done",null).show();
                 });
             } catch(Exception e) {
-                final String message=e instanceof com.vibertemis.quest.pcvr.ExistingPairingBootstrap.SetupFailure
+                final String message=e instanceof com.vibertemis.quest.pcvr.StandalonePairingClient.SetupFailure
                     ? e.getMessage() : "Could not finish VR setup. Open Setup VR in the Windows VR Host Manager, then retry. Your previous pairing is kept.";
                 runOnUiThread(()->{
-                    if(generation!=connectGeneration || !resumed || isFinishing())return;
+                    if(generation!=connectGeneration || isFinishing() || isDestroyed())return;
                     finishHostConnection();
+                    if (!resumed) { pairingNotice = message; return; }
                     new android.app.AlertDialog.Builder(this).setTitle("VR setup needs attention").setMessage(message)
                         .setPositiveButton("Retry",(d,w)->showVrSetup()).setNegativeButton("Close",null).show();
                 });

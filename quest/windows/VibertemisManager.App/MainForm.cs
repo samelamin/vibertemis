@@ -192,8 +192,12 @@ public sealed partial class MainForm : Form
 
         _btnExportPairing.Text = "Export pairing file";
         _btnExportPairing.Enabled = false;
-        root.Controls.Add(new Label { Text = "Pairing export" }, 0, 7);
-        root.Controls.Add(_btnExportPairing, 1, 7);
+        _btnPairHeadset.Text = "Pair headset";
+        _btnPairHeadset.Enabled = false;
+        root.Controls.Add(new Label { Text = "Headset pairing" }, 0, 7);
+        var pairingButtons = new FlowLayoutPanel { AutoSize = true };
+        pairingButtons.Controls.AddRange(new Control[] { _btnPairHeadset, _btnExportPairing });
+        root.Controls.Add(pairingButtons, 1, 7);
 
         _btnSetupNetwork.Text = "Setup VR";
         root.Controls.Add(new Label { Text = "VR setup" }, 0, 8);
@@ -213,8 +217,9 @@ public sealed partial class MainForm : Form
         void ShowAdvanced(bool visible) {
             foreach (Control control in root.Controls) {
                 int row = root.GetRow(control);
-                if (row is 1 or 6 or 7) control.Visible = visible;
+                if (row is 1 or 6) control.Visible = visible;
             }
+            _btnExportPairing.Visible = visible;
         }
         advanced.CheckedChanged += (_, _) => ShowAdvanced(advanced.Checked);
         ShowAdvanced(false);
@@ -264,7 +269,7 @@ public sealed partial class MainForm : Form
             c.Margin = new Padding(4, 7, 4, 7);
         }
         foreach (var button in new[] { _btnRefreshAdapters, _btnOpenSteamPage, _btnInstallSteamVr,
-            _btnVcRedistPage, _btnCompanionToggle, _btnOpenDashboard, _btnExportPairing, _btnSetupNetwork })
+            _btnVcRedistPage, _btnCompanionToggle, _btnOpenDashboard, _btnExportPairing, _btnPairHeadset, _btnSetupNetwork })
             button.AutoSize = true;
     }
 
@@ -286,6 +291,7 @@ public sealed partial class MainForm : Form
         _btnCompanionToggle.Click += (_, _) => ToggleCompanion();
         _btnOpenDashboard.Click += (_, _) => OpenDashboard();
         _btnExportPairing.Click += (_, _) => ExportPairing();
+        _btnPairHeadset.Click += async (_, _) => await PairHeadset();
         _btnSetupNetwork.Click += async (_, _) => await PrepareVr();
         _chkAutoStart.CheckedChanged += (_, _) => OnAutoStartToggled();
     }
@@ -476,7 +482,7 @@ public sealed partial class MainForm : Form
 
     private void ReconcileHost()
     {
-        if (_exitRequested || _guidedSetupBusy) return;
+        if (_exitRequested || _guidedSetupBusy || _pairingBusy) return;
         if (!RuntimeReady()) { _lblCompanion.Text = "Setup VR will install the required Windows runtime."; return; }
         var status = _recovery.Tick(_settings.LastSelectedAdapterId, _settings.LastSelectedAdapterAddress);
         if (_lastRecoveryMessage != status.Message) { _lastRecoveryMessage = status.Message; LogStatus(status.Message); }
@@ -523,6 +529,7 @@ public sealed partial class MainForm : Form
         _cmbAdapter.Enabled = !running;
         _btnRefreshAdapters.Enabled = !running;
         _btnExportPairing.Enabled = running && _recovery.RunningSpec is not null;
+        _btnPairHeadset.Enabled = running && _recovery.RunningSpec is not null && !_pairingBusy;
         _btnCompanionToggle.Text = running || (_recovery.DesiredRunning && !blocked) ? "Stop hosting" : "Start hosting";
         _btnCompanionToggle.Enabled = running || RuntimeReady();
     }

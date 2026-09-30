@@ -52,7 +52,12 @@ public final class HostPairing {
     if (!pin.equals(hex(MessageDigest.getInstance("SHA-256").digest(cert.getEncoded()))))
       throw new IllegalArgumentException("Pairing certificate does not match its identity.");
     String device = json.optString("device_id", ""), host = json.optString("host_cert_sha256", ""), uuid = json.optString("client_uuid", "");
-    if (json.has("device_id") || json.has("host_cert_sha256") || json.has("client_uuid")) {
+    if (json.optString("pairing_kind", "").equals("standalone")) {
+      if (!device.matches("[0-9a-f]{32}") || json.has("host_cert_sha256") || json.has("client_uuid"))
+        throw new IllegalArgumentException("Invalid standalone VR pairing.");
+    } else if (json.has("pairing_kind")) {
+      throw new IllegalArgumentException("Unknown VR pairing kind.");
+    } else if (json.has("device_id") || json.has("host_cert_sha256") || json.has("client_uuid")) {
       if (!device.matches("[0-9a-f]{32}") || !host.matches("[0-9a-f]{64}") || !uuid.matches("[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}"))
         throw new IllegalArgumentException("Incomplete VR device pairing.");
     }
@@ -77,7 +82,11 @@ public final class HostPairing {
         .put("certpin", pin)
         .put("token", token)
         .put("cert_pem", certificate);
-    if (!deviceId.isEmpty()) json.put("device_id",deviceId).put("host_cert_sha256",hostCertificatePin).put("client_uuid",clientUuid);
+    if (!deviceId.isEmpty()) {
+      json.put("device_id",deviceId);
+      if (hostCertificatePin.isEmpty()) json.put("pairing_kind","standalone");
+      else json.put("host_cert_sha256",hostCertificatePin).put("client_uuid",clientUuid);
+    }
     return json.toString();
   }
 

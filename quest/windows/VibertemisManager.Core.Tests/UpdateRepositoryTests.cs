@@ -114,7 +114,7 @@ public class UpdateRepositoryTests : IDisposable
     {
         var clock = new TestClock();
         using var repo = NewRepo(clock, new UpdateRepositoryDiskCache(new DirectoryInfo(_stateRoot)));
-        var body = MakeManifest("0.1.0.8", 8, 8, 4L, Sha256Hex(new byte[] { 1, 2, 3, 4 }), out _, out _);
+        var body = MakeManifest("0.1.0.99", 99, 99, 4L, Sha256Hex(new byte[] { 1, 2, 3, 4 }), out _, out _);
         SignedRelease m;
         try { m = SignedRelease.Verify(body, _signing.SignData(body, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1), _trustKey); }
         catch (Exception e) { throw new InvalidOperationException("Setup failed: " + e.Message, e); }
@@ -159,7 +159,7 @@ public class UpdateRepositoryTests : IDisposable
         var cache = new UpdateRepositoryDiskCache(new DirectoryInfo(_stateRoot));
         using var repo = NewRepo(clock, cache);
 
-        var version = "0.1.0.8";
+        var version = "0.1.0.99";
         var apk = new byte[] { 1, 2, 3, 4 };
         var apkSha = Sha256Hex(apk);
         var m7body = MakeManifest(version, 7, 7, apk.Length, apkSha, out var m7Body, out var m7Sig);
@@ -177,10 +177,10 @@ public class UpdateRepositoryTests : IDisposable
         catch (Exception e) { throw new InvalidOperationException("Setup failed: " + e.Message, e); }
         repo.RecordAvailable(m8, body8Bytes, sig8Bytes);
         Assert.True(repo.Current.HasDownloaded);
-        Assert.Equal("0.1.0.8", repo.Current.Downloaded!.Version);
+        Assert.Equal("0.1.0.99", repo.Current.Downloaded!.Version);
         Assert.True(repo.Current.HasAvailable);
         Assert.Equal("0.1.0.9", repo.Current.Available!.Version);
-        Assert.Equal("0.1.0.8", repo.Current.PrimaryCandidate!.Version);
+        Assert.Equal("0.1.0.99", repo.Current.PrimaryCandidate!.Version);
         Assert.True(repo.Current.HasNewerAvailable);
     }
 
@@ -192,14 +192,14 @@ public class UpdateRepositoryTests : IDisposable
         using var repo = NewRepo(clock, cache);
         var declared = new byte[] { 1, 2, 3, 4 };
         var declaredSha = Sha256Hex(declared);
-        var mBody = MakeManifest("0.1.0.8", 8, 8, declared.Length, declaredSha, out var body, out var sig);
+        var mBody = MakeManifest("0.1.0.99", 99, 99, declared.Length, declaredSha, out var body, out var sig);
         SignedRelease m;
         try { m = SignedRelease.Verify(body, sig, _trustKey); }
         catch (Exception e) { throw new InvalidOperationException("Setup failed: " + e.Message, e); }
         var source = new FileInfo(Path.Combine(_stateRoot, "tampered.bin"));
         File.WriteAllBytes(source.FullName, new byte[] { 9, 9, 9, 9 });
         Assert.Throws<ArgumentException>(() => repo.RecordDownloaded(m, body, sig, source.FullName));
-        var dir = new DirectoryInfo(Path.Combine(_stateRoot, "updates", "downloaded", "0.1.0.8"));
+        var dir = new DirectoryInfo(Path.Combine(_stateRoot, "updates", "downloaded", "0.1.0.99"));
         Assert.False(Directory.Exists(dir.FullName));
     }
 
@@ -211,7 +211,7 @@ public class UpdateRepositoryTests : IDisposable
         using var repo = NewRepo(clock, cache);
         var declared = new byte[] { 1, 2, 3, 4, 5, 6, 7, 8 };
         var declaredSha = Sha256Hex(declared);
-        var mBody = MakeManifest("0.1.0.8", 8, 8, declared.Length, declaredSha, out var body, out var sig);
+        var mBody = MakeManifest("0.1.0.99", 99, 99, declared.Length, declaredSha, out var body, out var sig);
         SignedRelease m;
         try { m = SignedRelease.Verify(body, sig, _trustKey); }
         catch (Exception e) { throw new InvalidOperationException("Setup failed: " + e.Message, e); }
@@ -250,7 +250,7 @@ public class UpdateRepositoryTests : IDisposable
         using var repo = NewRepo(clock, cache);
         var apk = new byte[] { 1, 2, 3, 4 };
         var apkSha = Sha256Hex(apk);
-        var body = MakeManifest("0.1.0.8", 8, 8, apk.Length, apkSha, out var bodyBytes, out var sig);
+        var body = MakeManifest("0.1.0.99", 99, 99, apk.Length, apkSha, out var bodyBytes, out var sig);
         SignedRelease m;
         try { m = SignedRelease.Verify(bodyBytes, sig, _trustKey); }
         catch (Exception e) { throw new InvalidOperationException("Setup failed: " + e.Message, e); }
@@ -306,12 +306,12 @@ public class UpdateRepositoryTests : IDisposable
         var cache = new UpdateRepositoryDiskCache(new DirectoryInfo(_stateRoot));
         var source = new FileInfo(Path.Combine(_stateRoot, "del.bin"));
         File.WriteAllBytes(source.FullName, new byte[] { 1, 2 });
-        cache.PersistDownloadedInstaller("0.1.0.8", source.FullName);
-        var dir = new DirectoryInfo(Path.Combine(_stateRoot, "updates", "downloaded", "0.1.0.8"));
+        cache.PersistDownloadedInstaller("0.1.0.99", source.FullName);
+        var dir = new DirectoryInfo(Path.Combine(_stateRoot, "updates", "downloaded", "0.1.0.99"));
         Assert.True(Directory.Exists(dir.FullName));
         var files = dir.GetFiles();
         Assert.True(files.Length > 0, "expected update.exe to be present, got " + files.Length);
-        cache.DeleteDownloaded("0.1.0.8");
+        cache.DeleteDownloaded("0.1.0.99");
         Assert.False(Directory.Exists(dir.FullName));
         Assert.True(File.Exists(source.FullName), "source file must not be removed");
     }
@@ -322,12 +322,12 @@ public class UpdateRepositoryTests : IDisposable
         var cache = new UpdateRepositoryDiskCache(new DirectoryInfo(_stateRoot));
         var source = new FileInfo(Path.Combine(_stateRoot, "enum.bin"));
         File.WriteAllBytes(source.FullName, new byte[] { 1, 2 });
-        cache.PersistDownloadedInstaller("0.1.0.8", source.FullName);
-        cache.PersistDownloadedMetadata("0.1.0.8", new byte[] { 1, 2, 3, 4 }, new byte[384]);
+        cache.PersistDownloadedInstaller("0.1.0.99", source.FullName);
+        cache.PersistDownloadedMetadata("0.1.0.99", new byte[] { 1, 2, 3, 4 }, new byte[384]);
         var incompleteDir = new DirectoryInfo(Path.Combine(_stateRoot, "updates", "downloaded", "0.1.0.9"));
         incompleteDir.Create();
         File.WriteAllBytes(Path.Combine(incompleteDir.FullName, "manifest.json"), new byte[] { 1, 2, 3, 4 });
-        Assert.Equal(new[] { "0.1.0.8" }, cache.EnumerateDownloadedVersions());
+        Assert.Equal(new[] { "0.1.0.99" }, cache.EnumerateDownloadedVersions());
     }
 
     /// <summary>
@@ -344,10 +344,10 @@ public class UpdateRepositoryTests : IDisposable
         for (int i = 0; i < data.Length; i++) data[i] = (byte)((i * 31 + 7) & 0xFF);
         var source = new FileInfo(Path.Combine(_stateRoot, "big.bin"));
         File.WriteAllBytes(source.FullName, data);
-        var actualSha = cache.PersistDownloadedInstaller("0.1.0.8", source.FullName);
+        var actualSha = cache.PersistDownloadedInstaller("0.1.0.99", source.FullName);
         var expectedSha = Convert.ToHexString(SHA256.HashData(data)).ToLowerInvariant();
         Assert.Equal(expectedSha, actualSha);
-        var persisted = new FileInfo(Path.Combine(_stateRoot, "updates", "downloaded", "0.1.0.8", "update.exe"));
+        var persisted = new FileInfo(Path.Combine(_stateRoot, "updates", "downloaded", "0.1.0.99", "update.exe"));
         Assert.True(persisted.Exists);
         Assert.Equal(data.Length, persisted.Length);
         var readBack = File.ReadAllBytes(persisted.FullName);
@@ -367,7 +367,7 @@ public class UpdateRepositoryTests : IDisposable
         var cache = new UpdateRepositoryDiskCache(new DirectoryInfo(_stateRoot));
         var apk = new byte[] { 5, 6, 7, 8 };
         var apkSha = Sha256Hex(apk);
-        var body = MakeManifest("0.1.0.8", 8, 8, apk.Length, apkSha, out var bodyBytes, out var sig);
+        var body = MakeManifest("0.1.0.99", 99, 99, apk.Length, apkSha, out var bodyBytes, out var sig);
         SignedRelease m;
         try { m = SignedRelease.Verify(bodyBytes, sig, _trustKey); }
         catch (Exception e) { throw new InvalidOperationException("Setup failed: " + e.Message, e); }
@@ -381,7 +381,7 @@ public class UpdateRepositoryTests : IDisposable
             await Task.Delay(50); // allow hydration to run
             first.RecordDownloaded(m, bodyBytes, sig, transportOutput.FullName);
             Assert.True(first.Current.HasDownloaded);
-            var persisted = new FileInfo(Path.Combine(_stateRoot, "updates", "downloaded", "0.1.0.8", "update.exe"));
+            var persisted = new FileInfo(Path.Combine(_stateRoot, "updates", "downloaded", "0.1.0.99", "update.exe"));
             Assert.True(persisted.Exists);
             Assert.Equal(apk, File.ReadAllBytes(persisted.FullName));
         }
@@ -397,8 +397,8 @@ public class UpdateRepositoryTests : IDisposable
                 await Task.Delay(50);
             }
             Assert.True(second.Current.HasDownloaded, "second process: hydration must restore downloaded slot");
-            Assert.Equal("0.1.0.8", second.Current.Downloaded!.Version);
-            Assert.Equal(8, second.Current.Downloaded.Sequence);
+            Assert.Equal("0.1.0.99", second.Current.Downloaded!.Version);
+            Assert.Equal(99, second.Current.Downloaded.Sequence);
         }
     }
 
@@ -410,14 +410,14 @@ public class UpdateRepositoryTests : IDisposable
         using var repo = NewRepo(clock, cache);
         var declared = new byte[] { 1, 2, 3, 4 };
         var declaredSha = Sha256Hex(declared);
-        var mBody = MakeManifest("0.1.0.8", 8, 8, declared.Length, declaredSha, out var body, out var sig);
+        var mBody = MakeManifest("0.1.0.99", 99, 99, declared.Length, declaredSha, out var body, out var sig);
         SignedRelease m;
         try { m = SignedRelease.Verify(body, sig, _trustKey); }
         catch (Exception e) { throw new InvalidOperationException("Setup failed: " + e.Message, e); }
         var source = new FileInfo(Path.Combine(_stateRoot, "mismatch.bin"));
         File.WriteAllBytes(source.FullName, new byte[] { 7, 7, 7, 7 });
         Assert.Throws<ArgumentException>(() => repo.RecordDownloaded(m, body, sig, source.FullName));
-        var dir = new DirectoryInfo(Path.Combine(_stateRoot, "updates", "downloaded", "0.1.0.8"));
+        var dir = new DirectoryInfo(Path.Combine(_stateRoot, "updates", "downloaded", "0.1.0.99"));
         Assert.False(Directory.Exists(dir.FullName));
     }
 
@@ -429,7 +429,7 @@ public class UpdateRepositoryTests : IDisposable
         using var repo = NewRepo(clock, cache);
         var apk = new byte[] { 1, 2, 3, 4 };
         var apkSha = Sha256Hex(apk);
-        var m7Body = MakeManifest("0.1.0.8", 8, 8, apk.Length, apkSha, out var body7, out var sig7);
+        var m7Body = MakeManifest("0.1.0.99", 99, 99, apk.Length, apkSha, out var body7, out var sig7);
         SignedRelease m7;
         try { m7 = SignedRelease.Verify(body7, sig7, _trustKey); }
         catch (Exception e) { throw new InvalidOperationException("Setup failed: " + e.Message, e); }
@@ -441,7 +441,7 @@ public class UpdateRepositoryTests : IDisposable
         try { m8 = SignedRelease.Verify(body8, sig8, _trustKey); }
         catch (Exception e) { throw new InvalidOperationException("Setup failed: " + e.Message, e); }
         repo.RecordAvailable(m8, body8, sig8);
-        repo.ClearDownloadedAfterInstall("0.1.0.8");
+        repo.ClearDownloadedAfterInstall("0.1.0.99");
         Assert.False(repo.Current.HasDownloaded);
         Assert.True(repo.Current.HasAvailable);
         Assert.Equal("0.1.0.9", repo.Current.Available!.Version);
@@ -455,16 +455,16 @@ public class UpdateRepositoryTests : IDisposable
         using var repo = NewRepo(clock, cache);
         var apk = new byte[] { 1, 2, 3, 4 };
         var apkSha = Sha256Hex(apk);
-        var body = MakeManifest("0.1.0.8", 8, 8, apk.Length, apkSha, out var bodyBytes, out var sig);
+        var body = MakeManifest("0.1.0.99", 99, 99, apk.Length, apkSha, out var bodyBytes, out var sig);
         SignedRelease m;
         try { m = SignedRelease.Verify(bodyBytes, sig, _trustKey); }
         catch (Exception e) { throw new InvalidOperationException("Setup failed: " + e.Message, e); }
         var source = new FileInfo(Path.Combine(_stateRoot, "evict.bin"));
         File.WriteAllBytes(source.FullName, apk);
         repo.RecordDownloaded(m, bodyBytes, sig, source.FullName);
-        var dir = new DirectoryInfo(Path.Combine(_stateRoot, "updates", "downloaded", "0.1.0.8"));
+        var dir = new DirectoryInfo(Path.Combine(_stateRoot, "updates", "downloaded", "0.1.0.99"));
         Assert.True(Directory.Exists(dir.FullName));
-        repo.ClearDownloadedAfterInstall("0.1.0.8");
+        repo.ClearDownloadedAfterInstall("0.1.0.99");
         Assert.False(Directory.Exists(dir.FullName));
     }
 }

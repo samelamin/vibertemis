@@ -57,7 +57,7 @@ public sealed partial class MainForm
             RememberCompanion(true);
             _recovery.RequestStart();
             ReconcileHost();
-            LogStatus("PC setup complete. In Vibertemis on Quest, choose Setup VR and select your already-paired PC. No pairing file needed. SteamVR starts only when you connect for VR.");
+            LogStatus("PC setup complete. Choose Pair headset here, then Setup VR on Quest. Compare the code and approve once. SteamVR starts when you connect for VR.");
         }
         catch (Exception ex) { if (!IsDisposed) LogStatus("VR setup needs attention: " + ex.Message); }
         finally

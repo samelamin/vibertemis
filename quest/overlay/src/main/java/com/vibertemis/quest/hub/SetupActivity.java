@@ -40,11 +40,11 @@ public class SetupActivity extends Activity {
 
     private static final Link[] LINKS = new Link[] {
             new Link(R.string.setup_url_alvr_windows,
-                    "https://github.com/samelamin/vibertemis/releases/tag/quest-preview-v0.1.0.7"),
+                    "https://github.com/samelamin/vibertemis/releases/tag/quest-preview-v0.1.0.8"),
             new Link(R.string.setup_url_pcvr_guide,
-                    "https://github.com/samelamin/vibertemis/blob/quest-preview-v0.1.0.7/quest/README.md"),
+                    "https://github.com/samelamin/vibertemis/blob/quest-preview-v0.1.0.8/quest/README.md"),
             new Link(R.string.setup_url_sunshine,
-                    "https://github.com/samelamin/vibeshine/releases"),
+                    "https://github.com/LizardByte/Sunshine/releases"),
             new Link(R.string.setup_url_apollo,
                     "https://github.com/ClassicOldSong/Apollo"),
             new Link(R.string.setup_url_requirements,

@@ -12,24 +12,24 @@ import (
 	"time"
 )
 
-type inheritedAuthority struct {
+type deviceAuthority struct {
 	identity PairDeviceIdentity
 	deny     bool
 	calls    atomic.Int32
 }
 
-func (a *inheritedAuthority) LookupDeviceIdentity(id string) (PairDeviceIdentity, bool) {
+func (a *deviceAuthority) LookupDeviceIdentity(id string) (PairDeviceIdentity, bool) {
 	return a.identity, id == a.identity.DeviceID
 }
-func (a *inheritedAuthority) AuthorizeAndSelectHMAC(uuid, sha string) (string, string, string, error) {
+func (a *deviceAuthority) AuthorizeAndSelectHMAC(uuid, sha string) (string, string, string, error) {
 	a.calls.Add(1)
-	if a.deny || uuid != a.identity.ClientUUID || sha != a.identity.ClientCertSHA {
+	if a.deny || uuid != a.identity.DeviceID || sha != a.identity.PublicKeySHA {
 		return "", "", "", errors.New("revoked")
 	}
 	return a.identity.DeviceID, a.identity.Token, a.identity.CompanionCertSHA, nil
 }
 
-func TestInheritedAuthenticationRequiresLiveHostAndPreservesLegacy(t *testing.T) {
+func TestDeviceAuthenticationRequiresCurrentApprovalAndPreservesLegacy(t *testing.T) {
 	for _, c := range []struct {
 		name                            string
 		headers                         []string
@@ -38,7 +38,7 @@ func TestInheritedAuthenticationRequiresLiveHostAndPreservesLegacy(t *testing.T)
 	}{
 		{name: "current paired device", headers: []string{strings.Repeat("a", 32)}, accepted: true, calls: 1},
 		{name: "revoked device", headers: []string{strings.Repeat("a", 32)}, deny: true, calls: 1},
-		{name: "disconnected host", headers: []string{strings.Repeat("a", 32)}, missing: true},
+		{name: "unavailable pairing authority", headers: []string{strings.Repeat("a", 32)}, missing: true},
 		{name: "unknown device", headers: []string{strings.Repeat("b", 32)}},
 		{name: "empty header never falls back", headers: []string{""}, legacy: true},
 		{name: "duplicate header never falls back", headers: []string{strings.Repeat("a", 32), strings.Repeat("a", 32)}},
@@ -48,7 +48,7 @@ func TestInheritedAuthenticationRequiresLiveHostAndPreservesLegacy(t *testing.T)
 		t.Run(c.name, func(t *testing.T) {
 			ts := newTestServer(t)
 			defer ts.close()
-			authority := &inheritedAuthority{identity: PairDeviceIdentity{DeviceID: strings.Repeat("a", 32), Token: strings.Repeat("b", 64), ClientUUID: "aabbccdd-1122-3344-5566-778899aabbcc", ClientCertSHA: strings.Repeat("c", 64)}, deny: c.deny}
+			authority := &deviceAuthority{identity: PairDeviceIdentity{DeviceID: strings.Repeat("a", 32), Token: strings.Repeat("b", 64), PublicKeySHA: strings.Repeat("c", 64)}, deny: c.deny}
 			ts.core.deps.DeviceIdentityLookup = authority
 			if !c.missing {
 				ts.core.deps.FreshAuthorizer = authority

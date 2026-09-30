@@ -37,11 +37,9 @@ jobs:
           cache-dependency-path: quest/host/go.sum
       - name: Test Core and real companion export
         run: dotnet test quest/windows/VibertemisManager.Core.Tests -f net8.0 -c Release --nologo -v minimal
-      - name: Test Windows companion and named pipe identity
+      - name: Test Windows companion and standalone pairing
         working-directory: quest/host
         run: go test -count=1 ./...
-      - name: Verify real registry ACL and service discovery
-        run: dotnet test quest/windows/VibertemisManager.Core.Tests -f net8.0-windows -c Release --filter FullyQualifiedName~WindowsBridgeSmokeTests --nologo -v minimal
       - name: Build verified installer payload
         shell: pwsh
         run: ./quest/installer/build-installer.ps1
@@ -62,8 +60,8 @@ jobs:
         run: ./quest/installer/smoke-update.ps1
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: vibertemisvr-hostmanager-setup-0.1.0.7
-          path: build/installer/VibertemisVR-HostManager-Setup-0.1.0.7.exe
+          name: vibertemisvr-hostmanager-setup-0.1.0.8
+          path: build/installer/VibertemisVR-HostManager-Setup-0.1.0.8.exe
           if-no-files-found: error
           retention-days: 14
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a

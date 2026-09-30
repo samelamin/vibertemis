@@ -1,6 +1,6 @@
 //go:build windows
 
-package bridge
+package enrollment
 
 import "golang.org/x/sys/windows"
 

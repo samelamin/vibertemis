@@ -80,15 +80,6 @@ public class WinVerifyTrustLayoutTests
 
 #if WINDOWS
     [Fact]
-    public void ServiceConfigLayoutMatchesWindowsX64()
-    {
-        var t = typeof(VibertemisManager.Core.Platform.Windows.WindowsBridgeScmProbe)
-            .GetNestedType("QUERY_SERVICE_CONFIG", BindingFlags.NonPublic)!;
-        Assert.Equal(64, System.Runtime.InteropServices.Marshal.SizeOf(t));
-        Assert.Equal(16, System.Runtime.InteropServices.Marshal.OffsetOf(t, "lpBinaryPathName").ToInt32());
-        Assert.Equal(56, System.Runtime.InteropServices.Marshal.OffsetOf(t, "lpDisplayName").ToInt32());
-    }
-    [Fact]
     public void WinTrust_FileInfo_NativeLayout_MatchesMicrosoftAbi_OnX64()
     {
         // Reflective access to the private struct so layout

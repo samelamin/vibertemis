@@ -9,8 +9,8 @@ A single arm64 APK shipping two streaming modes from one launcher.
   tracking on Quest3. The PC host runs the ALVR streamer; this APK is
   the headset client. Hardware behavior on Quest3 is UNTESTED.
 
-APK `vibertemis-quest-preview-0.1.0.7.apk`, package
-`com.vibertemis.quest.preview.debug`, version `0.1.0-quest-preview.7`,
+APK `vibertemis-quest-preview-0.1.0.8.apk`, package
+`com.vibertemis.quest.preview.debug`, version `0.1.0-quest-preview.8`,
 `arm64-v8a` only, `minSdk=26`, `targetSdk=34`. No second ALVR headset
 app — the runtime is bundled inside this APK.
 
@@ -20,7 +20,7 @@ app — the runtime is bundled inside this APK.
    <https://developers.meta.com/horizon/documentation/native/android/mobile-device-setup/>.
 2. Connect over USB and accept the "Allow USB debugging?" prompt on
    the headset.
-3. `adb install -r vibertemis-quest-preview-0.1.0.7.apk`.
+3. `adb install -r vibertemis-quest-preview-0.1.0.8.apk`.
 4. Launch under **Unknown Sources**.
 
 ## Screen mode
@@ -73,10 +73,10 @@ is still required; this is an experimental test build.
 
 ### Windows host setup
 
-1. Install the VR-enabled **Vibeshine** preview on the PC, then run
-   `VibertemisVR-HostManager-Setup-0.1.0.7.exe` in your normal Windows account.
-   The per-user wizard installs the manager and matching VR runtime. Existing
-   screen streaming still uses Vibeshine.
+1. Keep your existing **Vibeshine** installation unchanged. Run
+   `VibertemisVR-HostManager-Setup-0.1.0.8.exe` in your normal Windows account.
+   The per-user wizard installs the manager and matching VR runtime. Screen
+   streaming still uses your existing Vibeshine; no fork or update is required.
 2. Open **VibertemisVR Host Manager**, then choose **Setup VR**. It detects the
    Microsoft Visual C++ x64 runtime and offers the verified bundled installer
    only when needed. Approve Windows setup/network access. Steam or SteamVR
@@ -85,11 +85,12 @@ is still required; this is an experimental test build.
    asks once; its files/settings and unrelated drivers remain intact.
 3. Enable **Keep host ready after Windows sign-in**. The default route chooses
    the LAN adapter; adapter selection and manual pairing stay under **Advanced**.
-4. On Quest, choose **Setup VR**, then your already-paired Vibeshine PC. The app
-   reuses the existing pinned screen pairing to enroll with the VR companion.
-   No pairing file is needed. If the PC is not yet paired, use **Screen gaming**
-   to complete its normal PIN pairing first. An older Vibeshine build must be
-   updated before it can offer this bridge.
+4. In the Windows manager, choose **Pair headset**. On Quest, choose **Setup VR**,
+   then select your saved PC. Compare all four groups of the code shown on both
+   screens and approve on the PC only if they match. The PC prompt closes automatically; Quest finishes
+   saving the pairing. No pairing file is needed.
+   Saved screen-gaming PCs supply addresses only; VR trust is independent of
+   Vibeshine. If no PC is listed, add it in **Screen gaming** first.
 5. Tap **Connect**, grant microphone permission, and confirm the possible
    SteamVR restart. A detected VR headset takes the tracked PCVR path.
    **Flat screen** remains an explicit override. Phones take the flat path and

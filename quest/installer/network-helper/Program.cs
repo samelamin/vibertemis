@@ -1,18 +1,11 @@
 using System.Diagnostics;
 using VibertemisManager.Core.Network;
-using VibertemisManager.Core.Bridge;
-#if WINDOWS
-using VibertemisManager.Core.Platform.Windows;
-#endif
 namespace VibertemisManager.NetworkHelper;
 internal static class Program
 {
     [STAThread]
     public static int Main(string[] args)
     {
-        if (args.Length >= 1 && args[0] == "--register-vr-bridge")
-            return RunRegisterBridge(args);
-
         var vpn = args.Length == 2 && args[0] == "--setup-tailscale";
         if (!vpn && (args.Length != 1 || args[0] != "--setup-network")) return 2;
         try
@@ -54,58 +47,4 @@ internal static class Program
         catch (Exception ex) { Console.Error.WriteLine(ex.Message); return 1; }
     }
 
-    // --register-vr-bridge <managerPID>
-    //
-    // The helper invokes the bounded WindowsBridge registration
-    // controller. Caller PID arg is verified against the kernel:
-    // we never accept a caller-controlled path for Companion or
-    // Sunshine. Both are derived (constant companion path + SCM-
-    // resolved Sunshine path).
-    private static int RunRegisterBridge(string[] args)
-    {
-        if (args.Length != 2) return 2;
-        if (!int.TryParse(args[1], out var managerPid) || managerPid <= 0) return 6;
-#if WINDOWS
-        try
-        {
-            // Canonical paths: the manager is at <helper-dir>/VibertemisManager.App.exe
-            // (the helper lives at <programsroot>/manager/), so we use AppContext.BaseDirectory.
-            var canonicalManager = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory,
-                BridgePaths.CanonicalManagerBasename));
-            // CompanionPath is fixed; the helper refuses any caller-controlled value.
-            var programsRoot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, ".."));
-            var canonicalCompanion = BridgePaths.ResolveCompanionPathFromProgramsRoot(programsRoot);
-
-            if (!File.Exists(canonicalCompanion)) return 12;
-            var probe = new WindowsBridgeProcessProbe();
-            var scm = new WindowsBridgeScmProbe();
-            var reader = new WindowsBridgeKeyReader();
-            var writer = new WindowsBridgeKeyWriter();
-            var controller = new BridgeRegistrationController(
-                probe, scm, reader, writer, canonicalManager, canonicalCompanion);
-            controller.SetActiveSessionId(WindowsBridgeActiveSession.Read());
-
-            var result = controller.HandleRegistration(managerPid);
-            return result.Outcome switch
-            {
-                BridgeWriteOutcome.Written => 0,
-                BridgeWriteOutcome.WrongImage => 7,
-                BridgeWriteOutcome.WrongSession => 8,
-                BridgeWriteOutcome.AccessDenied => 9,
-                BridgeWriteOutcome.UnreadableSid => 10,
-                BridgeWriteOutcome.SunshineUnresolved => 11,
-                BridgeWriteOutcome.CompanionMissing => 12,
-                BridgeWriteOutcome.AmbiguousUser => 13,
-                _ => 14,
-            };
-        }
-        catch (Exception ex)
-        {
-            Console.Error.WriteLine(ex.Message);
-            return 1;
-        }
-#else
-        return 99;
-#endif
-    }
 }
