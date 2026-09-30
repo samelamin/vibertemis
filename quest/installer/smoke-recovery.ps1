@@ -447,7 +447,8 @@ try {
     if ($approveBtn2 -eq [IntPtr]::Zero) { throw 'Approve button missing for retry test' }
     $tamperedCode = if ($expectedCode2 -eq '0000-1111-2222-3333') { 'FFFF-EEEE-DDDD-CCCC' } else { '0000-1111-2222-3333' }
     $resp = Send-Admin '/pairing/admin/decision' @{ session_id = $sessionId2; code = $tamperedCode; approve = $true } -AllowError
-    if ($resp.code -ne 'INVALID') { throw 'Wrong comparison code was not rejected as INVALID' }
+    # Decide intentionally treats a mismatched code as a stale decision.
+    if ($resp.code -ne 'EXPIRED') { throw 'Wrong comparison code was not rejected as EXPIRED' }
     $stillPending = Send-Admin '/pairing/admin/pending' $null
     if ($stillPending.session_id -ne $sessionId2 -or $stillPending.state -ne 'pending') { throw 'Invalid decision lost the pending request' }
     Wait-Until {
@@ -455,7 +456,12 @@ try {
         $button -ne [IntPtr]::Zero -and [RecoverySmokeUi]::IsWindowEnabled($button)
     } 'pending request remains actionable after invalid admin decision'
     [RecoverySmokeUi]::Click([RecoverySmokeUi]::FindVisible($script:managerProcess.Id, 'Reject'))
-    Wait-Until { (Send-Admin '/pairing/admin/pending' $null).state -eq 'denied' } 'valid UI rejection after invalid decision'
+    Wait-Until {
+        $afterReject = Send-Admin '/pairing/admin/pending' $null
+        if ($afterReject.devices -ne $stillPending.devices) { throw 'Reject changed the paired device count' }
+        # The receiving lease can clear a denied slot before the next read.
+        return ($afterReject.state -eq 'denied' -and $afterReject.session_id -eq $sessionId2) -or $afterReject.state -eq 'waiting'
+    } 'valid UI rejection after invalid decision'
     $begin2.Key.Dispose()
 
     # Persistence: after a successful approve, the manager persists
