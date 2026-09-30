@@ -25,11 +25,13 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/vibertemis/quest-codec-control/host/internal/alvr"
+	"github.com/vibertemis/quest-codec-control/host/internal/bridge"
 	"github.com/vibertemis/quest-codec-control/host/internal/discovery"
 	"github.com/vibertemis/quest-codec-control/host/internal/pairing"
 	"github.com/vibertemis/quest-codec-control/host/internal/server"
@@ -130,23 +132,73 @@ func main() {
 	ipLimiter := state.NewRateLimiterFactory(100, 30*time.Second, 1024, time.Now)
 	actionLimiter := state.NewRateLimiterFactory(3, 30*time.Second, 1024, time.Now)
 
+	// Bridge: per-device credentials + redeem endpoint +
+	// pipe runner. The companion issues grants via the
+	// pipe and accepts redemptions over HTTPS. The bridge
+	// does not break legacy pairing — it lives alongside
+	// the global token.
+	bridgeService := bridge.New(st.CertPEM, extractPort(*listenAddr))
+	persist := &bridge.FilePersist{Dir: *stateDir}
+	if devices, err := bridge.LoadDevicesFromFile(*stateDir); err != nil {
+		log.Printf("bridge: load devices: %v (continuing without restored credentials)", err)
+	} else if len(devices) > 0 {
+		bridgeService.LoadDevices(devices)
+		log.Printf("bridge: restored %d device credential(s)", len(devices))
+	}
+	// Wire the persist implementation into the service so
+	// inbound revoke persists too. Redeem uses its own
+	// Persist from RedeemInput for testability; both go
+	// through the same persistMu.
+	bridgeService.SetInboundPersist(persist)
+
 	srv, err := server.New(server.Deps{
-		Token:         st.Token,
-		Cert:          tlsCert,
-		Adapter:       adapter,
-		Launcher:      launcher,
-		NonceLRU:      nonceLRU,
-		IPLimiter:     ipLimiter,
-		ActionLimiter: actionLimiter,
-		SteamPath:     *steamPath,
-		MaxSkew:       *maxSkew,
+		Token:                st.Token,
+		Cert:                 tlsCert,
+		Adapter:              adapter,
+		Launcher:             launcher,
+		NonceLRU:             nonceLRU,
+		IPLimiter:            ipLimiter,
+		ActionLimiter:        actionLimiter,
+		SteamPath:            *steamPath,
+		MaxSkew:              *maxSkew,
+		DeviceLookup:         bridgeService,
+		DeviceIdentityLookup: &bridgeIdentityAdapter{svc: bridgeService},
+		FreshAuthorizer:      bridgeService,
 	})
 	if err != nil {
 		log.Fatalf("server: %v", err)
 	}
+	// Attach /pairing/redeem. The handler reads the live
+	// authorizer from the service so a fresh authority
+	// round trip happens whenever a Vibeshine pipe is
+	// active.
+	srv.RegisterRedeem(&server.RedeemHandler{
+		Service: bridgeService,
+		Persist: persist,
+	})
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+
+	// Bridge IPC pipe. On Windows this opens
+	// \\.\pipe\VibertemisVRBridge-<session> and serves
+	// inbound issue_grant / revoke + outbound authorize.
+	// A failed bridge start is logged but does NOT stop
+	// the companion — legacy pairing keeps working.
+
+	runner := bridge.NewRunner()
+	pipeDone := make(chan struct{})
+	go func() {
+		defer close(pipeDone)
+		pipeCtx, pipeCancel := context.WithCancel(ctx)
+		defer pipeCancel()
+		err := runner.Run(pipeCtx, bridge.PipeConfig{
+			Service: bridgeService,
+		})
+		if err != nil && !errors.Is(err, bridge.ErrUnsupported) && pipeCtx.Err() == nil {
+			log.Printf("bridge pipe stopped: %v", err)
+		}
+	}()
 
 	if *mdns {
 		advertiser, err := discovery.Start(*advertiseAddr, st.CertPin, alvr.NativeVersion)
@@ -157,16 +209,56 @@ func main() {
 		}
 	}
 	log.Printf("vibertemis-host-companion listening on https://%s", *listenAddr)
-	log.Printf("  alvr session: %s", *alvrSession)
-	log.Printf("  state dir   : %s", *stateDir)
+	log.Printf("  alvr session : %s", *alvrSession)
+	log.Printf("  state dir    : %s", *stateDir)
 	if *steamPath != "" {
-		log.Printf("  steam path  : %s", *steamPath)
+		log.Printf("  steam path   : %s", *steamPath)
 	} else {
-		log.Printf("  steam path  : (URL dispatch)")
+		log.Printf("  steam path   : (URL dispatch)")
 	}
+	log.Printf("  bridge pipe  : active Windows console session")
 	if err := srv.ListenAndServe(ctx, *listenAddr); err != nil {
-		log.Fatalf("serve: %v", err)
+		log.Printf("serve: %v", err)
 	}
+	cancel()
+	select {
+	case <-pipeDone:
+	case <-time.After(2 * time.Second):
+		log.Printf("bridge pipe did not exit within 2s; continuing shutdown")
+	}
+}
+
+// extractPort parses host:port and returns the port.
+func extractPort(addr string) int {
+	_, portStr, err := net.SplitHostPort(addr)
+	if err != nil {
+		return 28540
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		return 28540
+	}
+	return port
+}
+
+// bridgeIdentityAdapter adapts a *bridge.Service to the
+// server's DeviceIdentityLookup interface. The adapter
+// keeps the server package free of bridge-specific type
+// names.
+type bridgeIdentityAdapter struct{ svc *bridge.Service }
+
+func (a *bridgeIdentityAdapter) LookupDeviceIdentity(deviceID string) (server.PairDeviceIdentity, bool) {
+	d, ok := a.svc.LookupDeviceIdentity(deviceID)
+	if !ok {
+		return server.PairDeviceIdentity{}, false
+	}
+	return server.PairDeviceIdentity{
+		DeviceID:         d.DeviceID,
+		Token:            d.Token,
+		ClientUUID:       d.ClientUUID,
+		ClientCertSHA:    d.ClientCertSHA,
+		CompanionCertSHA: d.CompanionCertSHA,
+	}, true
 }
 
 // validateAdvertisedAddr refuses wildcard / loopback addresses

@@ -60,17 +60,19 @@ public sealed partial class MainForm : Form
     private readonly AppServices _svc;
     private NotifyIcon? _tray;
     private readonly Button _btnUpdate = new() { Text = "Check for updates", AutoSize = true };
+    private readonly Button _btnDownloadUpdate = new() { Text = "Download update", AutoSize = true, Visible = false, Enabled = false };
     private readonly Button _btnCancelUpdate = new() { Text = "Cancel", AutoSize = true, Visible = false };
     private readonly Button _btnInstallUpdate = new() { Text = "Install update", AutoSize = true, Visible = false, Enabled = false };
     private readonly ProgressBar _updateProgress = new() { Visible = false, Width = 220, Height = 16, Minimum = 0, Maximum = 100, Style = ProgressBarStyle.Continuous };
     private readonly Label _updateProgressLabel = new() { Visible = false, AutoSize = true, Text = "" };
-    private readonly ReleaseClient _updates = new();
+    private UpdateRepository? _updateRepo;
+    private ReleaseClient? _updateDownloader;
+    private FormObserver? _updateObserver;
     private CancellationTokenSource? _updateCancellation;
     private bool _updateBusy;
-    private SignedRelease? _pendingUpdate;
-    private byte[]? _pendingManifestBytes;
-    private byte[]? _pendingSignatureBytes;
-    private string? _pendingUpdateFile;
+    private UpdateRepository.Snapshot _updateSnapshot = new UpdateRepository.Snapshot(
+        null, null, null, null, null, null, null,
+        DateTime.MinValue, DateTime.MinValue, null, false);
     private readonly EventWaitHandle _wake = new(false, EventResetMode.AutoReset, Program.MutexName + "-Wake");
     private readonly System.Windows.Forms.Timer _statusTimer = new() { Interval = 1000 };
     private HostRecoveryController _recovery = null!;
@@ -120,6 +122,8 @@ public sealed partial class MainForm : Form
             if (_wake.WaitOne(0)) { Show(); ShowInTaskbar = true; WindowState = FormWindowState.Normal; Activate(); }
             ReconcileHost();
             RefreshDashboardStatus();
+            RefreshRuntimeStatus();
+            TriggerBackgroundUpdateCheck();
         };
         NetworkChange.NetworkAddressChanged += OnNetworkChanged;
         _statusTimer.Start();
@@ -169,7 +173,7 @@ public sealed partial class MainForm : Form
         root.Controls.Add(_btnInstallSteamVr, 1, 3);
 
         _lblVcRedist.Text = "Prerequisite: VC++ runtime";
-        _btnVcRedistPage.Text = "Open VC++ redistributable";
+        _btnVcRedistPage.Text = "Install required runtime";
         _btnVcRedistPage.Enabled = true;
         root.Controls.Add(_lblVcRedist, 0, 4);
         root.Controls.Add(_btnVcRedistPage, 1, 4);
@@ -191,7 +195,7 @@ public sealed partial class MainForm : Form
         root.Controls.Add(new Label { Text = "Pairing export" }, 0, 7);
         root.Controls.Add(_btnExportPairing, 1, 7);
 
-        _btnSetupNetwork.Text = "Prepare VR";
+        _btnSetupNetwork.Text = "Setup VR";
         root.Controls.Add(new Label { Text = "VR setup" }, 0, 8);
         root.Controls.Add(_btnSetupNetwork, 1, 8);
 
@@ -199,9 +203,21 @@ public sealed partial class MainForm : Form
         root.Controls.Add(_chkAutoStart, 0, 9);
         root.SetColumnSpan(_chkAutoStart, 2);
 
-        var readinessHint = new Label { Text = "One-time setup: network access, VR driver and headset pairing. Stop pauses hosting; Start resumes it.", AutoSize = true, MaximumSize = new Size(650, 0) };
-        root.Controls.Add(readinessHint, 0, 10);
-        root.SetColumnSpan(readinessHint, 2);
+        var readinessHint = new Label { Text = "Choose Setup VR once, then select this paired PC in Vibertemis on Quest. SteamVR starts when you connect for VR. Closing this window keeps the host ready in the tray.", AutoSize = true, MaximumSize = new Size(650, 0) };
+        var details = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.TopDown, Dock = DockStyle.Fill };
+        var advanced = new CheckBox { Text = "Advanced: network adapter, runtime dashboard and manual pairing", AutoSize = true };
+        details.Controls.Add(readinessHint);
+        details.Controls.Add(advanced);
+        root.Controls.Add(details, 0, 10);
+        root.SetColumnSpan(details, 2);
+        void ShowAdvanced(bool visible) {
+            foreach (Control control in root.Controls) {
+                int row = root.GetRow(control);
+                if (row is 1 or 6 or 7) control.Visible = visible;
+            }
+        }
+        advanced.CheckedChanged += (_, _) => ShowAdvanced(advanced.Checked);
+        ShowAdvanced(false);
 
         var progressRow = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, FlowDirection = FlowDirection.LeftToRight };
         progressRow.Controls.Add(_updateProgress);
@@ -228,10 +244,12 @@ public sealed partial class MainForm : Form
         _lblVersion.AutoSize = true;
         var updateActions = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill };
         updateActions.Controls.Add(_btnUpdate);
+        updateActions.Controls.Add(_btnDownloadUpdate);
         updateActions.Controls.Add(_btnCancelUpdate);
         updateActions.Controls.Add(_btnInstallUpdate);
         footer.Controls.Add(updateActions, 0, 0);
-        _btnUpdate.Click += async (_, _) => await CheckForUpdates();
+        _btnUpdate.Click += (_, _) => TriggerUpdateCheck(force: true);
+        _btnDownloadUpdate.Click += (_, _) => DownloadPendingUpdate();
         _btnCancelUpdate.Click += (_, _) => _updateCancellation?.Cancel();
         _btnInstallUpdate.Click += (_, _) => InstallPendingUpdate();
         footer.Controls.Add(_lblVersion, 1, 0);
@@ -253,11 +271,16 @@ public sealed partial class MainForm : Form
         FormClosing += OnFormClosing;
         Resize += OnResize;
 
+        Activated += (_, _) => {
+            if (_recovery is null) return;
+            RefreshSteamStatus(); RefreshSteamVrStatus(); RefreshRuntimeStatus();
+            TriggerBackgroundUpdateCheck();
+        };
         _btnRefreshAdapters.Click += (_, _) => RefreshAdapters();
         _cmbAdapter.SelectedIndexChanged += (_, _) => OnAdapterPicked();
         _btnOpenSteamPage.Click += (_, _) => OpenUrl("https://store.steampowered.com/about/");
-        _btnInstallSteamVr.Click += (_, _) => OpenUrl("steam://install/250820");
-        _btnVcRedistPage.Click += (_, _) => OpenUrl("https://aka.ms/vc14/vc_redist.x64.exe");
+        _btnInstallSteamVr.Click += (_, _) => OpenUrl(_svc.SteamVr.Discover().Installed ? "steam://rungameid/250820" : "steam://install/250820");
+        _btnVcRedistPage.Click += async (_, _) => await PrepareVr();
         _btnCompanionToggle.Click += (_, _) => ToggleCompanion();
         _btnOpenDashboard.Click += (_, _) => OpenDashboard();
         _btnExportPairing.Click += (_, _) => ExportPairing();
@@ -279,6 +302,9 @@ public sealed partial class MainForm : Form
         RefreshDashboardStatus();
         RefreshFirewallStatus();
         EnsureTrayIcon();
+        InitializeUpdateRepository();
+        InitializeGuidedSetup();
+        RefreshRuntimeStatus();
         if (_settings.AutoStartWithWindows)
         {
             try { _svc.AutoStart.Enable(StartupCommand()); }
@@ -448,10 +474,19 @@ public sealed partial class MainForm : Form
 
     private void ReconcileHost()
     {
-        if (_exitRequested) return;
+        if (_exitRequested || _guidedSetupBusy) return;
+        if (!RuntimeReady()) { _lblCompanion.Text = "Setup VR will install the required Windows runtime."; return; }
         var status = _recovery.Tick(_settings.LastSelectedAdapterId, _settings.LastSelectedAdapterAddress);
         if (_lastRecoveryMessage != status.Message) { _lastRecoveryMessage = status.Message; LogStatus(status.Message); }
         RefreshCompanionStatus();
+    }
+
+    private void RefreshRuntimeStatus()
+    {
+        bool ready = RuntimeReady();
+        _lblVcRedist.Text = ready ? "Windows runtime: ready" : "Windows runtime: setup needed";
+        _btnVcRedistPage.Visible = !ready;
+        _btnVcRedistPage.Enabled = !_preparingVr && !_guidedSetupBusy && !_updateBusy;
     }
 
     private void RefreshSteamStatus()
@@ -471,17 +506,11 @@ public sealed partial class MainForm : Form
 
     private void RefreshSteamVrStatus()
     {
-        var v = _svc.SteamVr.Locate();
-        if (v.Installed)
-        {
-            _lblSteamVr.Text = "SteamVR configured: " + string.Join("; ", v.RuntimePaths);
-            _btnInstallSteamVr.Enabled = false;
-        }
-        else
-        {
-            _lblSteamVr.Text = "SteamVR not configured: " + (v.Reason ?? "");
-            _btnInstallSteamVr.Enabled = true;
-        }
+        var v = _svc.SteamVr.Discover();
+        _lblSteamVr.Text = v.SteamVrReady ? "SteamVR ready" : v.Reason ?? "Install SteamVR";
+        _btnInstallSteamVr.Text = v.Kind == VibertemisManager.Core.Steam.SteamVrDiscoveryKind.InstalledUninitialized
+            ? "Finish SteamVR setup" : "Install SteamVR";
+        _btnInstallSteamVr.Enabled = !v.SteamVrReady;
     }
 
     private void RefreshCompanionStatus()
@@ -493,7 +522,7 @@ public sealed partial class MainForm : Form
         _btnRefreshAdapters.Enabled = !running;
         _btnExportPairing.Enabled = running && _recovery.RunningSpec is not null;
         _btnCompanionToggle.Text = running || (_recovery.DesiredRunning && !blocked) ? "Stop companion" : "Start companion";
-        _btnCompanionToggle.Enabled = true;
+        _btnCompanionToggle.Enabled = running || RuntimeReady();
     }
 
     private void RefreshDashboardStatus()
@@ -714,47 +743,148 @@ public sealed partial class MainForm : Form
         SaveSettings();
     }
 
-    // Stage 1: check the GitHub release list for a newer compatible
-    // signed release. Stage 2: download (with progress). The verified
-    // release + downloaded file are remembered so the user can install
-    // later without re-checking the network.
-    private async Task CheckForUpdates()
+    // Stage 1: metadata-only check. Triggered manually by the user
+    // (force=true) or by the background tick (force=false, throttled).
+    // The check is coalesced by the shared repository; concurrent
+    // triggers share the in-flight handle.
+    private void TriggerUpdateCheck(bool force)
     {
-        if (_updateBusy || _installHandOffInFlight || _preparingVr) return;
-        _updateBusy = true;
-        _btnUpdate.Enabled = false;
-        _btnCancelUpdate.Visible = true;
-        _btnCancelUpdate.Enabled = true;
-        _btnInstallUpdate.Visible = false;
-        _btnInstallUpdate.Enabled = false;
-        using var cancellation = new CancellationTokenSource();
-        _updateCancellation = cancellation;
+        if (_updateRepo == null) return;
+        if (_updateBusy) return;
+        // Do not even attempt the check while the user is handoff-ing
+        // an install or preparing VR.
+        if (_installHandOffInFlight || _preparingVr) return;
         try
         {
-            LogStatus("Checking signed Quest preview releases...");
-            var checkResult = await _updates.CheckAsync(cancellation.Token,
-                new Progress<UpdateProgress>(p => ReportStage(p.Stage)));
-            if (IsDisposed || Disposing) return;
-            if (checkResult is null)
-            {
-                LogStatus("No newer compatible signed Quest preview is available.");
-                return;
-            }
-            var release = checkResult.Release;
-            if (MessageBox.Show(this,
-                $"Download host update {release.Version}? Your settings and pairing will be kept.",
-                "Host update", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+            _updateRepo.RequestCheck(force);
+        }
+        catch (InvalidOperationException) { /* not bound yet */ }
+    }
+
+    // Auto-trigger from the status timer. The repository throttles
+    // repeated calls (6 h success, 15 min failure). Errors are absorbed
+    // because a busy background check must not block gaming.
+    private void TriggerBackgroundUpdateCheck()
+    {
+        if (_updateRepo == null) return;
+        if (!IsHandleCreated || Disposing || IsDisposed) return;
+        if (_updateRepo.ShouldRunByThrottle(false))
+        {
+            TriggerUpdateCheck(false);
+        }
+    }
+
+    // The shared repository's UI observer. Runs on the repository's
+    // scheduler; we marshal to the UI thread before mutating controls.
+    private void OnUpdateSnapshot(UpdateRepository.Snapshot snapshot)
+    {
+        if (IsDisposed || Disposing) return;
+        _updateSnapshot = snapshot;
+        if (InvokeRequired)
+        {
+            try { BeginInvoke(new Action(RenderUpdateUi)); } catch (InvalidOperationException) { }
+        }
+        else
+        {
+            RenderUpdateUi();
+        }
+    }
+
+    /// <summary>
+    /// Adapter that implements <see cref="UpdateRepository.IObserver"/>
+    /// without the form's OnUpdateSnapshot method having to take an
+    /// explicit parameter type that does not match.
+    /// </summary>
+    private sealed class FormObserver : UpdateRepository.IObserver
+    {
+        private readonly MainForm _form;
+        public FormObserver(MainForm form) { _form = form; }
+        public void OnUpdate(UpdateRepository.Snapshot snapshot) => _form.OnUpdateSnapshot(snapshot);
+    }
+
+    private void RenderUpdateUi()
+    {
+        var s = _updateSnapshot;
+        bool canDownload = !_updateBusy && s.HasAvailable
+            && !(s.HasDownloaded && s.Available!.Version == s.Downloaded!.Version
+                 && s.Available.Sequence == s.Downloaded.Sequence);
+        bool canInstall = !_updateBusy && s.HasDownloaded;
+        _btnDownloadUpdate.Visible = canDownload;
+        _btnDownloadUpdate.Enabled = canDownload;
+        _btnInstallUpdate.Visible = canInstall;
+        _btnInstallUpdate.Enabled = canInstall;
+        _btnCancelUpdate.Visible = _updateBusy && _updateCancellation != null;
+        if (s.HasDownloaded)
+        {
+            _btnInstallUpdate.Text = $"Install update {s.Downloaded!.Version}";
+        }
+        else
+        {
+            _btnInstallUpdate.Text = "Install update";
+        }
+        if (s.Checking)
+        {
+            _updateProgressLabel.Visible = true;
+            _updateProgressLabel.Text = "Checking signed Quest preview releases...";
+            _updateProgress.Visible = true;
+        }
+        else if (_updateBusy)
+        {
+            _updateProgress.Visible = true;
+        }
+        else
+        {
+            _updateProgress.Visible = false;
+            _updateProgressLabel.Visible = false;
+            _updateProgressLabel.Text = "";
+        }
+    }
+
+    // Stage 2: download the verified available metadata's installer.
+    // The repository records the downloaded slot when the digest
+    // matches and the per-version cache directory is populated.
+    private async void DownloadPendingUpdate()
+    {
+        if (_updateRepo == null || _updateDownloader == null) return;
+        if (_updateBusy || _installHandOffInFlight || _preparingVr) return;
+        var s = _updateRepo.Current;
+        if (!s.HasAvailable) return;
+        var release = s.Available!;
+        if (s.HasDownloaded && release.Version == s.Downloaded!.Version
+            && release.Sequence == s.Downloaded.Sequence)
+        {
+            // Already downloaded this release; nothing to do.
+            return;
+        }
+        if (MessageBox.Show(this,
+            $"Download host update {release.Version}? Your settings and pairing will be kept.",
+            "Host update", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+        _updateBusy = true;
+        using var cancellation = new CancellationTokenSource();
+        _updateCancellation = cancellation;
+        RenderUpdateUi();
+        try
+        {
             SetProgressUi(visible: true);
-            LogStatus($"Downloading {release.Version} ({release.Windows.Bytes / 1048576} MB)...");
+            LogStatus($"Downloading {release.Version} ({UpdateRepository.FormatBytes(release.Windows.Bytes)})...");
             var progress = new Progress<UpdateProgress>(p => ReportProgress(p));
-            var file = await _updates.DownloadAsync(release, _svc.Paths.UpdateCacheDir, cancellation.Token, progress);
+            // 1) Transport writes the verified installer into the
+            //    shared per-update cache directory
+            //    (<state>/updates/<file>.part), verifies digest +
+            //    size, and renames atomically. The path returned is
+            //    the verified file under the flat cache dir.
+            string downloadedPath = await _updateDownloader.DownloadAsync(
+                release, _svc.Paths.UpdateCacheDir, cancellation.Token, progress);
             if (IsDisposed || Disposing) return;
-            _pendingUpdate = release;
-            _pendingManifestBytes = checkResult.Manifest;
-            _pendingSignatureBytes = checkResult.Signature;
-            _pendingUpdateFile = file;
+            // 2) Stream the verified file into the per-version
+            //    download directory, hash during the copy, persist
+            //    the bound manifest + signature bytes, and publish
+            //    the downloaded slot — all atomic and bounded by
+            //    UpdateRepository.RecordDownloaded.
+            _updateRepo.RecordDownloaded(
+                release, s.AvailableManifestBytes!, s.AvailableSignatureBytes!,
+                downloadedPath);
             SetProgressUi(visible: false);
-            // Surface readiness to install.
             var busy = _svc.BusyChecker.Check();
             if (busy.IsBusy)
             {
@@ -764,34 +894,36 @@ public sealed partial class MainForm : Form
             {
                 LogStatus($"Update {release.Version} downloaded. Click Install update to apply it.");
             }
-            _btnInstallUpdate.Visible = true;
-            _btnInstallUpdate.Enabled = true;
-            _btnInstallUpdate.Text = $"Install update {release.Version}";
         }
-        catch (OperationCanceledException) { if (!IsDisposed) LogStatus("Update cancelled or timed out. Your current installation is unchanged."); }
-        catch (Exception ex) { if (!IsDisposed) LogStatus("Update unavailable: " + ex.Message); }
+        catch (OperationCanceledException)
+        {
+            if (!IsDisposed) LogStatus("Update cancelled or timed out. Your current installation is unchanged.");
+        }
+        catch (Exception ex)
+        {
+            if (!IsDisposed) LogStatus("Update unavailable: " + ex.Message);
+        }
         finally
         {
             _updateCancellation = null;
             _updateBusy = false;
             if (!IsDisposed)
             {
-                _btnUpdate.Enabled = true;
-                _btnCancelUpdate.Visible = false;
                 SetProgressUi(visible: false);
+                RenderUpdateUi();
             }
         }
     }
 
     private void ClearPending()
     {
-        _pendingUpdate = null;
-        _pendingManifestBytes = null;
-        _pendingSignatureBytes = null;
-        _pendingUpdateFile = null;
-        _btnInstallUpdate.Visible = false;
-        _btnInstallUpdate.Enabled = false;
-        _btnInstallUpdate.Text = "Install update";
+        // The repository owns the downloaded slot now; clear via the
+        // repository's API rather than touching any local fields.
+        var s = _updateRepo?.Current;
+        if (s?.HasDownloaded == true)
+        {
+            _updateRepo!.ClearDownloadedAfterInstall(s.Downloaded!.Version);
+        }
     }
 
     // Stage 3: install. Single explicit confirmation. Re-verify the
@@ -806,13 +938,17 @@ public sealed partial class MainForm : Form
     private async void InstallPendingUpdate()
     {
         if (_installHandOffInFlight || _preparingVr) return;
-        if (_pendingUpdate is null || _pendingUpdateFile is null
-            || _pendingManifestBytes is null || _pendingSignatureBytes is null) return;
+        if (_updateRepo == null) return;
+        var s = _updateRepo.Current;
+        if (!s.HasDownloaded || s.Downloaded == null
+            || string.IsNullOrEmpty(s.DownloadedFilePath)
+            || s.DownloadedManifestBytes == null
+            || s.DownloadedSignatureBytes == null) return;
         if (_updateBusy) return;
-        var release = _pendingUpdate;
-        var file = _pendingUpdateFile;
-        var manifestBytes = _pendingManifestBytes;
-        var signatureBytes = _pendingSignatureBytes;
+        var release = s.Downloaded;
+        var file = s.DownloadedFilePath;
+        var manifestBytes = s.DownloadedManifestBytes;
+        var signatureBytes = s.DownloadedSignatureBytes;
         try
         {
             // Re-verify the cached bytes at the execution boundary.
@@ -870,6 +1006,7 @@ public sealed partial class MainForm : Form
     {
         _installHandOffInFlight = true;
         _btnUpdate.Enabled = false;
+        _btnDownloadUpdate.Enabled = false;
         _btnInstallUpdate.Enabled = false;
         _btnCancelUpdate.Visible = false;
         _btnCancelUpdate.Enabled = false;
@@ -920,8 +1057,10 @@ public sealed partial class MainForm : Form
         if (!IsDisposed && !Disposing)
         {
             _btnUpdate.Enabled = !_updateBusy && !_preparingVr;
-            _btnInstallUpdate.Enabled = _pendingUpdate != null;
-            _btnInstallUpdate.Visible = _pendingUpdate != null;
+            // Re-render the install/download buttons from the
+            // repository snapshot so the user can still act on a
+            // verified candidate that survived a failed handoff.
+            RenderUpdateUi();
             _btnCancelUpdate.Visible = false;
         }
     }
@@ -1009,12 +1148,72 @@ public sealed partial class MainForm : Form
         {
             NetworkChange.NetworkAddressChanged -= OnNetworkChanged;
             _updateCancellation?.Cancel();
-            _updates.Dispose();
+            if (_updateRepo != null && _updateObserver != null) _updateRepo.RemoveObserver(_updateObserver);
+            _updateRepo?.Shutdown();
+            _updateDownloader?.Dispose();
             _statusTimer.Dispose();
             _wake.Dispose();
             _tray?.Dispose();
         }
         base.Dispose(disposing);
+    }
+
+    private void InitializeUpdateRepository()
+    {
+        try
+        {
+            var cache = new UpdateRepositoryDiskCache(new DirectoryInfo(_svc.Paths.ManagerStateDir));
+            _updateDownloader = new ReleaseClient();
+            var source = new HttpReleaseCheckSource(_updateDownloader, _svc.Paths.UpdateCacheDir);
+            _updateRepo = new UpdateRepository(cache, new SystemClock(), new EmbeddedKeySource());
+            _updateRepo.BindSource(source, TaskScheduler.Default);
+            _updateObserver = new FormObserver(this);
+            _updateRepo.AddObserver(_updateObserver);
+            // Initial render from whatever hydration surfaced.
+            OnUpdateSnapshot(_updateRepo.Current);
+        }
+        catch (Exception ex)
+        {
+            LogStatus("Update check unavailable: " + ex.Message);
+            _updateRepo = null;
+            _updateDownloader = null;
+        }
+    }
+
+    private sealed class SystemClock : UpdateRepository.IClock
+    {
+        public DateTime Now => DateTime.UtcNow;
+    }
+
+    private sealed class EmbeddedKeySource : UpdateRepository.ITrustKeySource
+    {
+        public string Pem => SignedRelease.EmbeddedPublicKey();
+    }
+
+    /// <summary>
+    /// Bridges <see cref="ReleaseClient"/> to the repository's
+    /// <see cref="UpdateRepository.ICheckSource"/> contract. The
+    /// transport does the actual signed-manifest fetch + verify;
+    /// we surface a no-newer-available result for null/older
+    /// releases so the repository's no-update success path applies.
+    /// </summary>
+    private sealed class HttpReleaseCheckSource : UpdateRepository.ICheckSource
+    {
+        private readonly ReleaseClient _client;
+        private readonly string _cache;
+        public HttpReleaseCheckSource(ReleaseClient client, string cache)
+        {
+            _client = client;
+            _cache = cache;
+        }
+        public async Task<UpdateRepository.ICheckSource.CheckResult?> CheckAsync(CancellationToken cancellation)
+        {
+            Directory.CreateDirectory(_cache);
+            var result = await _client.CheckAsync(cancellation).ConfigureAwait(false);
+            if (result is null) return null;
+            return new UpdateRepository.ICheckSource.CheckResult(
+                result.Release, result.Manifest, result.Signature);
+        }
     }
 }
 

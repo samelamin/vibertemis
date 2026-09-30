@@ -723,20 +723,15 @@ public class MainHubActivityTest {
         assertEquals("Settings during PCVR launch must be blocked", 0,
                 settingsDuringLaunch);
 
-        // After actual leave-and-return, Setup works.
+        // After actual leave-and-return, Setup opens the paired-PC flow.
         c.pause();
         c.resume();
         setup.performClick();
-        com.vibertemis.quest.pcvr.PcvrTestActions.confirmRestartIfShown();
-        int setupAfterReturn = 0;
-        while ((i = app.getNextStartedActivity()) != null) {
-            if ("com.vibertemis.quest.hub.SetupActivity".equals(
-                    i.getComponent().getClassName())) {
-                setupAfterReturn++;
-            }
-        }
-        assertEquals("Setup after actual leave-and-return must launch", 1,
-                setupAfterReturn);
+        android.app.AlertDialog dialog = org.robolectric.shadows.ShadowAlertDialog.getLatestAlertDialog();
+        assertTrue(dialog.isShowing());
+        assertEquals("Screen gaming", dialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE).getText().toString());
+        assertEquals("Advanced pairing", dialog.getButton(android.app.AlertDialog.BUTTON_NEUTRAL).getText().toString());
+
     }
 
     /**

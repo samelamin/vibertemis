@@ -21,7 +21,7 @@ if (-not $StagingRoot.StartsWith($buildRoot, [StringComparison]::OrdinalIgnoreCa
     throw 'StagingRoot must be a child of the repository build directory.'
 }
 if (Test-Path $StagingRoot) { Remove-Item -Recurse -Force $StagingRoot }
-New-Item -ItemType Directory -Force -Path $OutRoot, "$StagingRoot/manager/bin", "$StagingRoot/runtime" | Out-Null
+New-Item -ItemType Directory -Force -Path $OutRoot, "$StagingRoot/manager/bin", "$StagingRoot/manager/prerequisites", "$StagingRoot/runtime" | Out-Null
 $zip = Join-Path $OutRoot 'native.zip'
 if (-not (Test-Path $zip) -or (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant() -ne $zipSha) {
     Invoke-WebRequest -Uri $zipUrl -OutFile $zip
@@ -42,14 +42,41 @@ try {
 } finally { $env:GOOS = $previousGOOS; $env:GOARCH = $previousGOARCH; Pop-Location }
 
 # Helper must exist before the manager embeds its digest. Both are standalone.
-& dotnet publish "$RepoRoot/quest/installer/network-helper/VibertemisNetworkHelper.csproj" -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:Version=0.1.0.6 -o "$OutRoot/helper"
+& dotnet publish "$RepoRoot/quest/installer/network-helper/VibertemisNetworkHelper.csproj" -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:Version=0.1.0.7 -o "$OutRoot/helper"
 Check-Exit 'Helper publish'
 Copy-Item "$OutRoot/helper/VibertemisNetworkHelper.exe" "$StagingRoot/manager/"
+# Download the official vc_redist.x64.exe from the Microsoft aka.ms redirect
+# so the manager can verify it through WinVerifyTrust + Authenticode +
+# manifest SHA-256 before any install attempt. The download is bounded
+# (no mirror; canonical Microsoft URL only) and verified after fetch.
+$vcRedistUrl = 'https://aka.ms/vc14/vc_redist.x64.exe'
+$vcRedistOut = "$OutRoot/vc_redist.x64.exe"
+if (-not (Test-Path $vcRedistOut)) {
+    try {
+        Invoke-WebRequest -Uri $vcRedistUrl -OutFile $vcRedistOut -MaximumRedirection 5 -UseBasicParsing
+    } catch {
+        throw "Failed to download bundled vc_redist.x64.exe from $vcRedistUrl: $($_.Exception.Message)"
+    }
+}
+if (-not (Test-Path $vcRedistOut)) { throw "vc_redist.x64.exe was not downloaded." }
+$vcRedistBytes = (Get-Item $vcRedistOut).Length
+if ($vcRedistBytes -le 0 -or $vcRedistBytes -gt 64MB) { throw "Bundled VC++ runtime exceeds the allowed size." }
+$vcSignature = Get-AuthenticodeSignature -LiteralPath $vcRedistOut
+if ($vcSignature.Status -ne 'Valid' -or
+    $vcSignature.SignerCertificate.GetNameInfo([System.Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $false) -ne 'Microsoft Corporation') {
+    throw 'Bundled VC++ runtime must carry a valid Microsoft Corporation signature.'
+}
+$vcVersion = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($vcRedistOut)
+$vcMinimum = [Version]'14.44.35207.0'
+$vcActual = [Version]::new($vcVersion.FileMajorPart, $vcVersion.FileMinorPart, $vcVersion.FileBuildPart, $vcVersion.FilePrivatePart)
+if ($vcActual -lt $vcMinimum) { throw "Bundled VC++ runtime $vcActual is older than $vcMinimum." }
+Copy-Item $vcRedistOut "$StagingRoot/manager/prerequisites/vc_redist.x64.exe"
 $required = @(
     'manager/bin/vibertemis-host-companion.exe', 'manager/VibertemisNetworkHelper.exe',
+    'manager/prerequisites/vc_redist.x64.exe',
     'runtime/ALVR Dashboard.exe', 'runtime/driver.vrdrivermanifest',
     'runtime/bin/win64/driver_alvr_server.dll', 'runtime/bin/win64/openvr_api.dll',
-    'runtime/bin/win64/pyrowave-shared.dll', 'runtime/bin/win64/vcruntime140_1.dll'
+    'runtime/bin/win64/pyrowave-shared.dll'
 )
 $entries = @($required | ForEach-Object {
     $file = Join-Path $StagingRoot $_
@@ -60,7 +87,7 @@ $entries = @($required | ForEach-Object {
 $resource = "$RepoRoot/quest/windows/VibertemisManager.App/Resources/Integrity/integrity.json"
 New-Item -ItemType Directory -Force -Path (Split-Path $resource) | Out-Null
 [IO.File]::WriteAllText($resource, (ConvertTo-Json -InputObject $entries -Depth 5), [Text.UTF8Encoding]::new($false))
-& dotnet publish "$RepoRoot/quest/windows/VibertemisManager.App/VibertemisManager.App.csproj" -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true -p:Version=0.1.0.6 -o "$OutRoot/manager"
+& dotnet publish "$RepoRoot/quest/windows/VibertemisManager.App/VibertemisManager.App.csproj" -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true -p:Version=0.1.0.7 -o "$OutRoot/manager"
 Check-Exit 'Manager publish'
 Copy-Item "$OutRoot/manager/VibertemisManager.App.exe" "$StagingRoot/manager/"
 # Include redistributable notices for the new host manager and discovery stack.

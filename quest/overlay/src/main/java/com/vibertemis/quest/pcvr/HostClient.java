@@ -118,6 +118,7 @@ public class HostClient {
     connection.setReadTimeout(8000);
     connection.setUseCaches(false);
     connection.setRequestMethod(method);
+    if (!pairing.deviceId.isEmpty()) connection.setRequestProperty("X-Vq-Device",pairing.deviceId);
     long timestamp = System.currentTimeMillis() / 1000L;
     byte[] random = new byte[16];
     new SecureRandom().nextBytes(random);

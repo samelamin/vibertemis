@@ -8,6 +8,7 @@ require (
 )
 
 require (
+	github.com/Microsoft/go-winio v0.6.2 // indirect
 	github.com/miekg/dns v1.1.73 // indirect
 	golang.org/x/net v0.59.0 // indirect
 )

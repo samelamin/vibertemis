@@ -30,6 +30,32 @@ public sealed class WindowsRegistryAccess : IRegistryAccess
         }
     }
 
+    public int? TryGetDword(string hive, string subKey, string valueName)
+    {
+        try
+        {
+            using var root = OpenHive(hive);
+            if (root is null) return null;
+            using var key = root.OpenSubKey(subKey, writable: false);
+            if (key is null) return null;
+            var v = key.GetValue(valueName);
+            return v switch
+            {
+                null => null,
+                int i => i,
+                uint u when u <= int.MaxValue => (int)u,
+                long l when l is >= int.MinValue and <= int.MaxValue => (int)l,
+                string s when int.TryParse(s, System.Globalization.NumberStyles.Integer,
+                    System.Globalization.CultureInfo.InvariantCulture, out var parsed) => parsed,
+                _ => null,
+            };
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     public IEnumerable<(string ValueName, string Data)> EnumerateValues(string hive, string subKey)
     {
         var empty = System.Array.Empty<(string, string)>();

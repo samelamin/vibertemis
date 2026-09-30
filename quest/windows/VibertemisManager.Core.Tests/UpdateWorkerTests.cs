@@ -151,9 +151,9 @@ public class UpdateWorkerTests : IDisposable
     [Fact]
     public void Worker_OnBadSignature_LaunchesNothing()
     {
-        var (manifest, _, installer) = MakePackageFor("0.1.0.7", 7);
+        var (manifest, _, installer) = MakePackageFor("0.1.0.8", 8);
         var bogus = new byte[384];
-        var jobPath = WriteJob(manifest, bogus, installer, "0.1.0.7", 7);
+        var jobPath = WriteJob(manifest, bogus, installer, "0.1.0.8", 8);
         var result = _worker.Run(DefaultInputs(jobPath), Path.Combine(_cacheDir, "out.json"));
         Assert.Equal(UpdateOutcomeKind.JobInvalid, result.Outcome.Kind);
         Assert.Empty(_env.Launches);
@@ -172,8 +172,8 @@ public class UpdateWorkerTests : IDisposable
     [Fact]
     public void Worker_OnHelperOutsideCache_LaunchesNothing()
     {
-        var (manifest, sig, installer) = MakePackageFor("0.1.0.7", 7);
-        var jobPath = WriteJob(manifest, sig, installer, "0.1.0.7", 7);
+        var (manifest, sig, installer) = MakePackageFor("0.1.0.8", 8);
+        var jobPath = WriteJob(manifest, sig, installer, "0.1.0.8", 8);
         // Move the helper to the programs root: that's NOT under cache.
         var rogueHelper = Path.Combine(_programsRoot, "manager", "rogue.exe");
         File.WriteAllBytes(rogueHelper, _originalManagerBytes);
@@ -191,8 +191,8 @@ public class UpdateWorkerTests : IDisposable
     [Fact]
     public void Worker_OnCacheOutsideExpectedRoot_LaunchesNothing()
     {
-        var (manifest, sig, installer) = MakePackageFor("0.1.0.7", 7);
-        var jobPath = WriteJob(manifest, sig, installer, "0.1.0.7", 6,
+        var (manifest, sig, installer) = MakePackageFor("0.1.0.8", 8);
+        var jobPath = WriteJob(manifest, sig, installer, "0.1.0.8", 7,
             o => o.CacheDir = Path.Combine(_tempRoot, "rogue-cache"));
         Directory.CreateDirectory(Path.Combine(_tempRoot, "rogue-cache"));
         var result = _worker.Run(DefaultInputs(jobPath), Path.Combine(_cacheDir, "out.json"));
@@ -203,10 +203,10 @@ public class UpdateWorkerTests : IDisposable
     [Fact]
     public void Worker_OnWrongManagerBasename_LaunchesNothing()
     {
-        var (manifest, sig, installer) = MakePackageFor("0.1.0.7", 7);
+        var (manifest, sig, installer) = MakePackageFor("0.1.0.8", 8);
         var wrong = Path.Combine(_programsRoot, "manager", "Other.exe");
         File.WriteAllBytes(wrong, _originalManagerBytes);
-        var jobPath = WriteJob(manifest, sig, installer, "0.1.0.7", 6,
+        var jobPath = WriteJob(manifest, sig, installer, "0.1.0.8", 7,
             o => o.OriginalManagerPath = wrong);
         var result = _worker.Run(DefaultInputs(jobPath), Path.Combine(_cacheDir, "out.json"));
         Assert.Equal(UpdateOutcomeKind.JobInvalid, result.Outcome.Kind);
@@ -216,8 +216,8 @@ public class UpdateWorkerTests : IDisposable
     [Fact]
     public void Worker_OnNoCommitSignal_DoesNotInstall()
     {
-        var (manifest, sig, installer) = MakePackageFor("0.1.0.7", 7);
-        var jobPath = WriteJob(manifest, sig, installer, "0.1.0.7", 7);
+        var (manifest, sig, installer) = MakePackageFor("0.1.0.8", 8);
+        var jobPath = WriteJob(manifest, sig, installer, "0.1.0.8", 8);
         _env.ParentImagePath = _originalManagerPath;
         _env.ReadySignaled = true;
         _env.CommitSignaled = false;
@@ -230,8 +230,8 @@ public class UpdateWorkerTests : IDisposable
     [Fact]
     public void Worker_OnParentPidMismatch_LaunchesNothing()
     {
-        var (manifest, sig, installer) = MakePackageFor("0.1.0.7", 7);
-        var jobPath = WriteJob(manifest, sig, installer, "0.1.0.7", 7);
+        var (manifest, sig, installer) = MakePackageFor("0.1.0.8", 8);
+        var jobPath = WriteJob(manifest, sig, installer, "0.1.0.8", 8);
         _env.ParentImagePath = "C:\\Windows\\System32\\notepad.exe";
         var result = _worker.Run(DefaultInputs(jobPath), Path.Combine(_cacheDir, "out.json"));
         Assert.Equal(UpdateOutcomeKind.WorkerError, result.Outcome.Kind);
@@ -241,8 +241,8 @@ public class UpdateWorkerTests : IDisposable
     [Fact]
     public void Worker_OnHelperHashMismatch_LaunchesNothing()
     {
-        var (manifest, sig, installer) = MakePackageFor("0.1.0.7", 7);
-        var jobPath = WriteJob(manifest, sig, installer, "0.1.0.7", 7);
+        var (manifest, sig, installer) = MakePackageFor("0.1.0.8", 8);
+        var jobPath = WriteJob(manifest, sig, installer, "0.1.0.8", 8);
         File.WriteAllBytes(_helperPath, new byte[] { 0xAA, 0xBB, 0xCC });
         var inputs = new UpdateJobInputs(
             JobPath: jobPath,
@@ -258,8 +258,8 @@ public class UpdateWorkerTests : IDisposable
     [Fact]
     public void Worker_OnInstallerTimeout_DoesNotRelaunch()
     {
-        var (manifest, sig, installer) = MakePackageFor("0.1.0.7", 7);
-        var jobPath = WriteJob(manifest, sig, installer, "0.1.0.7", 7);
+        var (manifest, sig, installer) = MakePackageFor("0.1.0.8", 8);
+        var jobPath = WriteJob(manifest, sig, installer, "0.1.0.8", 8);
         _env.ParentImagePath = _originalManagerPath;
         _env.ReadySignaled = true;
         _env.CommitSignaled = true;
@@ -276,8 +276,8 @@ public class UpdateWorkerTests : IDisposable
     [Fact]
     public void Worker_RetainsActualInstallerExitCode()
     {
-        var (manifest, sig, installer) = MakePackageFor("0.1.0.7", 7);
-        var jobPath = WriteJob(manifest, sig, installer, "0.1.0.7", 7);
+        var (manifest, sig, installer) = MakePackageFor("0.1.0.8", 8);
+        var jobPath = WriteJob(manifest, sig, installer, "0.1.0.8", 8);
         _env.ParentImagePath = _originalManagerPath;
         _env.ReadySignaled = true;
         _env.CommitSignaled = true;
@@ -293,8 +293,8 @@ public class UpdateWorkerTests : IDisposable
     [Fact]
     public void Worker_OnInstalledVersionMismatch_DoesNotRelaunchInstalled()
     {
-        var (manifest, sig, installer) = MakePackageFor("0.1.0.7", 7);
-        var jobPath = WriteJob(manifest, sig, installer, "0.1.0.7", 7);
+        var (manifest, sig, installer) = MakePackageFor("0.1.0.8", 8);
+        var jobPath = WriteJob(manifest, sig, installer, "0.1.0.8", 8);
         _env.ParentImagePath = _originalManagerPath;
         _env.ReadySignaled = true;
         _env.CommitSignaled = true;
@@ -303,7 +303,7 @@ public class UpdateWorkerTests : IDisposable
         _env.InstallerExitToReturn = 0;
         _env.VerifyInstallPidToReturn = 6666;
         _env.VerifyInstallExitToReturn = 0;
-        _env.InstalledManagerFileVersion = "0.1.0.6";
+        _env.InstalledManagerFileVersion = "0.1.0.7";
         var result = _worker.Run(DefaultInputs(jobPath), Path.Combine(_cacheDir, "out.json"));
         Assert.Equal(UpdateOutcomeKind.VerificationFailed, result.Outcome.Kind);
         Assert.True(result.OriginalRelaunched);
@@ -312,8 +312,8 @@ public class UpdateWorkerTests : IDisposable
     [Fact]
     public void Worker_OnVerifyInstallFailure_DoesNotRelaunchInstalled()
     {
-        var (manifest, sig, installer) = MakePackageFor("0.1.0.7", 7);
-        var jobPath = WriteJob(manifest, sig, installer, "0.1.0.7", 7);
+        var (manifest, sig, installer) = MakePackageFor("0.1.0.8", 8);
+        var jobPath = WriteJob(manifest, sig, installer, "0.1.0.8", 8);
         _env.ParentImagePath = _originalManagerPath;
         _env.ReadySignaled = true;
         _env.CommitSignaled = true;
@@ -322,7 +322,7 @@ public class UpdateWorkerTests : IDisposable
         _env.InstallerExitToReturn = 0;
         _env.VerifyInstallPidToReturn = 6666;
         _env.VerifyInstallExitToReturn = 7;
-        _env.InstalledManagerFileVersion = "0.1.0.7";
+        _env.InstalledManagerFileVersion = "0.1.0.8";
         var result = _worker.Run(DefaultInputs(jobPath), Path.Combine(_cacheDir, "out.json"));
         Assert.Equal(UpdateOutcomeKind.VerificationFailed, result.Outcome.Kind);
         Assert.Equal(7, result.Outcome.VerifyInstallExitCode);
@@ -332,8 +332,8 @@ public class UpdateWorkerTests : IDisposable
     [Fact]
     public void Worker_OnInstallerFailure_RelaunchesOriginalAfterVerify()
     {
-        var (manifest, sig, installer) = MakePackageFor("0.1.0.7", 7);
-        var jobPath = WriteJob(manifest, sig, installer, "0.1.0.7", 7);
+        var (manifest, sig, installer) = MakePackageFor("0.1.0.8", 8);
+        var jobPath = WriteJob(manifest, sig, installer, "0.1.0.8", 8);
         _env.ParentImagePath = _originalManagerPath;
         _env.ReadySignaled = true;
         _env.CommitSignaled = true;
@@ -350,8 +350,8 @@ public class UpdateWorkerTests : IDisposable
     [Fact]
     public void Worker_OnInstallerFailure_DoesNotRelaunchOriginalWhenVerifyFails()
     {
-        var (manifest, sig, installer) = MakePackageFor("0.1.0.7", 7);
-        var jobPath = WriteJob(manifest, sig, installer, "0.1.0.7", 7);
+        var (manifest, sig, installer) = MakePackageFor("0.1.0.8", 8);
+        var jobPath = WriteJob(manifest, sig, installer, "0.1.0.8", 8);
         _env.ParentImagePath = _originalManagerPath;
         _env.ReadySignaled = true;
         _env.CommitSignaled = true;
@@ -368,8 +368,8 @@ public class UpdateWorkerTests : IDisposable
     [Fact]
     public void Worker_OnSuccess_RetainsActualExitCodeAndRelaunchesInstalled()
     {
-        var (manifest, sig, installer) = MakePackageFor("0.1.0.7", 7);
-        var jobPath = WriteJob(manifest, sig, installer, "0.1.0.7", 7);
+        var (manifest, sig, installer) = MakePackageFor("0.1.0.8", 8);
+        var jobPath = WriteJob(manifest, sig, installer, "0.1.0.8", 8);
         _env.ParentImagePath = _originalManagerPath;
         _env.ReadySignaled = true;
         _env.CommitSignaled = true;
@@ -378,14 +378,14 @@ public class UpdateWorkerTests : IDisposable
         _env.InstallerExitToReturn = 0;
         _env.VerifyInstallPidToReturn = 6666;
         _env.VerifyInstallExitToReturn = 0;
-        _env.InstalledManagerFileVersion = "0.1.0.7";
+        _env.InstalledManagerFileVersion = "0.1.0.8";
         var outcomePath = Path.Combine(_cacheDir, "out.json");
         var result = _worker.Run(DefaultInputs(jobPath), outcomePath);
         Assert.Equal(UpdateOutcomeKind.Success, result.Outcome.Kind);
         Assert.Equal(0, result.Outcome.InstallerExitCode);
         Assert.Equal(0, result.Outcome.VerifyInstallExitCode);
         Assert.Equal(0, result.InstallerExitCodeActual);
-        Assert.Equal("0.1.0.7", result.Outcome.InstalledFileVersion);
+        Assert.Equal("0.1.0.8", result.Outcome.InstalledFileVersion);
         Assert.NotNull(result.RestartedPid);
         // Outcome must be written BEFORE the GUI relaunch.
         Assert.True(File.Exists(outcomePath));
@@ -394,8 +394,8 @@ public class UpdateWorkerTests : IDisposable
     [Fact]
     public void Worker_OnSuccess_InstallerArgsIncludeSilentAndDir()
     {
-        var (manifest, sig, installer) = MakePackageFor("0.1.0.7", 7);
-        var jobPath = WriteJob(manifest, sig, installer, "0.1.0.7", 7);
+        var (manifest, sig, installer) = MakePackageFor("0.1.0.8", 8);
+        var jobPath = WriteJob(manifest, sig, installer, "0.1.0.8", 8);
         _env.ParentImagePath = _originalManagerPath;
         _env.ReadySignaled = true;
         _env.CommitSignaled = true;
@@ -404,7 +404,7 @@ public class UpdateWorkerTests : IDisposable
         _env.InstallerExitToReturn = 0;
         _env.VerifyInstallPidToReturn = 6666;
         _env.VerifyInstallExitToReturn = 0;
-        _env.InstalledManagerFileVersion = "0.1.0.7";
+        _env.InstalledManagerFileVersion = "0.1.0.8";
         _worker.Run(DefaultInputs(jobPath), Path.Combine(_cacheDir, "out.json"));
         var installerLaunch = _env.Launches.FirstOrDefault(x => x.Exe.Contains("VibertemisVR-HostManager-Setup"));
         Assert.NotNull(installerLaunch);
@@ -448,7 +448,7 @@ public class UpdateWorkerTests : IDisposable
         public int VerifyInstallExitToReturn = 0;
         public int OriginalVerifyInstallPidToReturn = 7777;
         public int OriginalVerifyInstallExit = 0;
-        public string InstalledManagerFileVersion = "0.1.0.7";
+        public string InstalledManagerFileVersion = "0.1.0.8";
 
         public bool FileExists(string path) => Files.ContainsKey(path) || File.Exists(path);
         public long FileSize(string path) => Files.TryGetValue(path, out var b) ? b.LongLength : new FileInfo(path).Length;

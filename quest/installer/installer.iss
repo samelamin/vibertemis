@@ -1,5 +1,5 @@
 #define MyAppName "VibertemisVR Host Manager"
-#define MyAppVersion "0.1.0.6"
+#define MyAppVersion "0.1.0.7"
 #define MyAppPublisher "Vibertemis"
 
 [Setup]
@@ -37,13 +37,13 @@ Name: "{app}\manager\bin"
 Source: "{#MyStagingRoot}\manager\VibertemisManager.App.exe"; DestDir: "{app}\manager"; Flags: ignoreversion
 Source: "{#MyStagingRoot}\manager\VibertemisNetworkHelper.exe"; DestDir: "{app}\manager"; Flags: ignoreversion
 Source: "{#MyStagingRoot}\manager\bin\vibertemis-host-companion.exe"; DestDir: "{app}\manager\bin"; Flags: ignoreversion
+Source: "{#MyStagingRoot}\manager\prerequisites\*"; DestDir: "{app}\manager\prerequisites"; Flags: ignoreversion recursesubdirs
 ; Immutable native payload, staged unchanged.
 Source: "{#MyStagingRoot}\runtime\ALVR Dashboard.exe"; DestDir: "{app}\runtime"; Flags: ignoreversion
 Source: "{#MyStagingRoot}\runtime\driver.vrdrivermanifest"; DestDir: "{app}\runtime"; Flags: ignoreversion
 Source: "{#MyStagingRoot}\runtime\bin\win64\driver_alvr_server.dll"; DestDir: "{app}\runtime\bin\win64"; Flags: ignoreversion
 Source: "{#MyStagingRoot}\runtime\bin\win64\openvr_api.dll"; DestDir: "{app}\runtime\bin\win64"; Flags: ignoreversion
 Source: "{#MyStagingRoot}\runtime\bin\win64\pyrowave-shared.dll"; DestDir: "{app}\runtime\bin\win64"; Flags: ignoreversion
-Source: "{#MyStagingRoot}\runtime\bin\win64\vcruntime140_1.dll"; DestDir: "{app}\runtime\bin\win64"; Flags: ignoreversion
 Source: "{#MyStagingRoot}\runtime\bin\win64\alvr_server_openvr.pdb"; DestDir: "{app}\runtime\bin\win64"; Flags: ignoreversion
 Source: "{#MyStagingRoot}\runtime\SOURCE.txt"; DestDir: "{app}\runtime"; Flags: ignoreversion
 Source: "{#MyStagingRoot}\runtime\licenses\*"; DestDir: "{app}\runtime\licenses"; Flags: ignoreversion recursesubdirs

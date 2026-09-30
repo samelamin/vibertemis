@@ -12,6 +12,12 @@ public final class PcvrTestActions {
     // Existing native-launch scenarios now explicitly choose the manual path
     // instead of treating missing host pairing as implicit manual consent.
     if (dialog != null && dialog.isShowing() && dialog.getButton(AlertDialog.BUTTON_NEUTRAL) != null
+        && "Advanced pairing".contentEquals(dialog.getButton(AlertDialog.BUTTON_NEUTRAL).getText())) {
+      dialog.getButton(AlertDialog.BUTTON_NEUTRAL).performClick();
+      Shadows.shadowOf(Looper.getMainLooper()).idle();
+      dialog = ShadowAlertDialog.getLatestAlertDialog();
+    }
+    if (dialog != null && dialog.isShowing() && dialog.getButton(AlertDialog.BUTTON_NEUTRAL) != null
         && "Manual VR".contentEquals(dialog.getButton(AlertDialog.BUTTON_NEUTRAL).getText())) {
       dialog.getButton(AlertDialog.BUTTON_NEUTRAL).performClick();
       Shadows.shadowOf(Looper.getMainLooper()).idle();

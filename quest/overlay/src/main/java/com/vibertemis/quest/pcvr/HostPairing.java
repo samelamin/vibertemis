@@ -13,8 +13,10 @@ import org.json.JSONObject;
 public final class HostPairing {
   public static final int MAX_BYTES = 16384;
   public final String address, pin, token, certificate;
+  public final String deviceId, hostCertificatePin, clientUuid;
 
-  private HostPairing(String address, String pin, String token, String certificate) {
+  private HostPairing(String address, String pin, String token, String certificate, String deviceId, String hostCertificatePin, String clientUuid) {
+    this.deviceId=deviceId; this.hostCertificatePin=hostCertificatePin; this.clientUuid=clientUuid;
     this.address = address;
     this.pin = pin;
     this.token = token;
@@ -49,7 +51,12 @@ public final class HostPairing {
     cert.checkValidity();
     if (!pin.equals(hex(MessageDigest.getInstance("SHA-256").digest(cert.getEncoded()))))
       throw new IllegalArgumentException("Pairing certificate does not match its identity.");
-    return new HostPairing(address, pin, token, pem);
+    String device = json.optString("device_id", ""), host = json.optString("host_cert_sha256", ""), uuid = json.optString("client_uuid", "");
+    if (json.has("device_id") || json.has("host_cert_sha256") || json.has("client_uuid")) {
+      if (!device.matches("[0-9a-f]{32}") || !host.matches("[0-9a-f]{64}") || !uuid.matches("[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}"))
+        throw new IllegalArgumentException("Incomplete VR device pairing.");
+    }
+    return new HostPairing(address, pin, token, pem, device, host, uuid);
   }
 
   public HostPairing withAddress(String endpoint) throws Exception {
@@ -65,12 +72,13 @@ public final class HostPairing {
   }
 
   public String serialize() throws Exception {
-    return new JSONObject()
+    JSONObject json = new JSONObject()
         .put("host_address", address)
         .put("certpin", pin)
         .put("token", token)
-        .put("cert_pem", certificate)
-        .toString();
+        .put("cert_pem", certificate);
+    if (!deviceId.isEmpty()) json.put("device_id",deviceId).put("host_cert_sha256",hostCertificatePin).put("client_uuid",clientUuid);
+    return json.toString();
   }
 
   public static String hex(byte[] bytes) {

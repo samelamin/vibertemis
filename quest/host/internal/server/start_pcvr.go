@@ -33,7 +33,8 @@ func (s *Server) handleStartPcvr1(w http.ResponseWriter, r *http.Request) {
 	// IPLimiter (DOS guard) — the ActionLimiter is checked
 	// AFTER auth so invalid HMAC cannot consume the
 	// legitimate start budget (Codex #3).
-	if _, _, ok := s.authenticate(w, r, body, r.Method, r.URL.Path, s.deps.MaxBody); !ok {
+	_, _, _, ok := s.authenticateWithDevice(w, r, body, r.Method, r.URL.Path, s.deps.MaxBody)
+	if !ok {
 		return
 	}
 	// ActionLimiter is consulted here, post-auth.

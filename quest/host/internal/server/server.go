@@ -52,6 +52,7 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -145,18 +146,98 @@ type StatusResponse struct {
 // the legitimate start budget. If ActionLimiter is nil a
 // default factory (burst=3, window=30s, cap=1024) is
 // constructed at New().
+//
+// DeviceLookup is optional. When set, requests carrying the
+// X-Vq-Device header select the per-device HMAC token for
+// that device_id. The HMAC channel pins against the
+// companion cert SHA stored in the device record (NOT the
+// client cert). Requests without the header continue to use
+// the legacy global Token. A malformed header with a known
+// device_id is rejected — we do NOT silently fall back to
+// the legacy token on bad device header.
+//
+// FreshAuthorizer is optional. When set, /start_pcvr does
+// a fresh host-authority round trip BEFORE launching VR,
+// exactly once per request. The contract says: "Fresh
+// authorize on redemption and every new inherited VR start
+// (prefer all auth requests), fail closed host
+// unavailable." Set this to bridge.Service when the bridge
+// pipe is wired; the service exposes the live authorizer
+// (pipe-scoped) or nil when no pipe is active.
 type Deps struct {
-	Token         string
-	Cert          tls.Certificate
-	Adapter       *alvr.Adapter
-	Launcher      *steamvr.Launcher
-	NonceLRU      *state.NonceLRU
-	IPLimiter     *state.RateLimiterFactory
-	ActionLimiter *state.RateLimiterFactory
-	SteamPath     string
-	MaxBody       int64
-	MaxSkew       time.Duration
-	Now           func() time.Time
+	Token                string
+	Cert                 tls.Certificate
+	Adapter              *alvr.Adapter
+	Launcher             *steamvr.Launcher
+	NonceLRU             *state.NonceLRU
+	IPLimiter            *state.RateLimiterFactory
+	ActionLimiter        *state.RateLimiterFactory
+	SteamPath            string
+	MaxBody              int64
+	MaxSkew              time.Duration
+	Now                  func() time.Time
+	DeviceLookup         DeviceLookup
+	DeviceIdentityLookup DeviceIdentityLookup
+	FreshAuthorizer      FreshAuthorizer
+}
+
+// DeviceLookup is the contract the server uses to select a
+// per-device HMAC credential.
+type DeviceLookup interface {
+	LookupDevice(deviceID string) (token, companionCertSHA string, ok bool)
+}
+
+// PairDeviceIdentity is the per-device identity the start
+// handler needs to do a fresh-authorize round trip. It is
+// a server-local type so the server package does not depend
+// on the bridge package's DeviceIdentity.
+type PairDeviceIdentity struct {
+	DeviceID         string
+	Token            string
+	ClientUUID       string
+	ClientCertSHA    string
+	CompanionCertSHA string
+}
+
+// DeviceIdentityLookup is the richer contract. A
+// implementation that knows only the token + companion
+// cert SHA can wrap itself in basicIdentityLookup.
+type DeviceIdentityLookup interface {
+	LookupDeviceIdentity(deviceID string) (PairDeviceIdentity, bool)
+}
+
+type basicIdentityLookup struct {
+	basic DeviceLookup
+}
+
+func (b *basicIdentityLookup) LookupDeviceIdentity(deviceID string) (PairDeviceIdentity, bool) {
+	tok, cSHA, ok := b.basic.LookupDevice(deviceID)
+	if !ok {
+		return PairDeviceIdentity{}, false
+	}
+	return PairDeviceIdentity{DeviceID: deviceID, Token: tok, CompanionCertSHA: cSHA}, true
+}
+
+// AsIdentityLookup adapts a basic DeviceLookup into a
+// DeviceIdentityLookup. The client_uuid + client_cert_sha256
+// fields will be empty (they are filled by the start
+// handler from the bridge service directly).
+func AsIdentityLookup(basic DeviceLookup) DeviceIdentityLookup {
+	if basic == nil {
+		return nil
+	}
+	return &basicIdentityLookup{basic: basic}
+}
+
+// FreshAuthorizer is the contract the server uses to do a
+// fresh authority round trip on /start_pcvr. The server
+// passes the device's client_uuid + client_cert_sha256; the
+// authorizer (typically the bridge pipe authorizer) returns
+// authorized=true only if the host still considers this
+// device paired. The auth path MUST fail closed when the
+// host is unreachable — the start MUST NOT proceed.
+type FreshAuthorizer interface {
+	AuthorizeAndSelectHMAC(clientUUID, clientCertSHA string) (deviceID, token, companionCertSHA string, err error)
 }
 
 // Server is the HTTPS control server.
@@ -310,6 +391,21 @@ func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
 // Handler returns the underlying http.Handler for tests.
 func (s *Server) Handler() http.Handler { return s.hs.Handler }
 
+// RegisterRedeem attaches the /pairing/redeem endpoint to
+// the server's mux. Kept separate so legacy builds can omit
+// it cleanly. The handler is provided in this package
+// (redeem_handler.go).
+func (s *Server) RegisterRedeem(h *RedeemHandler) {
+	if s == nil || s.hs == nil || s.hs.Handler == nil {
+		return
+	}
+	mux, ok := s.hs.Handler.(*http.ServeMux)
+	if !ok {
+		return
+	}
+	RegisterRedeem(mux, h)
+}
+
 // authenticate verifies the four headers, the clock skew, and
 // the nonce. On success it returns the parsed timestamp. On
 // failure it writes the canonical error envelope and returns
@@ -325,6 +421,16 @@ func (s *Server) Handler() http.Handler { return s.hs.Handler }
 //     invalid HMAC does NOT consume a legitimate start
 //     budget.
 func (s *Server) authenticate(w http.ResponseWriter, r *http.Request, body []byte, method, path string, maxBody int64) (time.Time, string, bool) {
+	ts, nonce, _, ok := s.authenticateWithDevice(w, r, body, method, path, maxBody)
+	return ts, nonce, ok
+}
+
+// authenticateWithDevice is the same as authenticate but
+// returns the device identity (when the request used the
+// X-Vq-Device header) so the caller can do a fresh
+// authorize round trip. The empty strings indicate a
+// legacy global-token caller.
+func (s *Server) authenticateWithDevice(w http.ResponseWriter, r *http.Request, body []byte, method, path string, maxBody int64) (time.Time, string, PairDeviceIdentity, bool) {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		host = r.RemoteAddr
@@ -334,23 +440,49 @@ func (s *Server) authenticate(w http.ResponseWriter, r *http.Request, body []byt
 	}
 	if !s.deps.IPLimiter.Allow(host) {
 		writeErr(w, http.StatusTooManyRequests, ErrRateLimit, "rate limit exceeded")
-		return time.Time{}, "", false
+		return time.Time{}, "", PairDeviceIdentity{}, false
 	}
-	ts, nonce, err := security.Verify(method, path, s.deps.Token, headerMap(r), body, s.deps.MaxSkew, s.deps.Now)
+	token := s.deps.Token
+	var identity PairDeviceIdentity
+	if values, present := r.Header[http.CanonicalHeaderKey(DeviceHeader)]; present {
+		if len(values) != 1 || len(values[0]) != 32 || strings.Trim(values[0], "0123456789abcdef") != "" || s.deps.DeviceIdentityLookup == nil {
+			writeErr(w, http.StatusOK, ErrAuth, "invalid device identity")
+			return time.Time{}, "", PairDeviceIdentity{}, false
+		}
+		var ok bool
+		identity, ok = s.deps.DeviceIdentityLookup.LookupDeviceIdentity(values[0])
+		if !ok || identity.DeviceID != values[0] || identity.ClientUUID == "" || identity.ClientCertSHA == "" {
+			writeErr(w, http.StatusOK, ErrAuth, "unknown device")
+			return time.Time{}, "", PairDeviceIdentity{}, false
+		}
+		token = identity.Token
+	}
+	ts, nonce, err := security.Verify(method, path, token, headerMap(r), body, s.deps.MaxSkew, s.deps.Now)
 	if err != nil {
 		writeErr(w, http.StatusOK, ErrAuth, err.Error())
-		return time.Time{}, "", false
+		return time.Time{}, "", PairDeviceIdentity{}, false
 	}
 	replay, err := s.deps.NonceLRU.CheckAndAdd(nonce, ts)
 	if err != nil {
 		writeErr(w, http.StatusOK, ErrNonceCacheFull, err.Error())
-		return time.Time{}, "", false
+		return time.Time{}, "", PairDeviceIdentity{}, false
 	}
 	if replay {
 		writeErr(w, http.StatusOK, ErrNonceReplay, "nonce already seen")
-		return time.Time{}, "", false
+		return time.Time{}, "", PairDeviceIdentity{}, false
 	}
-	return ts, nonce, true
+	if identity.DeviceID != "" {
+		if s.deps.FreshAuthorizer == nil {
+			writeErr(w, http.StatusOK, ErrAuth, "host authority unavailable")
+			return time.Time{}, "", PairDeviceIdentity{}, false
+		}
+		id, currentToken, _, err := s.deps.FreshAuthorizer.AuthorizeAndSelectHMAC(identity.ClientUUID, identity.ClientCertSHA)
+		if err != nil || id != identity.DeviceID || currentToken != identity.Token {
+			writeErr(w, http.StatusOK, ErrAuth, "host pairing unavailable or revoked")
+			return time.Time{}, "", PairDeviceIdentity{}, false
+		}
+	}
+	return ts, nonce, identity, true
 }
 
 // consumeActionBudget consults ActionLimiter for an
@@ -387,7 +519,7 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(CapabilitiesResponse{
-		Version: "0.1.0.6", Sequence: 6, NativeProtocol: alvr.NativeVersion,
+		Version: "0.1.0.7", Sequence: 7, NativeProtocol: alvr.NativeVersion,
 		Codecs:          res.Codecs,
 		PyroWave:        res.PyroWave,
 		PyroWaveReason:  res.PyroWaveReason,

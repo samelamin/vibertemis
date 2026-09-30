@@ -53,6 +53,7 @@ import (
 
 // testServer bundles the server + fakes for each test.
 type testServer struct {
+	core          *Server
 	srv           *httptest.Server
 	adapter       *alvr.Adapter
 	launcher      *steamvr.Launcher
@@ -110,6 +111,7 @@ func newTestServer(t *testing.T) *testServer {
 	}
 	ts := httptest.NewServer(srv.Handler())
 	return &testServer{
+		core:          srv,
 		srv:           ts,
 		adapter:       adapter,
 		launcher:      launcher,

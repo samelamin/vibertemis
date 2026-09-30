@@ -113,7 +113,7 @@ internal static class Program
 
         var adapterEnum = new SystemAdapterEnumerator();
         var steam = new RegistrySteamLocator(registry);
-        var steamVr = new VrpathSteamVrLocator(paths, fs);
+        var steamVr = new VrpathSteamVrLocator(paths, fs, steam);
         var alvrLocator = new DefaultAlvrSessionLocator(paths, fs);
         var alvrSettings = new JsonAlvrSettingsReader(fs);
         var busyChecker = new ProcessTableDashboardBusyChecker(processTable);

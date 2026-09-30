@@ -79,10 +79,10 @@ public class NativeConsentTest {
       hub.findViewById(R.id.hub_btn_connect).performClick();
       assertNull(Shadows.shadowOf(hub).getNextStartedActivity());
       AlertDialog setup = ShadowAlertDialog.getLatestAlertDialog();
-      assertEquals("Pair VR host", setup.getButton(AlertDialog.BUTTON_POSITIVE).getText().toString());
+      assertEquals("Screen gaming", setup.getButton(AlertDialog.BUTTON_POSITIVE).getText().toString());
       setup.getButton(AlertDialog.BUTTON_POSITIVE).performClick();
       Shadows.shadowOf(android.os.Looper.getMainLooper()).idle();
-      assertEquals(PcvrSettingsActivity.class.getName(), Shadows.shadowOf(hub).getNextStartedActivity().getComponent().getClassName());
+      assertEquals(com.limelight.PcView.class.getName(), Shadows.shadowOf(hub).getNextStartedActivity().getComponent().getClassName());
     }
   }
 

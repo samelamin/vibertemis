@@ -95,6 +95,14 @@ public interface IRegistryAccess
 {
     string? TryGetString(string hive, string subKey, string valueName);
     IEnumerable<(string ValueName, string Data)> EnumerateValues(string hive, string subKey);
+    /// <summary>
+    /// Reads a DWORD / DWord-style value. Strings that parse as a
+    /// 32-bit integer are accepted (the Visual C++ runtime key on
+    /// Windows 10+ records Major/Minor/Bld/Rbld as REG_DWORD but
+    /// some legacy setups surface them as stringified numbers).
+    /// Returns null on missing / unsupported value types.
+    /// </summary>
+    int? TryGetDword(string hive, string subKey, string valueName);
 }
 
 /// <summary>

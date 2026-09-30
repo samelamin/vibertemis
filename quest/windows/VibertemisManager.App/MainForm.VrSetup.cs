@@ -16,6 +16,7 @@ public sealed partial class MainForm
         _cmbAdapter.Enabled = false;
         _chkAutoStart.Enabled = false;
         _btnUpdate.Enabled = false;
+        _btnDownloadUpdate.Enabled = false;
         _btnInstallUpdate.Enabled = false;
         bool suspended = false;
         try
@@ -29,6 +30,8 @@ public sealed partial class MainForm
                     if (!_svc.IntegrityVerifier.Verify(Path.Combine(_svc.Paths.ProgramsRoot, relative), out _))
                         throw new InvalidDataException("VR runtime integrity check failed. Reinstall the host package.");
             }
+            RequireIdle();
+            if (!await RunGuidedSetupAsync()) return;
             RequireIdle();
             var setup = new VrSetup(_svc.Paths.ProgramsRoot,
                 Path.Combine(_svc.Paths.LocalAppData, "openvr", "openvrpaths.vrpath"), RequireIdle, VerifyPayload);
@@ -50,7 +53,7 @@ public sealed partial class MainForm
             RememberCompanion(true);
             _recovery.RequestStart();
             ReconcileHost();
-            LogStatus("VR setup complete. Export pairing once and import it in Quest PCVR settings. Then choose Connect; SteamVR starts from the paired headset.");
+            LogStatus("PC ready. In Vibertemis on Quest, choose Setup VR and select your already-paired PC. No pairing file needed. SteamVR starts only when you connect for VR.");
         }
         catch (Exception ex) { if (!IsDisposed) LogStatus("VR setup needs attention: " + ex.Message); }
         finally
@@ -62,7 +65,7 @@ public sealed partial class MainForm
                 _cmbAdapter.Enabled = true;
                 _chkAutoStart.Enabled = true;
                 _btnUpdate.Enabled = !_updateBusy;
-                _btnInstallUpdate.Enabled = _pendingUpdate != null;
+                RenderUpdateUi();
             }
         }
     }

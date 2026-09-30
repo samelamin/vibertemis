@@ -26,9 +26,11 @@ public sealed class FakeProcessTable : IProcessTable
 public sealed class FakeFileSystem : IFileSystemAccess
 {
     public Dictionary<string, string> Files { get; } = new();
+    public Dictionary<string, bool> DirectoryExistsResponses { get; } = new();
     public bool FileExists(string path) => Files.ContainsKey(path);
     public string ReadAllText(string path) => Files[path];
-    public bool DirectoryExists(string path) => true;
+    public bool DirectoryExists(string path)
+        => DirectoryExistsResponses.TryGetValue(path, out var v) ? v : true;
     public IEnumerable<string> EnumerateFiles(string directory, string pattern)
     {
         foreach (var f in Files.Keys)
@@ -42,6 +44,11 @@ public sealed class FakeRegistry : IRegistryAccess
     public string? TryGetString(string hive, string subKey, string valueName)
     {
         return Values.TryGetValue((hive, subKey, valueName), out var v) ? v : null;
+    }
+    public int? TryGetDword(string hive, string subKey, string valueName)
+    {
+        if (!Values.TryGetValue((hive, subKey, valueName), out var v)) return null;
+        return int.TryParse(v, out var parsed) ? parsed : null;
     }
     public IEnumerable<(string ValueName, string Data)> EnumerateValues(string hive, string subKey)
     {

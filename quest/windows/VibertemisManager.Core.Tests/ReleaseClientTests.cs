@@ -90,49 +90,49 @@ public class ReleaseClientTests : IDisposable
         // Three candidates. The middle version is newest by tag, the
         // others are older. The handler must serve only the newest
         // manifest; the older manifests must NEVER be requested.
-        var old = ManifestFor("0.1.0.4", 4);
-        var newest = ManifestFor("0.1.0.7", 7);
-        var middle = ManifestFor("0.1.0.6", 6);
+        var old = ManifestFor("0.1.0.5", 5);
+        var newest = ManifestFor("0.1.0.8", 8);
+        var middle = ManifestFor("0.1.0.7", 7);
         _handler.Map("https://api.github.com/repos/samelamin/vibertemis/releases?per_page=100",
-            ReleasesListJson("quest-preview-v0.1.0.4", "quest-preview-v0.1.0.7", "quest-preview-v0.1.0.6"));
-        _handler.Map(SignedRelease.Repository + SignedRelease.TagPrefix + "0.1.0.7/quest-update.json", newest);
-        _handler.Map(SignedRelease.Repository + SignedRelease.TagPrefix + "0.1.0.7/quest-update.json.sig", Sign(newest));
-        _handler.Map(SignedRelease.Repository + SignedRelease.TagPrefix + "0.1.0.6/quest-update.json", middle);
-        _handler.Map(SignedRelease.Repository + SignedRelease.TagPrefix + "0.1.0.6/quest-update.json.sig", Sign(middle));
-        _handler.Map(SignedRelease.Repository + SignedRelease.TagPrefix + "0.1.0.4/quest-update.json", old);
-        _handler.Map(SignedRelease.Repository + SignedRelease.TagPrefix + "0.1.0.4/quest-update.json.sig", Sign(old));
+            ReleasesListJson("quest-preview-v0.1.0.5", "quest-preview-v0.1.0.8", "quest-preview-v0.1.0.7"));
+        _handler.Map(SignedRelease.Repository + SignedRelease.TagPrefix + "0.1.0.8/quest-update.json", newest);
+        _handler.Map(SignedRelease.Repository + SignedRelease.TagPrefix + "0.1.0.8/quest-update.json.sig", Sign(newest));
+        _handler.Map(SignedRelease.Repository + SignedRelease.TagPrefix + "0.1.0.7/quest-update.json", middle);
+        _handler.Map(SignedRelease.Repository + SignedRelease.TagPrefix + "0.1.0.7/quest-update.json.sig", Sign(middle));
+        _handler.Map(SignedRelease.Repository + SignedRelease.TagPrefix + "0.1.0.5/quest-update.json", old);
+        _handler.Map(SignedRelease.Repository + SignedRelease.TagPrefix + "0.1.0.5/quest-update.json.sig", Sign(old));
         var result = await _client.CheckAsync(CancellationToken.None, publicKeyOverride: _trustKey);
         Assert.NotNull(result);
-        Assert.Equal("0.1.0.7", result!.Release.Version);
-        Assert.Equal(7, result.Release.Sequence);
+        Assert.Equal("0.1.0.8", result!.Release.Version);
+        Assert.Equal(8, result.Release.Sequence);
         // Older candidates must not have been fetched.
         Assert.DoesNotContain(_handler.Requests,
-            u => u.Contains("quest-preview-v0.1.0.6/quest-update.json"));
+            u => u.Contains("quest-preview-v0.1.0.7/quest-update.json"));
         Assert.DoesNotContain(_handler.Requests,
-            u => u.Contains("quest-preview-v0.1.0.4/quest-update.json"));
+            u => u.Contains("quest-preview-v0.1.0.5/quest-update.json"));
     }
 
     [Fact]
     public async Task CheckAsync_FailsVisibly_OnNewestInvalidSignature()
     {
-        // Newest tag (0.1.0.7) is signed with the WRONG key, older
-        // (0.1.0.6) is valid. Must surface the invalid newest
+        // Newest tag (0.1.0.8) is signed with the WRONG key, older
+        // (0.1.0.7) is valid. Must surface the invalid newest
         // candidate rather than silently falling back.
-        var newest = ManifestFor("0.1.0.7", 7);
-        var older = ManifestFor("0.1.0.6", 6);
+        var newest = ManifestFor("0.1.0.8", 8);
+        var older = ManifestFor("0.1.0.7", 7);
         _handler.Map("https://api.github.com/repos/samelamin/vibertemis/releases?per_page=100",
-            ReleasesListJson("quest-preview-v0.1.0.7", "quest-preview-v0.1.0.6"));
-        _handler.Map(SignedRelease.Repository + SignedRelease.TagPrefix + "0.1.0.7/quest-update.json", newest);
-        _handler.Map(SignedRelease.Repository + SignedRelease.TagPrefix + "0.1.0.7/quest-update.json.sig", Sign(newest, _otherSigning));
-        _handler.Map(SignedRelease.Repository + SignedRelease.TagPrefix + "0.1.0.6/quest-update.json", older);
-        _handler.Map(SignedRelease.Repository + SignedRelease.TagPrefix + "0.1.0.6/quest-update.json.sig", Sign(older));
+            ReleasesListJson("quest-preview-v0.1.0.8", "quest-preview-v0.1.0.7"));
+        _handler.Map(SignedRelease.Repository + SignedRelease.TagPrefix + "0.1.0.8/quest-update.json", newest);
+        _handler.Map(SignedRelease.Repository + SignedRelease.TagPrefix + "0.1.0.8/quest-update.json.sig", Sign(newest, _otherSigning));
+        _handler.Map(SignedRelease.Repository + SignedRelease.TagPrefix + "0.1.0.7/quest-update.json", older);
+        _handler.Map(SignedRelease.Repository + SignedRelease.TagPrefix + "0.1.0.7/quest-update.json.sig", Sign(older));
         var ex = await Assert.ThrowsAsync<System.Security.Cryptography.CryptographicException>(
             () => _client.CheckAsync(CancellationToken.None, publicKeyOverride: _trustKey));
-        Assert.Equal("0.1.0.6", SignedRelease.CurrentVersion);
+        Assert.Equal("0.1.0.7", SignedRelease.CurrentVersion);
         // Newest invalid must trigger; we should never have silently
-        // downgraded to 0.1.0.6.
+        // downgraded to 0.1.0.7.
         Assert.DoesNotContain(_handler.Requests,
-            u => u.Contains("quest-preview-v0.1.0.6/quest-update.json.sig"));
+            u => u.Contains("quest-preview-v0.1.0.7/quest-update.json.sig"));
     }
 
     [Fact]
@@ -141,22 +141,22 @@ public class ReleaseClientTests : IDisposable
         // Newest tag is valid. Older tag's manifest is unreachable.
         // The newest should still be returned; the older 404 must
         // not abort processing once the newest succeeds.
-        var newest = ManifestFor("0.1.0.7", 7);
+        var newest = ManifestFor("0.1.0.8", 8);
         _handler.Map("https://api.github.com/repos/samelamin/vibertemis/releases?per_page=100",
-            ReleasesListJson("quest-preview-v0.1.0.7", "quest-preview-v0.1.0.6"));
-        _handler.Map(SignedRelease.Repository + SignedRelease.TagPrefix + "0.1.0.7/quest-update.json", newest);
-        _handler.Map(SignedRelease.Repository + SignedRelease.TagPrefix + "0.1.0.7/quest-update.json.sig", Sign(newest));
-        _handler.Map(SignedRelease.Repository + SignedRelease.TagPrefix + "0.1.0.6/quest-update.json", statusCode: 404);
+            ReleasesListJson("quest-preview-v0.1.0.8", "quest-preview-v0.1.0.7"));
+        _handler.Map(SignedRelease.Repository + SignedRelease.TagPrefix + "0.1.0.8/quest-update.json", newest);
+        _handler.Map(SignedRelease.Repository + SignedRelease.TagPrefix + "0.1.0.8/quest-update.json.sig", Sign(newest));
+        _handler.Map(SignedRelease.Repository + SignedRelease.TagPrefix + "0.1.0.7/quest-update.json", statusCode: 404);
         var result = await _client.CheckAsync(CancellationToken.None, publicKeyOverride: _trustKey);
         Assert.NotNull(result);
-        Assert.Equal("0.1.0.7", result!.Release.Version);
+        Assert.Equal("0.1.0.8", result!.Release.Version);
     }
 
     [Fact]
     public async Task CheckAsync_ReturnsNull_WhenOnlyOlderReleases()
     {
         _handler.Map("https://api.github.com/repos/samelamin/vibertemis/releases?per_page=100",
-            ReleasesListJson("quest-preview-v0.1.0.4", "quest-preview-v0.1.0.6"));
+            ReleasesListJson("quest-preview-v0.1.0.5", "quest-preview-v0.1.0.7"));
         var result = await _client.CheckAsync(CancellationToken.None, publicKeyOverride: _trustKey);
         Assert.Null(result);
         // Nothing newer, so no manifest or signature should have
@@ -168,7 +168,7 @@ public class ReleaseClientTests : IDisposable
     public async Task CheckAsync_RespectsCancellation()
     {
         _handler.Map("https://api.github.com/repos/samelamin/vibertemis/releases?per_page=100",
-            ReleasesListJson("quest-preview-v0.1.0.7"));
+            ReleasesListJson("quest-preview-v0.1.0.8"));
         using var cts = new CancellationTokenSource();
         cts.Cancel();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
@@ -178,13 +178,13 @@ public class ReleaseClientTests : IDisposable
     [Fact]
     public async Task DownloadAsync_DetectsTruncatedDownload()
     {
-        var manifest = ManifestFor("0.1.0.7", 7);
+        var manifest = ManifestFor("0.1.0.8", 8);
         var sig = Sign(manifest);
         _handler.Map("https://api.github.com/repos/samelamin/vibertemis/releases?per_page=100",
-            ReleasesListJson("quest-preview-v0.1.0.7"));
-        _handler.Map(SignedRelease.Repository + SignedRelease.TagPrefix + "0.1.0.7/quest-update.json", manifest);
-        _handler.Map(SignedRelease.Repository + SignedRelease.TagPrefix + "0.1.0.7/quest-update.json.sig", sig);
-        var url = SignedRelease.Repository + SignedRelease.TagPrefix + "0.1.0.7/VibertemisVR-HostManager-Setup-0.1.0.7.exe";
+            ReleasesListJson("quest-preview-v0.1.0.8"));
+        _handler.Map(SignedRelease.Repository + SignedRelease.TagPrefix + "0.1.0.8/quest-update.json", manifest);
+        _handler.Map(SignedRelease.Repository + SignedRelease.TagPrefix + "0.1.0.8/quest-update.json.sig", sig);
+        var url = SignedRelease.Repository + SignedRelease.TagPrefix + "0.1.0.8/VibertemisVR-HostManager-Setup-0.1.0.8.exe";
         _handler.MapTruncated(url, totalBytes: 4L, deliverBytes: 3);
         var release = (await _client.CheckAsync(CancellationToken.None, publicKeyOverride: _trustKey))!.Release;
         var temp = Path.Combine(Path.GetTempPath(), "vibt-release-trunc-" + Guid.NewGuid().ToString("N"));
@@ -201,9 +201,9 @@ public class ReleaseClientTests : IDisposable
     {
         var temp = Path.Combine(Path.GetTempPath(), "vibt-release-fresh-" + Guid.NewGuid().ToString("N"));
         var bytes = new byte[] { 3, 4, 5, 6 };
-        var name = "VibertemisVR-HostManager-Setup-0.1.0.7.exe";
-        var url = new Uri(SignedRelease.Repository + SignedRelease.TagPrefix + "0.1.0.7/" + name);
-        var release = new SignedRelease(7, "0.1.0.7", SignedRelease.Protocol,
+        var name = "VibertemisVR-HostManager-Setup-0.1.0.8.exe";
+        var url = new Uri(SignedRelease.Repository + SignedRelease.TagPrefix + "0.1.0.8/" + name);
+        var release = new SignedRelease(8, "0.1.0.8", SignedRelease.Protocol,
             new ReleaseAsset(name, url, bytes.Length, Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant()));
         _handler.Map(url.ToString(), bytes);
         try {
@@ -222,10 +222,10 @@ public class ReleaseClientTests : IDisposable
         try
         {
             // Lay down a cached file with the correct size and hash.
-            var release = new SignedRelease(7, "0.1.0.7", SignedRelease.Protocol,
+            var release = new SignedRelease(8, "0.1.0.8", SignedRelease.Protocol,
                 new ReleaseAsset(
-                    "VibertemisVR-HostManager-Setup-0.1.0.7.exe",
-                    new Uri(SignedRelease.Repository + SignedRelease.TagPrefix + "0.1.0.7/VibertemisVR-HostManager-Setup-0.1.0.7.exe"),
+                    "VibertemisVR-HostManager-Setup-0.1.0.8.exe",
+                    new Uri(SignedRelease.Repository + SignedRelease.TagPrefix + "0.1.0.8/VibertemisVR-HostManager-Setup-0.1.0.8.exe"),
                     4L,
                     ""));
             var bytes = new byte[] { 1, 2, 3, 4 };
@@ -241,7 +241,7 @@ public class ReleaseClientTests : IDisposable
             // The HTTP handler should not have been hit for the
             // installer at all when the cache is valid.
             Assert.DoesNotContain(_handler.Requests,
-                u => u.Contains("VibertemisVR-HostManager-Setup-0.1.0.7.exe"));
+                u => u.Contains("VibertemisVR-HostManager-Setup-0.1.0.8.exe"));
         }
         finally { try { Directory.Delete(temp, recursive: true); } catch { } }
     }

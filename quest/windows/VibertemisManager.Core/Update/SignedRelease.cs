@@ -6,8 +6,8 @@ namespace VibertemisManager.Core.Update;
 public sealed record ReleaseAsset(string Filename, Uri Url, long Bytes, string Sha256);
 public sealed record SignedRelease(long Sequence, string Version, string NativeProtocol, ReleaseAsset Windows)
 {
-    public const long CurrentSequence = 6;
-    public const string CurrentVersion = "0.1.0.6";
+    public const long CurrentSequence = 7;
+    public const string CurrentVersion = "0.1.0.7";
     public const string Channel = "quest-preview";
     public const string Protocol = "20.14.1-vibertemis-pyro.1";
     public const string Repository = "https://github.com/samelamin/vibertemis/releases/download/";
@@ -25,7 +25,7 @@ public sealed record SignedRelease(long Sequence, string Version, string NativeP
         return reader.ReadToEnd();
     }
 
-    // Parses "0.1.0.6" out of "quest-preview-v0.1.0.6". Returns false for
+    // Parses "0.1.0.7" out of "quest-preview-v0.1.0.7". Returns false for
     // anything that is not a numeric four-component version. Strict enough
     // to reject non-tag inputs and forgiving enough to ignore trailing junk.
     public static bool TryParseTagVersion(string tag, out Version version)
