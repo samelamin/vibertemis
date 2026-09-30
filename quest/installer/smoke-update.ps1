@@ -4,7 +4,7 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 if ($env:CI -ne 'true') { throw 'Update smoke requires a disposable CI runner' }
 $repo = (Resolve-Path "$PSScriptRoot/../..").Path
-$setup = (Get-Item "$repo/build/installer/VibertemisVR-HostManager-Setup-0.1.0.8.exe").FullName
+$setup = (Get-Item "$repo/build/installer/VibertemisVR-HostManager-Setup-0.1.0.9.exe").FullName
 $root = Join-Path $env:RUNNER_TEMP ('VR update ü ' + [Guid]::NewGuid().ToString('N'))
 $dest = "$root/Custom install"
 $state = "$env:LOCALAPPDATA/VibertemisVRHostManager"
@@ -22,9 +22,9 @@ try {
     }
     [IO.File]::WriteAllText("$root/quest/update/public-key.pem", $rsa.ExportSubjectPublicKeyInfoPem())
     $signed = "$root/quest/windows/VibertemisManager.Core/Update/SignedRelease.cs"
-    [IO.File]::WriteAllText($signed, ([IO.File]::ReadAllText($signed).Replace('CurrentSequence = 8','CurrentSequence = 6').Replace('CurrentVersion = "0.1.0.8"','CurrentVersion = "0.1.0.6"')))
+    [IO.File]::WriteAllText($signed, ([IO.File]::ReadAllText($signed).Replace('CurrentSequence = 9','CurrentSequence = 6').Replace('CurrentVersion = "0.1.0.9"','CurrentVersion = "0.1.0.6"')))
     $projectFile = "$root/quest/windows/VibertemisManager.App/VibertemisManager.App.csproj"
-    [IO.File]::WriteAllText($projectFile, ([IO.File]::ReadAllText($projectFile).Replace('0.1.0.8','0.1.0.6')))
+    [IO.File]::WriteAllText($projectFile, ([IO.File]::ReadAllText($projectFile).Replace('0.1.0.9','0.1.0.6')))
     & dotnet publish $projectFile -c Release -r win-x64 --self-contained true -o "$root/fixture"
     if ($LASTEXITCODE -ne 0) { throw 'Fixture publish failed' }
     $install = Start-Process $setup -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/DIR=`"$dest`"","/LOG=`"$repo/build/installer/smoke-update-initial.log`"") -PassThru -Wait
@@ -83,14 +83,14 @@ public static class UpdateSmokeExit {
     $sha = (Get-FileHash $setup -Algorithm SHA256).Hash.ToLowerInvariant()
     $size = (Get-Item $setup).Length
     $manifest = [Text.Encoding]::UTF8.GetBytes((@{
-        schema=1; channel='quest-preview'; sequence=8; version='0.1.0.8'; native_protocol='20.14.1-vibertemis-pyro.1'
-        assets=@{windows=@{filename=$filename;url="https://github.com/samelamin/vibertemis/releases/download/quest-preview-v0.1.0.8/$filename";bytes=$size;sha256=$sha}}
+        schema=1; channel='quest-preview'; sequence=9; version='0.1.0.9'; native_protocol='20.14.1-vibertemis-pyro.1'
+        assets=@{windows=@{filename=$filename;url="https://github.com/samelamin/vibertemis/releases/download/quest-preview-v0.1.0.9/$filename";bytes=$size;sha256=$sha}}
     } | ConvertTo-Json -Depth 8 -Compress))
     $signature = $rsa.SignData($manifest,[Security.Cryptography.HashAlgorithmName]::SHA256,[Security.Cryptography.RSASignaturePadding]::Pkcs1)
     $readyName = "Local\VibertemisUpdateWorker-$id-Ready"
     $commitName = "Local\VibertemisUpdateWorker-$id-Commit"
     $job = @{
-        schema=1;expectedVersion='0.1.0.8';expectedSequence=8;originalManagerPath=$manager;programsRoot=[IO.Path]::GetFullPath($dest);parentPid=$parent.Id
+        schema=1;expectedVersion='0.1.0.9';expectedSequence=9;originalManagerPath=$manager;programsRoot=[IO.Path]::GetFullPath($dest);parentPid=$parent.Id
         cacheDir=$cache;installerFilename=$filename;installerSha256=$sha;installerBytes=$size
         manifestBase64=[Convert]::ToBase64String($manifest);signatureBase64=[Convert]::ToBase64String($signature)
         readyEventName=$readyName;commitEventName=$commitName
@@ -111,7 +111,7 @@ public static class UpdateSmokeExit {
         Get-Content "$state/updates/last-update.json" -ErrorAction SilentlyContinue
         throw "Worker failed: $($worker.ExitCode)"
     }
-    if ([Diagnostics.FileVersionInfo]::GetVersionInfo($manager).FileVersion -ne '0.1.0.8') { throw 'Installed FileVersion unchanged' }
+    if ([Diagnostics.FileVersionInfo]::GetVersionInfo($manager).FileVersion -ne '0.1.0.9') { throw 'Installed FileVersion unchanged' }
     $until = [DateTime]::UtcNow.AddSeconds(45)
     do {
         $reopened = Get-Process -Name VibertemisManager.App -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $manager } | Select-Object -First 1
@@ -120,7 +120,7 @@ public static class UpdateSmokeExit {
     } while ([DateTime]::UtcNow -lt $until)
     if (-not $reopened) { throw 'Updated GUI did not reopen' }
     $outcome = Get-Content "$state/updates/last-update.json.seen" -Raw | ConvertFrom-Json
-    if ($outcome.kind -ne 'Success' -or $outcome.installedFileVersion -ne '0.1.0.8' -or $outcome.installerExitCode -ne 0 -or $outcome.verifyInstallExitCode -ne 0) { throw 'Update outcome did not prove installation' }
+    if ($outcome.kind -ne 'Success' -or $outcome.installedFileVersion -ne '0.1.0.9' -or $outcome.installerExitCode -ne 0 -or $outcome.verifyInstallExitCode -ne 0) { throw 'Update outcome did not prove installation' }
     if ((Get-FileHash "$pairing/state.json").Hash -ne $pairHash -or (Get-FileHash "$dest/runtime/session.json").Hash -ne $vrHash) { throw 'Update changed pairing or VR settings' }
     Copy-Item $outcome.installerLogPath "$repo/build/installer/smoke-update-handoff.log"
     $outcome | ConvertTo-Json | Set-Content "$repo/build/installer/smoke-update-outcome.log"

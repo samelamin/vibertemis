@@ -60,13 +60,15 @@ jobs:
         run: ./quest/installer/smoke-update.ps1
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: vibertemisvr-hostmanager-setup-0.1.0.8
-          path: build/installer/VibertemisVR-HostManager-Setup-0.1.0.8.exe
+          name: vibertemisvr-hostmanager-setup-0.1.0.9
+          path: build/installer/VibertemisVR-HostManager-Setup-0.1.0.9.exe
           if-no-files-found: error
           retention-days: 14
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: always()
         with:
-          name: installer-smoke-logs
-          path: build/installer/smoke-*.log
+          name: installer-smoke-artifacts
+          path: |
+            build/installer/smoke-*.log
+            build/installer/smoke-*.png
           if-no-files-found: ignore

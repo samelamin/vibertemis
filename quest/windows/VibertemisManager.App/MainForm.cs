@@ -65,6 +65,11 @@ public sealed partial class MainForm : Form
     private readonly Button _btnInstallUpdate = new() { Text = "Install update", AutoSize = true, Visible = false, Enabled = false };
     private readonly ProgressBar _updateProgress = new() { Visible = false, Width = 220, Height = 16, Minimum = 0, Maximum = 100, Style = ProgressBarStyle.Continuous };
     private readonly Label _updateProgressLabel = new() { Visible = false, AutoSize = true, Text = "" };
+    // Persistent status line that mirrors the hub badge ladder on
+    // Windows: visible from first render, last-known outcome stays
+    // until a newer state replaces it. "Up to date" only appears
+    // after a successful check.
+    private readonly Label _updateStatusLabel = new() { AutoSize = true, Text = "Update status: not yet checked.", MaximumSize = new Size(650, 0) };
     private UpdateRepository? _updateRepo;
     private ReleaseClient? _updateDownloader;
     private FormObserver? _updateObserver;
@@ -114,6 +119,7 @@ public sealed partial class MainForm : Form
         MinimumSize = new Size(720, 700);
         AutoScaleMode = AutoScaleMode.Dpi;
 
+        InitializeReceivingUx();
         BuildLayout();
         WireEvents();
         _ = Handle; // Create the UI handle even for tray-only ApplicationContext startup.
@@ -132,17 +138,29 @@ public sealed partial class MainForm : Form
 
     private void BuildLayout()
     {
-        var root = new TableLayoutPanel
+        // The root panel lives inside a scrollable host so a small
+        // 720x700 form does not squeeze the approval panel and the
+        // status list. The approval panel itself is bottom-docked
+        // OUTSIDE the scroll area so it stays visible while the
+        // upper rows wrap at DPI scaling.
+        var scrollHost = new Panel
         {
             Dock = DockStyle.Fill,
+            AutoScroll = true,
+            Padding = new Padding(0),
+        };
+        var root = new TableLayoutPanel
+        {
+            Dock = DockStyle.Top,
             ColumnCount = 2,
-            RowCount = 13,
+            RowCount = 15,
             Padding = new Padding(12),
-            AutoSize = false,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
         };
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 200));
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        for (var i = 0; i < 12; i++) root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        for (var i = 0; i < 14; i++) root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
         _lblHeader.Text = "VibertemisVR Host Manager";
@@ -154,7 +172,7 @@ public sealed partial class MainForm : Form
         _cmbAdapter.DropDownStyle = ComboBoxStyle.DropDownList;
         _cmbAdapter.Width = 280;
         _btnRefreshAdapters.Text = "Refresh";
-        var adapterPanel = new FlowLayoutPanel { FlowDirection = FlowDirection.LeftToRight, AutoSize = true };
+        var adapterPanel = new FlowLayoutPanel { FlowDirection = FlowDirection.LeftToRight, AutoSize = true, WrapContents = true };
         adapterPanel.Controls.Add(_cmbAdapter);
         adapterPanel.Controls.Add(_btnRefreshAdapters);
         root.Controls.Add(_lblAdapter, 0, 1);
@@ -195,11 +213,11 @@ public sealed partial class MainForm : Form
         _btnPairHeadset.Text = "Pair headset";
         _btnPairHeadset.Enabled = false;
         root.Controls.Add(new Label { Text = "Headset pairing" }, 0, 7);
-        var pairingButtons = new FlowLayoutPanel { AutoSize = true };
+        var pairingButtons = new FlowLayoutPanel { AutoSize = true, WrapContents = true };
         pairingButtons.Controls.AddRange(new Control[] { _btnPairHeadset, _btnExportPairing });
         root.Controls.Add(pairingButtons, 1, 7);
 
-        _btnSetupNetwork.Text = "Setup VR";
+        _btnSetupNetwork.Text = "Setup VR (enables headset pairing)";
         root.Controls.Add(new Label { Text = "VR setup" }, 0, 8);
         root.Controls.Add(_btnSetupNetwork, 1, 8);
 
@@ -207,13 +225,22 @@ public sealed partial class MainForm : Form
         root.Controls.Add(_chkAutoStart, 0, 9);
         root.SetColumnSpan(_chkAutoStart, 2);
 
-        var readinessHint = new Label { Text = "Choose Setup VR once, then select this paired PC in Vibertemis on Quest. SteamVR starts when you connect for VR. Closing this window keeps the host ready in the tray.", AutoSize = true, MaximumSize = new Size(650, 0) };
+        var readinessHint = new Label { Text = "Choose Setup VR once, then select this PC in Vibertemis on Quest and approve the matching code. SteamVR starts when you connect for VR. Closing this window keeps the host ready in the tray.", AutoSize = true, MaximumSize = new Size(650, 0) };
         var details = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.TopDown, Dock = DockStyle.Fill };
-        var advanced = new CheckBox { Text = "Advanced: network adapter, runtime dashboard and manual pairing", AutoSize = true };
+        var advanced = new ExpanderLikePanel { Text = "Advanced: network adapter, runtime dashboard and manual pairing" };
         details.Controls.Add(readinessHint);
         details.Controls.Add(advanced);
         root.Controls.Add(details, 0, 10);
         root.SetColumnSpan(details, 2);
+        // Host-ready / next-action status lives just above the
+        // update status line so the owner always sees the
+        // receiving posture.
+        var hostRow = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, FlowDirection = FlowDirection.TopDown };
+        hostRow.Controls.Add(_lblHostReady);
+        hostRow.Controls.Add(_lblHostReadyNext);
+        root.Controls.Add(new Label { Text = "Pairing" }, 0, 11);
+        root.Controls.Add(hostRow, 1, 11);
+
         void ShowAdvanced(bool visible) {
             foreach (Control control in root.Controls) {
                 int row = root.GetRow(control);
@@ -221,19 +248,23 @@ public sealed partial class MainForm : Form
             }
             _btnExportPairing.Visible = visible;
         }
-        advanced.CheckedChanged += (_, _) => ShowAdvanced(advanced.Checked);
+        advanced.ExpandedChanged += (_, _) => ShowAdvanced(advanced.Expanded);
         ShowAdvanced(false);
 
-        var progressRow = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, FlowDirection = FlowDirection.LeftToRight };
+        var progressRow = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, FlowDirection = FlowDirection.LeftToRight, WrapContents = true };
         progressRow.Controls.Add(_updateProgress);
         progressRow.Controls.Add(_updateProgressLabel);
-        root.Controls.Add(new Label { Text = "Update download" }, 0, 11);
-        root.Controls.Add(progressRow, 1, 11);
+        root.Controls.Add(new Label { Text = "Update download" }, 0, 12);
+        root.Controls.Add(progressRow, 1, 12);
+        root.Controls.Add(_updateStatusLabel, 0, 13);
+        root.SetColumnSpan(_updateStatusLabel, 2);
 
         _lstStatus.Dock = DockStyle.Fill;
         _lstStatus.HorizontalScrollbar = true;
-        root.Controls.Add(_lstStatus, 0, 12);
+        root.Controls.Add(_lstStatus, 0, 14);
         root.SetColumnSpan(_lstStatus, 2);
+
+        scrollHost.Controls.Add(root);
 
         var footer = new TableLayoutPanel
         {
@@ -247,7 +278,7 @@ public sealed partial class MainForm : Form
         footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         _lblVersion.Text = SignedRelease.CurrentVersion + "-quest-preview";
         _lblVersion.AutoSize = true;
-        var updateActions = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill };
+        var updateActions = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill, WrapContents = true };
         updateActions.Controls.Add(_btnUpdate);
         updateActions.Controls.Add(_btnDownloadUpdate);
         updateActions.Controls.Add(_btnCancelUpdate);
@@ -259,8 +290,13 @@ public sealed partial class MainForm : Form
         _btnInstallUpdate.Click += (_, _) => InstallPendingUpdate();
         footer.Controls.Add(_lblVersion, 1, 0);
 
-        Controls.Add(root);
+        // Order: footer (bottom), approval panel (bottom-docked
+        // ABOVE the footer so the action row + code stay visible
+        // while the scroll area above scrolls if the form is
+        // short).
         Controls.Add(footer);
+        Controls.Add(_panelApproval);
+        Controls.Add(scrollHost);
         foreach (Control c in root.Controls)
         {
             if (c is Label or CheckBox or Button) c.AutoSize = true;
@@ -269,8 +305,14 @@ public sealed partial class MainForm : Form
             c.Margin = new Padding(4, 7, 4, 7);
         }
         foreach (var button in new[] { _btnRefreshAdapters, _btnOpenSteamPage, _btnInstallSteamVr,
-            _btnVcRedistPage, _btnCompanionToggle, _btnOpenDashboard, _btnExportPairing, _btnPairHeadset, _btnSetupNetwork })
+            _btnVcRedistPage, _btnCompanionToggle, _btnOpenDashboard, _btnExportPairing, _btnPairHeadset, _btnSetupNetwork,
+            _btnApprove, _btnReject, _btnPause, _btnResume, _btnTurnOff, _btnForgetAll, _btnPanelClose })
             button.AutoSize = true;
+        // Pin the root panel to the scroll host width so a long
+        // line wraps rather than horizontally scrolling the root.
+        root.MinimumSize = new Size(0, 0);
+        scrollHost.Resize += (_, _) => root.MaximumSize = new Size(scrollHost.ClientSize.Width - SystemInformation.VerticalScrollBarWidth > 0 ? scrollHost.ClientSize.Width - SystemInformation.VerticalScrollBarWidth : scrollHost.ClientSize.Width, 0);
+        root.MaximumSize = new Size(scrollHost.ClientSize.Width - (SystemInformation.VerticalScrollBarWidth > 0 ? SystemInformation.VerticalScrollBarWidth : 0), 0);
     }
 
     private void WireEvents()
@@ -294,11 +336,16 @@ public sealed partial class MainForm : Form
         _btnPairHeadset.Click += async (_, _) => await PairHeadset();
         _btnSetupNetwork.Click += async (_, _) => await PrepareVr();
         _chkAutoStart.CheckedChanged += (_, _) => OnAutoStartToggled();
+        WireReceivingUxEvents();
     }
 
     private void InitialPopulation()
     {
         _settings = _svc.SettingsStore.Load();
+        // The session flag mirrors the persisted flag on load so
+        // the coordinator's first tick observes the right
+        // posture. It is intentionally NOT persisted itself.
+        _settings.ReceivePairingRequestsSession = _settings.ReceivePairingRequests == true;
         _suppressAutoStartEvent = true;
         _chkAutoStart.Checked = StartupPreference.IsEnabled(_settings);
         _suppressAutoStartEvent = false;
@@ -313,6 +360,8 @@ public sealed partial class MainForm : Form
         InitializeUpdateRepository();
         InitializeGuidedSetup();
         RefreshRuntimeStatus();
+        RefreshHostReady();
+        StartReceivingCoordinator();
         if (_settings.AutoStartWithWindows)
         {
             try { _svc.AutoStart.Enable(StartupCommand()); }
@@ -320,6 +369,15 @@ public sealed partial class MainForm : Form
         }
         if (_settings.RestoreCompanionOnStartup) _recovery.RequestStart();
         ReconcileHost();
+        // Explicit startup automatic metadata check. The shared
+        // repository throttles by the persisted 6 h success / 15 min
+        // failure windows; on a fresh app process the throttle is
+        // effectively open (timestamps do not persist across process
+        // boundaries). The timer keeps dispatching this on a 1 s
+        // tick so any user-visible busy window (VR setup, update
+        // handoff, SteamVR runtime busy) suppresses it cleanly via
+        // the same gate.
+        TriggerBackgroundUpdateCheck();
     }
 
     private void SurfacePriorOutcome()
@@ -385,7 +443,11 @@ public sealed partial class MainForm : Form
             return;
         }
         // Explicit Exit (or process shutdown). Stop only the
-        // owned companion child.
+        // owned companion child. Stop the pairing coordinator
+        // BEFORE suspending the companion so it cannot keep
+        // renewing or emit late errors while the companion is
+        // being torn down.
+        StopReceivingCoordinator();
         var result = _recovery.SuspendAndStop();
         if (result.Outcome is CompanionStopOutcome.Denied or CompanionStopOutcome.Timeout)
         {
@@ -393,6 +455,9 @@ public sealed partial class MainForm : Form
             e.Cancel = true;
             _exitRequested = false;
             _recovery.Resume();
+            // The host is still up; restart the coordinator so
+            // the receiving-mode renewal can resume.
+            StartReceivingCoordinator();
             return;
         }
         _statusTimer.Stop();
@@ -487,6 +552,11 @@ public sealed partial class MainForm : Form
         var status = _recovery.Tick(_settings.LastSelectedAdapterId, _settings.LastSelectedAdapterAddress);
         if (_lastRecoveryMessage != status.Message) { _lastRecoveryMessage = status.Message; LogStatus(status.Message); }
         RefreshCompanionStatus();
+        // The recovery controller's running-spec state is one of
+        // the inputs to the receiving snapshot. Re-publish on
+        // every reconcile so a Stop / Start transition is
+        // observed by the coordinator without restarting it.
+        PublishReceivingSnapshot();
     }
 
     private void RefreshRuntimeStatus()
@@ -744,6 +814,10 @@ public sealed partial class MainForm : Form
     {
         try { _svc.SettingsStore.Save(_settings); }
         catch (Exception ex) { LogStatus("Could not save settings: " + ex.Message); }
+        // Republish the snapshot so a persisted setting change
+        // (suppression deadline, receiving flag) is visible to
+        // the coordinator on the next tick.
+        PublishReceivingSnapshot();
     }
 
     private void RememberCompanion(bool enabled)
@@ -770,13 +844,22 @@ public sealed partial class MainForm : Form
         catch (InvalidOperationException) { /* not bound yet */ }
     }
 
-    // Auto-trigger from the status timer. The repository throttles
-    // repeated calls (6 h success, 15 min failure). Errors are absorbed
-    // because a busy background check must not block gaming.
+    // Auto-trigger from the status timer or explicit Activated
+    // handler. The repository throttles repeated calls (6 h
+    // success, 15 min failure). Errors are absorbed because a busy
+    // background check must not block gaming. The auto-trigger is
+    // deferred while the host is busy (VR setup, install handoff,
+    // SteamVR runtime busy); the next 1 s tick picks it up
+    // automatically once the busy state clears.
     private void TriggerBackgroundUpdateCheck()
     {
         if (_updateRepo == null) return;
         if (!IsHandleCreated || Disposing || IsDisposed) return;
+        if (_installHandOffInFlight || _preparingVr || _updateBusy) return;
+        // Defer while SteamVR / ALVR Dashboard are running so the
+        // check does not race an in-progress setup or download.
+        var busy = _svc.BusyChecker.Check();
+        if (busy.IsBusy) return;
         if (_updateRepo.ShouldRunByThrottle(false))
         {
             TriggerUpdateCheck(false);
@@ -831,6 +914,10 @@ public sealed partial class MainForm : Form
         {
             _btnInstallUpdate.Text = "Install update";
         }
+        // Progress / cancellation row mirrors the in-flight check.
+        // The persistent status line below carries the last known
+        // outcome so the user always sees the most recent status
+        // even between checks.
         if (s.Checking)
         {
             _updateProgressLabel.Visible = true;
@@ -840,12 +927,64 @@ public sealed partial class MainForm : Form
         else if (_updateBusy)
         {
             _updateProgress.Visible = true;
+            _updateProgressLabel.Visible = true;
         }
         else
         {
             _updateProgress.Visible = false;
             _updateProgressLabel.Visible = false;
             _updateProgressLabel.Text = "";
+        }
+        RenderUpdateStatusLine(s);
+    }
+
+    // Persistent status ladder mirrors the Android hub badge. The
+    // wording lives in UpdateStatusLineRenderer so the WinForms
+    // label and the tests share a single source of truth; this
+    // method is just the label write-through.
+    private void RenderUpdateStatusLine(UpdateRepository.Snapshot s)
+    {
+        string text = UpdateStatusLineRenderer.Render(s);
+        if (_updateStatusLabel.Text != text) _updateStatusLabel.Text = text;
+        // Tray notice — only when the form is hidden from the user
+        // so a visible window never balloons. HideToTray() (the
+        // X-to-tray gesture) calls Hide() without minimising, so
+        // the guard uses (NOT Visible) OR (Minimized). The
+        // deduper collapses repeated notifications for the same
+        // (bucket, version) tuple; balloon click is routed to
+        // the update UI via OnTrayBalloonClicked.
+        if (_tray is not null && (!Visible || WindowState == FormWindowState.Minimized))
+        {
+            DeduplicatedUpdateTrayNotice.Bucket bucket = default;
+            string version = "";
+            string message = "";
+            if (s.HasDownloaded)
+            {
+                bucket = DeduplicatedUpdateTrayNotice.Bucket.Downloaded;
+                version = s.Downloaded!.Version;
+                message = $"Update {version} is verified and ready. Open VibertemisVR Host Manager to install.";
+            }
+            else if (s.HasAvailable)
+            {
+                bucket = DeduplicatedUpdateTrayNotice.Bucket.Available;
+                version = s.Available!.Version;
+                message = $"Update {version} is available. Open VibertemisVR Host Manager to download.";
+            }
+            else if (!string.IsNullOrEmpty(s.LastError))
+            {
+                bucket = DeduplicatedUpdateTrayNotice.Bucket.Offline;
+                version = SignedRelease.CurrentVersion;
+                message = "Update check failed. Open VibertemisVR Host Manager to retry.";
+            }
+            // Pairing priority: do NOT consume the dedup slot
+            // for an update while a pairing notification is
+            // outstanding. The next eligible attempt (after
+            // pairing resolves) sees the same bucket/version and
+            // surfaces the deferred update.
+            if (version.Length == 0) return;
+            if (PairingNoticePending) return;
+            if (!_updateNotice.TryFire(bucket, version)) return;
+            ShowUpdateTrayBalloon("VibertemisVR Host Manager", message);
         }
     }
 
@@ -993,11 +1132,18 @@ public sealed partial class MainForm : Form
                 return;
             }
 
+            // Stop the pairing coordinator BEFORE orderly companion shutdown
+            // so it cannot keep renewing or emit late errors while
+            // the companion is being torn down.
+            StopReceivingCoordinator();
             // Stop only our own companion.
             var stopped = _recovery.SuspendAndStop();
             if (stopped.Outcome is CompanionStopOutcome.Denied or CompanionStopOutcome.Timeout)
             {
                 _recovery.Resume();
+                // Restart the coordinator so a failed handoff
+                // does not leave the user without renewal.
+                StartReceivingCoordinator();
                 LogStatus("Could not stop the host companion: " + stopped.Error + ". Retry Install update.");
                 return;
             }
@@ -1007,7 +1153,13 @@ public sealed partial class MainForm : Form
         catch (Exception ex)
         {
             LogStatus("Install failed: " + ex.Message);
-            if (!_exitRequested && !IsDisposed && !Disposing) _recovery?.Resume();
+            if (!_exitRequested && !IsDisposed && !Disposing)
+            {
+                _recovery?.Resume();
+                // Failed handoff: restart the coordinator so the
+                // user can keep using receiving / pause / resume.
+                StartReceivingCoordinator();
+            }
         }
     }
 
@@ -1061,7 +1213,15 @@ public sealed partial class MainForm : Form
 
     private void RestoreUiAfterFailedHandoff()
     {
-        if (!_exitRequested && !IsDisposed && !Disposing) _recovery?.Resume();
+        if (!_exitRequested && !IsDisposed && !Disposing)
+        {
+            _recovery?.Resume();
+            // The coordinator was stopped before the handoff so
+            // it could not race the companion shutdown. Restart
+            // it now that the host service is back up so the
+            // user can keep using receiving / pause / resume.
+            StartReceivingCoordinator();
+        }
         _installHandOffInFlight = false;
         if (!IsDisposed && !Disposing)
         {
@@ -1163,7 +1323,9 @@ public sealed partial class MainForm : Form
             _updateRepo?.Shutdown();
             _updateDownloader?.Dispose();
             _statusTimer.Dispose();
+            _expiryTimer.Dispose();
             _wake.Dispose();
+            StopReceivingCoordinator();
             _tray?.Dispose();
         }
         base.Dispose(disposing);
@@ -1318,5 +1480,45 @@ public static class UpdateHandoff
         }
         catch { committed = false; }
         return new UpdateHandoffResult(true, ready, committed, jobPath);
+    }
+}
+
+// Minimal expander-style container used to collapse the
+// secondary management controls (network adapter, dashboard
+// launch, manual export) behind a single disclosure row. This
+// is a tiny purpose-built control because System.Windows.Forms
+// does not ship an Expander; collapsing the secondary rows
+// keeps the approval panel + primary actions visible even when
+// the form is sized near its minimum.
+public sealed class ExpanderLikePanel : UserControl
+{
+    private readonly CheckBox _toggle = new() { Text = "Advanced", AutoSize = true, Checked = false };
+    private readonly FlowLayoutPanel _inner = new() { Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Visible = false, FlowDirection = FlowDirection.TopDown, WrapContents = true };
+    public Panel InnerPanel => _inner;
+    public bool Expanded => _toggle.Checked;
+    public event EventHandler? ExpandedChanged;
+
+    public new string Text
+    {
+        get => _toggle.Text;
+        set => _toggle.Text = value ?? "";
+    }
+
+    public ExpanderLikePanel()
+    {
+        AutoSize = true;
+        AutoSizeMode = AutoSizeMode.GrowAndShrink;
+        var layout = new TableLayoutPanel { Dock = DockStyle.Top, ColumnCount = 1, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink };
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        layout.Controls.Add(_toggle, 0, 0);
+        layout.Controls.Add(_inner, 0, 1);
+        Controls.Add(layout);
+        _toggle.CheckedChanged += (_, _) =>
+        {
+            _inner.Visible = _toggle.Checked;
+            ExpandedChanged?.Invoke(this, EventArgs.Empty);
+        };
     }
 }

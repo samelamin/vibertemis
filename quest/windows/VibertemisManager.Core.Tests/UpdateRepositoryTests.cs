@@ -136,6 +136,108 @@ public class UpdateRepositoryTests : IDisposable
         Assert.True(repo.ShouldRunByThrottle(false));
     }
 
+    /// <summary>
+    /// Tie-resolution regression: when the latest outcome is a
+    /// failure that follows a prior success, the throttle must
+    /// pick the failure branch (15 min) NOT the success branch
+    /// (6 h). Otherwise a forced retry would be blocked by the
+    /// 6 h window after the latest outcome was a failure.
+    /// </summary>
+    [Fact]
+    public void TieTimestampsUseFailureBranchWhenLastErrorSet()
+    {
+        var clock = new TestClock();
+        using var repo = NewRepo(clock, new UpdateRepositoryDiskCache(new DirectoryInfo(_stateRoot)));
+        var t0 = clock.Now;
+        repo.RecordNoNewerAvailable();
+        // 1 min later: a failure. LastFailureAt (t0+1m) >=
+        // LastSuccessAt (t0), so the failure branch wins the
+        // tie resolution.
+        clock.Now = t0.AddMinutes(1);
+        repo.RecordFailure("network unreachable");
+        var snap = repo.Current;
+        Assert.True(snap.LastFailureAt >= snap.LastSuccessAt);
+        Assert.False(string.IsNullOrEmpty(snap.LastError));
+        // Immediately after the failure, no auto-check.
+        Assert.False(repo.ShouldRunByThrottle(false));
+        // 1 min + 14 min: still inside the 15-min failure window.
+        clock.Now = t0.AddMinutes(1).Add(UpdateRepository.FailureInterval).AddMinutes(-1);
+        Assert.False(repo.ShouldRunByThrottle(false));
+        // 1 min + 16 min: past the failure window, the failure
+        // branch unlocks.
+        clock.Now = t0.AddMinutes(1).Add(UpdateRepository.FailureInterval).AddMinutes(1);
+        Assert.True(repo.ShouldRunByThrottle(false));
+    }
+
+    /// <summary>
+    /// True timestamp tie: when RecordNoNewerAvailable advances the
+    /// success timestamp to the same value RecordFailure advanced
+    /// the failure timestamp to, the failure branch must still win.
+    /// Without the tie-failure-wins logic, the throttle would be
+    /// blocked by the 6 h success window even after a failure
+    /// landed on the same tick.
+    /// </summary>
+    [Fact]
+    public void ExactTieTimestampUnlocksAfterFifteenMinutes()
+    {
+        var clock = new TestClock();
+        using var repo = NewRepo(clock, new UpdateRepositoryDiskCache(new DirectoryInfo(_stateRoot)));
+        var t0 = clock.Now;
+        // Advance to a known tick; do an initial success so
+        // LastSuccessAt is set, then a second success followed
+        // immediately by a failure on the same tick.
+        clock.Now = t0.AddMinutes(1);
+        repo.RecordNoNewerAvailable();
+        var sameTick = t0.AddMinutes(2);
+        clock.Now = sameTick;
+        repo.RecordNoNewerAvailable(); // advances success to sameTick
+        repo.RecordFailure("network unreachable"); // advances failure to sameTick
+        var snap = repo.Current;
+        Assert.Equal(snap.LastSuccessAt, snap.LastFailureAt);
+        Assert.False(string.IsNullOrEmpty(snap.LastError));
+        // Past 15 min: failure branch unlocks even though
+        // LastSuccessAt is the same instant.
+        clock.Now = sameTick.Add(UpdateRepository.FailureInterval).AddMinutes(1);
+        Assert.True(repo.ShouldRunByThrottle(false),
+            "exact-tie + failure must unlock after 15 min");
+    }
+
+    /// <summary>
+    /// Explicit force=true must always bypass the throttle window
+    /// for the user-triggered "Check now" button.
+    /// </summary>
+    [Fact]
+    public void ForceBypassRegardlessOfWindow()
+    {
+        var clock = new TestClock();
+        using var repo = NewRepo(clock, new UpdateRepositoryDiskCache(new DirectoryInfo(_stateRoot)));
+        repo.RecordNoNewerAvailable();
+        Assert.True(repo.ShouldRunByThrottle(true));
+        repo.RecordFailure("network unreachable");
+        Assert.True(repo.ShouldRunByThrottle(true));
+    }
+
+    /// <summary>
+    /// A new success AFTER a successful check clears the failure
+    /// branch and the throttle returns to the success interval.
+    /// </summary>
+    [Fact]
+    public void NewSuccessAfterOldFailureUsesSuccessBranch()
+    {
+        var clock = new TestClock();
+        using var repo = NewRepo(clock, new UpdateRepositoryDiskCache(new DirectoryInfo(_stateRoot)));
+        var t0 = clock.Now;
+        clock.Now = t0.AddMinutes(1);
+        repo.RecordFailure("network unreachable");
+        // 1 ms later, a successful check.
+        clock.Now = t0.AddMinutes(1).AddMilliseconds(1);
+        repo.RecordNoNewerAvailable();
+        Assert.False(repo.ShouldRunByThrottle(false));
+        // Past the success window: success branch unlocks.
+        clock.Now = t0.AddMinutes(1).AddMilliseconds(1).Add(UpdateRepository.SuccessInterval).AddMinutes(1);
+        Assert.True(repo.ShouldRunByThrottle(false));
+    }
+
     [Fact]
     public async Task NoNewerAvailableIsSuccess()
     {

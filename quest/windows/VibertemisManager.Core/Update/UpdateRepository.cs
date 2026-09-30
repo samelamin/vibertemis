@@ -253,8 +253,26 @@ public sealed class UpdateRepository : IDisposable
     {
         if (force) return true;
         var now = clock.Now;
-        if (currentSnapshot.LastSuccessAt != DateTime.MinValue && (now - currentSnapshot.LastSuccessAt) < SuccessInterval) return false;
-        if (currentSnapshot.LastFailureAt != DateTime.MinValue && (now - currentSnapshot.LastFailureAt) < FailureInterval && currentSnapshot.LastSuccessAt < currentSnapshot.LastFailureAt) return false;
+        var snap = currentSnapshot;
+        // Failure beats success on a tie. When the latest outcome
+        // was a failure, LastFailureAt equals or exceeds
+        // LastSuccessAt AND LastError is non-null. The failure
+        // branch wins on a tie so a forced retry is not blocked by
+        // the 6-hour success window.
+        bool failureIsLatestOrTie =
+            snap.LastFailureAt >= snap.LastSuccessAt && !string.IsNullOrEmpty(snap.LastError);
+        if (failureIsLatestOrTie)
+        {
+            return (now - snap.LastFailureAt) >= FailureInterval;
+        }
+        if (snap.LastSuccessAt != DateTime.MinValue)
+        {
+            return (now - snap.LastSuccessAt) >= SuccessInterval;
+        }
+        if (snap.LastFailureAt != DateTime.MinValue)
+        {
+            return (now - snap.LastFailureAt) >= FailureInterval;
+        }
         return true;
     }
 

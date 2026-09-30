@@ -13,6 +13,7 @@
 using System;
 using System.IO;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using VibertemisManager.Core.Paths;
 using VibertemisManager.Core.Platform.Abstractions;
 
@@ -33,6 +34,34 @@ public sealed class UserSettings
     // file so older settings JSON round-trips cleanly.
     public bool? KeepHostReadyAfterSignIn { get; set; }
     public bool? StartupPreferencePersisted { get; set; }
+
+    // Receiving-mode opt-in (PERSISTED). Default false so a fresh
+    // manager starts CLOSED on the Go companion's enrollment
+    // service. The Setup VR / Pair headset action enables and
+    // persists this preference; explicit "Turn off" disables it
+    // and clears the persisted flag. Optional bool so older
+    // settings JSON round-trips cleanly.
+    public bool? ReceivePairingRequests { get; set; }
+
+    // In-memory session flag. The tray coordinator toggles this
+    // when the user turns the mode on / off for this session
+    // without touching disk. It is intentionally NOT serialized:
+    // a) the persisted ReceivePairingRequests is the source of
+    //    truth across launches; b) leaking a stale session flag
+    //    into disk would resurrect a receiving lease the user
+    //    thought they had turned off; c) the session flag has
+    //    no meaning outside the running process.
+    [JsonIgnore]
+    public bool ReceivePairingRequestsSession { get; set; }
+
+    // Persisted Suppress1h wall-clock deadline. The coordinator
+    // POSTs /suppress with this exact value on its rising-edge
+    // detection; the value is the canonical owner-controlled
+    // deadline and is NOT recomputed on retry (a failing POST
+    // retries with the SAME value so the cooldown cannot be
+    // extended by repeated transient failures). Nullable so a
+    // missing field round-trips to "not suppressed".
+    public DateTime? SuppressPairingUntilUtc { get; set; }
 }
 
 public interface ISettingsStore

@@ -57,7 +57,13 @@ public sealed partial class MainForm
             RememberCompanion(true);
             _recovery.RequestStart();
             ReconcileHost();
-            LogStatus("PC setup complete. Choose Pair headset here, then Setup VR on Quest. Compare the code and approve once. SteamVR starts when you connect for VR.");
+            // The Setup VR action is the visible consent gesture
+            // for the seamless receiving mode. Enable it after
+            // the companion is confirmed live so the coordinator
+            // starts renewing immediately.
+            EnableReceivingFromSuccess();
+            RefreshHostReady();
+            LogStatus("PC setup complete. Put on your Quest, choose Setup VR, and select this PC. Compare the code and approve once. SteamVR starts when you connect for VR.");
         }
         catch (Exception ex) { if (!IsDisposed) LogStatus("VR setup needs attention: " + ex.Message); }
         finally

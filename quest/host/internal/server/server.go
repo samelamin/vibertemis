@@ -449,7 +449,7 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(CapabilitiesResponse{
-		Version: "0.1.0.8", Sequence: 8, NativeProtocol: alvr.NativeVersion,
+		Version: "0.1.0.9", Sequence: 9, NativeProtocol: alvr.NativeVersion,
 		Codecs:          res.Codecs,
 		PyroWave:        res.PyroWave,
 		PyroWaveReason:  res.PyroWaveReason,
