@@ -18,7 +18,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/vibertemis/quest-codec-control/host/internal/state"
+	"io"
+	"net"
 	"net/http"
+	"time"
 
 	"github.com/vibertemis/quest-codec-control/host/internal/bridge"
 )
@@ -33,6 +37,7 @@ const DeviceHeader = "X-Vq-Device"
 type RedeemHandler struct {
 	Service *bridge.Service
 	Persist bridge.Persist
+	limiter *state.RateLimiterFactory
 }
 
 // RegisterRedeem attaches the redeem endpoint to an
@@ -42,6 +47,7 @@ func RegisterRedeem(mux *http.ServeMux, h *RedeemHandler) {
 	if h == nil || h.Service == nil {
 		return
 	}
+	h.limiter = state.NewRateLimiterFactory(20, time.Minute, 1024, time.Now)
 	mux.HandleFunc("/pairing/redeem", h.handleRedeem)
 }
 
@@ -50,8 +56,16 @@ func (h *RedeemHandler) handleRedeem(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	if h.limiter == nil || !h.limiter.Allow(host) {
+		writeJSONErr(w, http.StatusTooManyRequests, "Too many pairing attempts. Retry in a minute.")
+		return
+	}
 	r.Body = http.MaxBytesReader(w, r.Body, bridge.MaxBodyBytes)
-	body, err := readAll(r.Body)
+	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		writeJSONErr(w, http.StatusBadRequest, "body too large or unreadable: "+err.Error())
 		return
@@ -89,27 +103,6 @@ func (h *RedeemHandler) handleRedeem(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
-}
-
-// readAll is a small wrapper for the bounded body read.
-func readAll(r interface {
-	Read(p []byte) (n int, err error)
-}) ([]byte, error) {
-	buf := make([]byte, 0, 256)
-	tmp := make([]byte, 4096)
-	for {
-		n, err := r.Read(tmp)
-		if n > 0 {
-			buf = append(buf, tmp[:n]...)
-		}
-		if err != nil {
-			if err.Error() == "EOF" {
-				break
-			}
-			return nil, err
-		}
-	}
-	return buf, nil
 }
 
 func writeJSONErr(w http.ResponseWriter, status int, msg string) {

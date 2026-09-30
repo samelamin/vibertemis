@@ -13,6 +13,7 @@ public sealed partial class MainForm
         if (_preparingVr || _updateBusy || _installHandOffInFlight) return;
         _preparingVr = true;
         _btnSetupNetwork.Enabled = false;
+        _btnSetupNetwork.Text = "Setting up VR…";
         _cmbAdapter.Enabled = false;
         _chkAutoStart.Enabled = false;
         _btnUpdate.Enabled = false;
@@ -32,6 +33,9 @@ public sealed partial class MainForm
             }
             RequireIdle();
             if (!await RunGuidedSetupAsync()) return;
+            RefreshSteamStatus(); RefreshSteamVrStatus();
+            if (!_svc.Steam.Locate().Installed || !_svc.SteamVr.Discover().SteamVrReady)
+                throw new InvalidOperationException("Install Steam and finish SteamVR setup using the buttons above, then retry Setup VR.");
             RequireIdle();
             var setup = new VrSetup(_svc.Paths.ProgramsRoot,
                 Path.Combine(_svc.Paths.LocalAppData, "openvr", "openvrpaths.vrpath"), RequireIdle, VerifyPayload);
@@ -62,6 +66,7 @@ public sealed partial class MainForm
             _preparingVr = false;
             if (!IsDisposed) {
                 _btnSetupNetwork.Enabled = true;
+                _btnSetupNetwork.Text = "Setup VR";
                 _cmbAdapter.Enabled = true;
                 _chkAutoStart.Enabled = true;
                 _btnUpdate.Enabled = !_updateBusy;

@@ -1131,10 +1131,12 @@ public sealed partial class MainForm : Form
 
     private void LogStatus(string line)
     {
+        if (IsDisposed || Disposing || !IsHandleCreated) return;
         var stamped = DateTime.Now.ToString("HH:mm:ss") + "  " + line;
         if (InvokeRequired)
         {
-            BeginInvoke(new Action(() => _lstStatus.Items.Add(stamped)));
+            try { BeginInvoke(new Action(() => { if (!IsDisposed && !Disposing) LogStatus(line); })); }
+            catch (InvalidOperationException) { }
             return;
         }
         _lstStatus.Items.Add(stamped);

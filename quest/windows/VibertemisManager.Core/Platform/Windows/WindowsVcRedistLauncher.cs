@@ -53,11 +53,13 @@ public sealed class WindowsVcRedistLauncher : IVcRedistLauncher
     private readonly Func<string> _logFilePath;
     private readonly object _gate = new();
     private Process? _inFlight;
+    private readonly IntPtr _ownerWindow;
     private int _exitCode;
 
-    public WindowsVcRedistLauncher(Func<string>? logFilePath = null)
+    public WindowsVcRedistLauncher(Func<string>? logFilePath = null, IntPtr ownerWindow = default)
     {
         _logFilePath = logFilePath ?? DefaultLogPath;
+        _ownerWindow = ownerWindow;
     }
 
     public TimeSpan Wait { get; set; } = TimeSpan.FromMinutes(10);
@@ -100,7 +102,8 @@ public sealed class WindowsVcRedistLauncher : IVcRedistLauncher
                 FileName = package.AbsolutePath,
                 UseShellExecute = true,
                 Verb = "runas", // standard UAC elevation
-                CreateNoWindow = true,
+                ErrorDialog = true,
+                ErrorDialogParentHandle = _ownerWindow,
             };
             psi.ArgumentList.Add("/install");
             psi.ArgumentList.Add("/passive");

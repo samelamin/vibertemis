@@ -220,7 +220,9 @@ public sealed class WindowsBridgeScmProbe : IBridgeScmProbe
                         return ScmQueryResult.Unknown("Could not parse SCM ImagePath: " + imagePath);
                     var serviceExe = first.Trim('"');
                     var serviceDir = System.IO.Path.GetDirectoryName(serviceExe) ?? "";
-                    var candidate = System.IO.Path.GetFullPath(System.IO.Path.Combine(serviceDir, "..", sunshineExeBasename));
+                    var candidate = string.Equals(System.IO.Path.GetFileName(serviceExe), sunshineExeBasename, StringComparison.OrdinalIgnoreCase)
+                        ? System.IO.Path.GetFullPath(serviceExe)
+                        : System.IO.Path.GetFullPath(System.IO.Path.Combine(serviceDir, "..", sunshineExeBasename));
                     if (!System.IO.File.Exists(candidate))
                         return ScmQueryResult.NotInstalled("sunshine.exe not present at " + candidate);
                     return ScmQueryResult.Resolved(candidate, "sunshine.exe resolved at " + candidate);
@@ -331,7 +333,12 @@ public sealed class WindowsBridgeKeyWriter : IBridgeKeyWriter
         {
             using var baseKey = Microsoft.Win32.RegistryKey.OpenBaseKey(
                 Microsoft.Win32.RegistryHive.LocalMachine, Microsoft.Win32.RegistryView.Registry64);
-            key = baseKey.CreateSubKey(subKey, Microsoft.Win32.RegistryKeyPermissionCheck.Default);
+            using (var created = baseKey.CreateSubKey(subKey, Microsoft.Win32.RegistryKeyPermissionCheck.Default)) {
+                if (created is null) return BridgeWriteOutcome.AccessDenied;
+            }
+            key = baseKey.OpenSubKey(subKey,
+                System.Security.AccessControl.RegistryRights.ReadKey | System.Security.AccessControl.RegistryRights.WriteKey |
+                System.Security.AccessControl.RegistryRights.ChangePermissions | System.Security.AccessControl.RegistryRights.TakeOwnership);
             if (key is null) return BridgeWriteOutcome.AccessDenied;
             // Fail closed: registration is a trust anchor, never an ordinary
             // user-writable key. Replace inherited or stale permissions.

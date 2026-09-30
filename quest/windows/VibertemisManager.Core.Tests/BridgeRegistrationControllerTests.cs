@@ -98,7 +98,7 @@ public class BridgeRegistrationControllerTests
     }
 
     [Fact]
-    public void HandleRegistration_RollsBack_WhenWriteFails()
+    public void HandleRegistration_RestoresExisting_WhenWriteFails()
     {
         var probe = new FakeProcessProbe();
         probe.Map[1234] = new CallerIdentity(1234, CanonicalManager, 1, "S-1");
@@ -114,11 +114,14 @@ public class BridgeRegistrationControllerTests
         controller.SetActiveSessionId(1);
         var result = controller.HandleRegistration(1234);
         Assert.Equal(BridgeWriteOutcome.AccessDenied, result.Outcome);
-        Assert.Equal(1, writer.RollbackCalls);
+        Assert.Equal(0, writer.RollbackCalls);
+        Assert.Equal(2, writer.WriteCalls);
+        Assert.Equal(CanonicalCompanion, writer.LastCompanion);
+        Assert.Equal(SunshinePath, writer.LastSunshine);
     }
 
     [Fact]
-    public void HandleRegistration_DoesNotRollback_WhenNothingWasRegistered()
+    public void HandleRegistration_ClearsPartialWrite_WhenNothingWasRegistered()
     {
         var probe = new FakeProcessProbe();
         probe.Map[1234] = new CallerIdentity(1234, CanonicalManager, 1, "S-1");
@@ -133,7 +136,7 @@ public class BridgeRegistrationControllerTests
         controller.SetActiveSessionId(1);
         var result = controller.HandleRegistration(1234);
         Assert.Equal(BridgeWriteOutcome.AccessDenied, result.Outcome);
-        Assert.Equal(0, writer.RollbackCalls);
+        Assert.Equal(1, writer.RollbackCalls);
     }
 
     [Fact]

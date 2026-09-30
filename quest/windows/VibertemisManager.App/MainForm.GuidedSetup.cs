@@ -17,7 +17,7 @@ public sealed partial class MainForm
         var bridge = new WindowsBridgeAdapter(_svc.Paths.ProgramsRoot);
         _guidedSetup = new GuidedSetupController(_runtimeDetector, bridge, _svc.SettingsStore,
             new NoConnectivitySignal(), SafeCurrentUserSid, WindowsBridgeActiveSession.Read);
-        _redistInstaller = new VcRedistInstaller(new WindowsVcRedistLauncher(), _runtimeDetector,
+        _redistInstaller = new VcRedistInstaller(new WindowsVcRedistLauncher(ownerWindow: Handle), _runtimeDetector,
             _ => new WindowsVcRedistInspector());
         _guidedRunner = new GuidedSetupRunner(_guidedSetup.Detect, InstallRuntime, () => {
             if (string.IsNullOrEmpty(bridge.ResolveSunshinePath()))
@@ -25,6 +25,7 @@ public sealed partial class MainForm
             var helper = Path.Combine(_svc.Paths.ProgramsRoot, "manager", "VibertemisNetworkHelper.exe");
             if (!_svc.IntegrityVerifier.Verify(helper, out _))
                 return new(false, "Setup helper failed verification. Reinstall this package.");
+            LogStatus("Approve the Windows prompt to enable pairing with Vibeshine.");
             var result = WindowsBridgeRegistration.Register(Environment.ProcessId, _svc.UacHelper);
             return new(result.Launched && result.Completed && result.ExitCode == 0,
                 result.ExitCode == 0 ? "Host pairing enabled." : "Host pairing setup needs attention: " + result.Error);
@@ -46,6 +47,7 @@ public sealed partial class MainForm
         var file = Path.Combine(_svc.Paths.ProgramsRoot, "manager", "prerequisites", "vc_redist.x64.exe");
         if (_redistInstaller is null || !_svc.IntegrityVerifier.TryGetHash(file, out var expected) || expected is null)
             return new(false, "Windows runtime package is missing. Reinstall this package.");
+        LogStatus("Installing the Windows runtime. Approve the Windows prompt; setup will continue when the installer finishes.");
         var result = _redistInstaller.EnsureInstalled(file, expected.Hex, expected.Size,
             VcRuntimeRequirements.MinimumX64Runtime, VcRuntimeRequirements.MinimumX64Runtime);
         return new(result.Exit is VcRedistExit.AlreadyInstalled or VcRedistExit.Success, result.Detail);
