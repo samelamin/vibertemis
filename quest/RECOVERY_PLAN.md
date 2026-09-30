@@ -64,7 +64,9 @@ identity-file concerns do not apply. Exact owned listener address is asserted.
   registry entry, killed-child recovery, Stop suppression, new manager launch
   with saved state, unchanged pairing, and absence of SteamVR startup. Existing
   install/reinstall/tamper/busy refusal/uninstall retention checks remain.
-- Final Agy implementation review and Windows CI must pass before publishing.
+- Final Agy Gemini 3.1 Pro (High) implementation review: APPROVE, no P0/P1.
+  Remaining observations: up to one-second tray wake delay and deliberate
+  reselection if a physical NIC is replaced. Windows CI still gates publication.
 
 ## Owner end-to-end test (Quest 3 / Windows 11 / RTX 4090)
 

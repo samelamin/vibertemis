@@ -130,8 +130,8 @@ starting SteamVR on the PC yourself.
   pairing and settings. Active VR sessions block updates and uninstall.
 - Quest: **App updates** in the idle hub. Download, then **Install update**.
   Allow installs from Vibertemis if Android asks, and confirm the Android
-  installer. The first preview4 APK still needs sideloading; preview3 has no
-  in-app updater. Later signed previews can update through this screen.
+  installer. Preview4 and later update through this screen. Preview3 needs
+  one manual sideload to gain the updater.
 - Both clients verify signed release metadata and downloaded bytes. Quest
   additionally requires the existing app signer and a newer package version.
   Checks target Quest previews, independently of desktop releases.

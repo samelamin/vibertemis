@@ -78,6 +78,12 @@ try {
     Wait-Listening
     $identity = "$pairingDir/state.json"
     $identityHash = (Get-FileHash $identity).Hash
+    # Wake the existing tray instance, as opening its Start-menu shortcut does.
+    # This also creates child HWNDs before cross-process control inspection.
+    $wake = Start-Process $Manager -PassThru
+    if (-not $wake.WaitForExit(15000)) { throw 'Second instance did not signal existing manager' }
+    if ($wake.ExitCode -ne 0) { throw 'Second instance failed' }
+    $wake.Dispose()
     # Production startup checkbox must register the exact installed executable.
     $readyLabel = 'Keep host ready after Windows sign-in'
     Wait-Until { [RecoverySmokeUi]::Find($script:managerProcess.Id,$readyLabel) -ne [IntPtr]::Zero } 'automatic hosting control'
