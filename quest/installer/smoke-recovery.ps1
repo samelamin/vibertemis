@@ -11,6 +11,8 @@ using System.Runtime.InteropServices;
 public static class RecoverySmokeUi {
  public delegate bool EnumProc(IntPtr h, IntPtr l);
  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+ [DllImport("user32.dll")] public static extern bool IsWindowEnabled(IntPtr h);
+ [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h, uint msg, IntPtr w, IntPtr l);
  [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc p, IntPtr l);
  [DllImport("user32.dll")] public static extern bool EnumChildWindows(IntPtr parent, EnumProc p, IntPtr l);
  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
@@ -93,6 +95,24 @@ try {
     Wait-Until { [RecoverySmokeUi]::Visible($script:managerProcess.Id) } 'tray wake visibility'
     Start-Sleep -Seconds 2
     if (-not [RecoverySmokeUi]::Visible($script:managerProcess.Id)) { throw 'Tray wake immediately hid the manager again' }
+    # Pairing is a primary action, not hidden behind Advanced. Opening it uses
+    # the production local TLS/HMAC client against the installed companion.
+    $pair = [RecoverySmokeUi]::Find($script:managerProcess.Id,'Pair headset')
+    if ($pair -eq [IntPtr]::Zero -or -not [RecoverySmokeUi]::IsWindowVisible($pair)) { throw 'Pair headset is not visible by default' }
+    $export = [RecoverySmokeUi]::Find($script:managerProcess.Id,'Export pairing file')
+    if ($export -ne [IntPtr]::Zero -and [RecoverySmokeUi]::IsWindowVisible($export)) { throw 'Manual export should stay under Advanced' }
+    if (-not [RecoverySmokeUi]::PostMessage($pair,0xF5,[IntPtr]::Zero,[IntPtr]::Zero)) { throw 'Could not open Pair headset' }
+    $approveLabel = 'Codes match — approve'
+    Wait-Until {
+        $approve = [RecoverySmokeUi]::Find($script:managerProcess.Id,$approveLabel)
+        return $approve -ne [IntPtr]::Zero -and [RecoverySmokeUi]::IsWindowVisible($approve)
+    } 'headset approval prompt'
+    if ([RecoverySmokeUi]::IsWindowEnabled([RecoverySmokeUi]::Find($script:managerProcess.Id,$approveLabel))) { throw 'Approval enabled before a headset request' }
+    Wait-Until { [RecoverySmokeUi]::Find($script:managerProcess.Id,'Ready for a request. Pairing closes automatically after two minutes.') -ne [IntPtr]::Zero } 'actual pairing window opened'
+    $close = [RecoverySmokeUi]::Find($script:managerProcess.Id,'Close')
+    if ($close -eq [IntPtr]::Zero -or -not [RecoverySmokeUi]::PostMessage($close,0xF5,[IntPtr]::Zero,[IntPtr]::Zero)) { throw 'Could not close Pair headset' }
+    Wait-Until { [RecoverySmokeUi]::Find($script:managerProcess.Id,$approveLabel) -eq [IntPtr]::Zero } 'pairing prompt closed'
+    if (Get-Process -Name vrserver,vrmonitor,vrcompositor -ErrorAction SilentlyContinue) { throw 'Pairing unexpectedly started SteamVR' }
     # Production startup checkbox must register the exact installed executable.
     $readyLabel = 'Keep host ready after Windows sign-in'
     Wait-Until { [RecoverySmokeUi]::Find($script:managerProcess.Id,$readyLabel) -ne [IntPtr]::Zero } 'automatic hosting control'
