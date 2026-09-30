@@ -501,7 +501,7 @@ public class MainHubActivity extends Activity {
         new android.app.AlertDialog.Builder(this).setTitle("Advanced VR pairing")
             .setMessage("Use a pairing file for an older host, or open VR manually if the PC is already prepared.")
             .setPositiveButton("Import pairing file", (d,w) -> {
-                if(resumed && !connectPending && !launchPending) startActivity(new Intent(this,PcvrSettingsActivity.class));
+                if(resumed && !connectPending && !launchPending) startActivity(new Intent(this,PcvrSettingsActivity.class).putExtra(PcvrSettingsActivity.EXTRA_MANUAL_PAIRING, true));
             })
             .setNeutralButton("Manual VR", (d,w) -> {
                 if(!resumed || connectPending || launchPending || !VrCapabilities.isHeadset(this) || !hasMicPermission()) return;

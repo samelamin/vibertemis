@@ -13,6 +13,7 @@ import java.util.concurrent.Executors;
 
 /** Small native panel: pairing first, codec choices second; advanced host tuning stays in ALVR. */
 public final class PcvrSettingsActivity extends Activity {
+  public static final String EXTRA_MANUAL_PAIRING = "manual_pairing";
   private static final int IMPORT = 604;
   private final ExecutorService worker = Executors.newSingleThreadExecutor();
   private TextView status;
@@ -46,10 +47,22 @@ public final class PcvrSettingsActivity extends Activity {
     setContentView(root);
     label("PCVR connection", 24);
     label(
-        "One-time setup: on Windows choose Prepare VR, then Export pairing in VibertemisVR Host Manager. Import that file here. Vibeshine screen pairing is separate. After setup, Connect starts SteamVR automatically from this headset.",
+        "Choose Setup VR in the Windows Host Manager once. Then use Setup VR on this app’s home screen to select your already-paired Vibeshine PC. No pairing file needed. Connect starts SteamVR for this headset.",
         16);
     status = label("Checking pairing…", 16);
-    body.addView(
+    LinearLayout manualPairing = new LinearLayout(this);
+    manualPairing.setOrientation(LinearLayout.VERTICAL);
+    boolean showManual = getIntent().getBooleanExtra(EXTRA_MANUAL_PAIRING, false);
+    manualPairing.setVisibility(showManual ? android.view.View.VISIBLE : android.view.View.GONE);
+    Button advanced = button(showManual ? "Hide manual pairing" : "Advanced: manual pairing", () -> {});
+    advanced.setOnClickListener(v -> {
+      boolean visible = manualPairing.getVisibility() != android.view.View.VISIBLE;
+      manualPairing.setVisibility(visible ? android.view.View.VISIBLE : android.view.View.GONE);
+      advanced.setText(visible ? "Hide manual pairing" : "Advanced: manual pairing");
+    });
+    body.addView(advanced);
+    body.addView(manualPairing);
+    manualPairing.addView(
         button(
             "Import pairing file",
             () -> {
@@ -63,7 +76,7 @@ public final class PcvrSettingsActivity extends Activity {
                 message("File picker unavailable. Use Paste pairing instead.");
               }
             }));
-    body.addView(button("Paste pairing", this::paste));
+    manualPairing.addView(button("Paste pairing", this::paste));
     forgetButton =
         button(
             "Forget paired PC",
@@ -89,7 +102,7 @@ public final class PcvrSettingsActivity extends Activity {
                                   }
                                 }))
                     .show());
-    body.addView(forgetButton);
+    manualPairing.addView(forgetButton);
     String lastCodec = PcvrHistory.lastDecoded(this);
     if (lastCodec != null) label("Last decoded codec: " + lastCodec, 16);
     label("Streaming mode", 20);
@@ -193,10 +206,10 @@ public final class PcvrSettingsActivity extends Activity {
       HostPairing pairing = store.load();
       text =
           pairing == null
-              ? "VR host not paired yet. Import the Windows VR manager's pairing file."
+              ? "VR not paired yet. Return to the home screen and choose Setup VR."
               : "Paired PC: " + pairing.address;
     } catch (Exception e) {
-      text = "Pairing unavailable. Import a fresh pairing file from your PC.";
+      text = "Pairing unavailable. Return to Setup VR to pair again, or use Advanced for a manual pairing file.";
     }
     final String value = text;
     runOnUiThread(
