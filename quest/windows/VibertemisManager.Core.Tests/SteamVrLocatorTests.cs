@@ -108,7 +108,7 @@ public class SteamVrLocatorTests
         var localAppData = "/tmp/x";
         var runtime = Path.Combine(localAppData, "SteamVR");
         var vrpath = Path.Combine(localAppData, "openvr", "openvrpaths.vrpath");
-        fs.Files[vrpath] = "{\"runtime\":[\"" + runtime + "\"]}";
+        fs.Files[vrpath] = System.Text.Json.JsonSerializer.Serialize(new { runtime = new[] { runtime } });
         // Deliberately do NOT create vrserver.exe / vrstartup.exe
         var locator = new VrpathSteamVrLocator(Fixed(localAppData), fs, new FakeSteamLocator(null));
         var discovery = locator.Discover();
@@ -128,7 +128,7 @@ public class SteamVrLocatorTests
         var localAppData = "/tmp/x";
         var runtime = Path.Combine(localAppData, "SteamVR");
         var win64 = Path.Combine(runtime, "bin", "win64");
-        fs.Files[Path.Combine(localAppData, "openvr", "openvrpaths.vrpath")] = "{\"runtime\":[\"" + runtime + "\"]}";
+        fs.Files[Path.Combine(localAppData, "openvr", "openvrpaths.vrpath")] = System.Text.Json.JsonSerializer.Serialize(new { runtime = new[] { runtime } });
         fs.Files[Path.Combine(win64, "vrserver.exe")] = "";
         fs.Files[Path.Combine(win64, "vrstartup.exe")] = "";
         var locator = new VrpathSteamVrLocator(Fixed(localAppData), fs, new FakeSteamLocator(null));
@@ -283,8 +283,13 @@ public class SteamVrLocatorTests
 /// </summary>
 internal sealed class SteamVrTestFileSystem : IFileSystemAccess
 {
-    public Dictionary<string, string> Files { get; } = new();
-    public Dictionary<string, bool> DirectoryExistsResponses { get; } = new();
+    private sealed class WindowsPaths : IEqualityComparer<string> {
+        private static string Normalize(string path) => path.Replace('\\', '/');
+        public bool Equals(string? a,string? b) => a is null || b is null ? a==b : StringComparer.OrdinalIgnoreCase.Equals(Normalize(a),Normalize(b));
+        public int GetHashCode(string path) => StringComparer.OrdinalIgnoreCase.GetHashCode(Normalize(path));
+    }
+    public Dictionary<string, string> Files { get; } = new(new WindowsPaths());
+    public Dictionary<string, bool> DirectoryExistsResponses { get; } = new(new WindowsPaths());
     public bool FileExists(string path) => Files.ContainsKey(path);
     public string ReadAllText(string path) => Files[path];
     public bool DirectoryExists(string path)

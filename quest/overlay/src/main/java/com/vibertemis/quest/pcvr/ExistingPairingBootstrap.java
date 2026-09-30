@@ -37,7 +37,6 @@ public final class ExistingPairingBootstrap {
         LinkedHashSet<ComputerDetails.AddressTuple> addresses = new LinkedHashSet<>();
         addresses.add(pc.activeAddress); addresses.add(pc.manualAddress); addresses.add(pc.localAddress);
         addresses.add(pc.remoteAddress); addresses.add(pc.ipv6Address); addresses.remove(null);
-        Exception last = null;
         for (ComputerDetails.AddressTuple address : addresses) {
             if (cancelled) throw new IOException("Cancelled");
             URL base;
@@ -50,7 +49,7 @@ public final class ExistingPairingBootstrap {
                 if (!caps.getBoolean("bridge_ready"))
                     throw new SetupFailure("On the PC, open VibertemisVR Host Manager and choose Setup VR. Then retry here.");
             } catch (SetupFailure e) { throw e; }
-            catch (Exception e) { last = e; continue; }
+            catch (Exception e) { continue; }
             byte[] nonceBytes = new byte[32]; new SecureRandom().nextBytes(nonceBytes);
             String nonce = HostPairing.hex(nonceBytes);
             JSONObject grant = request(new URL(base, "/api/vr/bootstrap"), hostPin, keys,
@@ -68,7 +67,8 @@ public final class ExistingPairingBootstrap {
                 result = request(companion, companionPin, null,
                     new JSONObject().put("schema",1).put("grant",grant.getString("grant"))
                         .put("client_nonce",nonce).put("signature",encoded));
-            } catch (Exception e) {
+            } catch (SetupFailure e) { throw e; }
+            catch (Exception e) {
                 if (cancelled) throw new IOException("Cancelled");
                 throw new SetupFailure("Could not reach the VR host. Use your home network or a VPN to home; GameStream port forwarding alone does not carry VR.");
             }
@@ -134,8 +134,8 @@ public final class ExistingPairingBootstrap {
             c.setRequestMethod(body==null?"GET":"POST");
             if(body!=null){byte[] bytes=body.toString().getBytes(StandardCharsets.UTF_8);c.setDoOutput(true);c.setFixedLengthStreamingMode(bytes.length);c.setRequestProperty("Content-Type","application/json");try(java.io.OutputStream out=c.getOutputStream()){out.write(bytes);}}
             int status=c.getResponseCode();
-            if(status==404)throw new SetupFailure("Update Vibeshine on the PC to enable automatic VR pairing.");
-            if(status==401||status==403)throw new SetupFailure("The PC no longer trusts this app. Pair it again for screen gaming, then retry Setup VR.");
+            if(status==404)throw new SetupFailure(keys==null ? "Update the Windows VR Host Manager, then retry Setup VR." : "Update Vibeshine on the PC to enable automatic VR pairing.");
+            if(status==401||status==403)throw new SetupFailure(keys==null ? "The pairing attempt expired or changed. Retry Setup VR." : "The PC no longer trusts this app. Pair it again for screen gaming, then retry Setup VR.");
             if(status!=200)throw new SetupFailure("PC setup is not ready. Open Setup VR in the Windows VR Host Manager and retry.");
             try(InputStream in=c.getInputStream();ByteArrayOutputStream out=new ByteArrayOutputStream()){
                 byte[] buffer=new byte[2048];int n;
