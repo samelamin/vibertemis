@@ -70,7 +70,8 @@ blocker conflicts with the actual conditional branch and cross-process evidence:
 absence of X-Vq-Device uses the owner token; only present malformed headers fail.
 Agy explicitly withdrew that finding after source and runtime evidence, and
 approved the authentication flow. The shared HMAC/replay validator is retained,
-not duplicated.
+not duplicated. Agy also approved automatic PC prompt closure with bounded
+retention of the encrypted approved result.
 
 Tests cover closed/expired/rejected windows, identity/signature binding,
 failed persistence, approval/cancellation races, restart, revocation, LAN admin

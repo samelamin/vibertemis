@@ -2,8 +2,9 @@
 
 Both clients fetch the public release list for `samelamin/vibertemis` and select
 only `quest-preview-v<version>` releases containing `quest-update.json` and
-`quest-update.json.sig`. Desktop `/latest` is never used. Checks are explicit;
-no background downloads or automatic execution.
+`quest-update.json.sig`. Desktop `/latest` is never used. The idle app checks metadata automatically
+and highlights available updates. Download and installation remain explicit;
+there are no background downloads or automatic execution.
 
 Schema 1 contains `channel: quest-preview`, positive monotonic `sequence`,
 four-component `version`, `native_protocol`, and `assets.windows` / `assets.android`.
