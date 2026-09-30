@@ -38,8 +38,41 @@ try {
     [IO.File]::WriteAllText("$dest/runtime/session.json", '{"updateSmoke":"VR settings preserved"}')
     $pairHash = (Get-FileHash "$pairing/state.json").Hash
     $vrHash = (Get-FileHash "$dest/runtime/session.json").Hash
+    Add-Type @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+using System.Text;
+public static class UpdateSmokeExit {
+ public delegate bool EnumProc(IntPtr window,IntPtr data);
+ [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc callback,IntPtr data);
+ [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr window,out uint pid);
+ [DllImport("user32.dll",CharSet=CharSet.Unicode)] public static extern int GetWindowText(IntPtr window,StringBuilder text,int count);
+ [DllImport("user32.dll",SetLastError=true)] public static extern bool PostThreadMessage(uint thread,uint message,IntPtr w,IntPtr l);
+ public static uint FindUiThread(int process) {
+  uint found=0;
+  EnumWindows((window,data)=> { uint pid; uint thread=GetWindowThreadProcessId(window,out pid);
+   if(pid!=(uint)process) return true;
+   var text=new StringBuilder(256); GetWindowText(window,text,256);
+   if(text.ToString()=="VibertemisVR Host Manager") { found=thread; return false; }
+   return true;
+  },IntPtr.Zero); return found;
+ }
+ public static void Quit(uint thread) {
+  if(thread==0 || !PostThreadMessage(thread,0x12,IntPtr.Zero,IntPtr.Zero))
+   throw new Win32Exception(Marshal.GetLastWin32Error(),"Could not quit owned fixture UI thread");
+ }
+}
+'@
     $parent = Start-Process $manager -PassThru
-    if (-not $parent.WaitForInputIdle(30000)) { throw 'Fixture GUI not ready' }
+    $until = [DateTime]::UtcNow.AddSeconds(30)
+    do {
+        if ($parent.HasExited) { throw 'Fixture GUI exited before handoff' }
+        $parentUiThread = [UpdateSmokeExit]::FindUiThread($parent.Id)
+        if ($parentUiThread -ne 0) { break }
+        Start-Sleep -Milliseconds 200
+    } while ([DateTime]::UtcNow -lt $until)
+    if ($parentUiThread -eq 0) { throw 'Owned fixture main window never appeared' }
     $id = [Guid]::NewGuid().ToString('N')
     $cache = [IO.Path]::GetFullPath("$state/update/$id")
     New-Item -ItemType Directory -Path $cache | Out-Null
@@ -71,17 +104,7 @@ try {
     if (-not $ready.WaitOne(30000)) { throw 'Worker never validated job/signaled readiness' }
     if ($worker.HasExited) { throw 'Worker exited before commit' }
     $commit.Set() | Out-Null
-    Add-Type @'
-using System;
-using System.Runtime.InteropServices;
-public static class UpdateSmokeExit {
- [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr window,out uint pid);
- [DllImport("user32.dll",SetLastError=true)] public static extern bool PostThreadMessage(uint thread,uint message,IntPtr w,IntPtr l);
- public static void Quit(IntPtr window) { uint pid; uint thread=GetWindowThreadProcessId(window,out pid); if(thread==0 || !PostThreadMessage(thread,0x12,IntPtr.Zero,IntPtr.Zero)) throw new Exception("Could not quit fixture GUI"); }
-}
-'@
-    $parent.Refresh()
-    [UpdateSmokeExit]::Quit($parent.MainWindowHandle)
+    [UpdateSmokeExit]::Quit($parentUiThread)
     if (-not $parent.WaitForExit(30000)) { throw 'Parent did not exit' }
     if (-not $worker.WaitForExit(300000)) { throw 'Worker installation timed out' }
     if ($worker.ExitCode -ne 0) {
@@ -103,7 +126,7 @@ public static class UpdateSmokeExit {
     $outcome | ConvertTo-Json | Set-Content "$repo/build/installer/smoke-update-outcome.log"
     Write-Host 'PASS: real signed worker job, retained parent/installer handles, custom Unicode install path, installed FileVersion, payload verification, GUI reopen, outcome and user-data retention'
 } finally {
-    foreach ($process in @($parent,$worker,$reopened)) {
+    foreach ($process in @($worker,$parent,$reopened)) {
         if ($null -ne $process) { try { if (-not $process.HasExited) { $process.Kill(); $process.WaitForExit() } } finally { $process.Dispose() } }
     }
     if ($ready) { $ready.Dispose() }; if ($commit) { $commit.Dispose() }; $rsa.Dispose()

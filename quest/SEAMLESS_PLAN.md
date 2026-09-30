@@ -82,3 +82,9 @@ version6 preserves the existing signer. Real Windows CI remains the release gate
 Agy also approved the final UX delta: visible download progress text, actionable
 missing-SteamVR setup guidance and an error dialog when an attempted install
 cannot reopen the app. Revalidation: Core161 and Windows cross-build passed.
+
+Windows CI first full update test passed. A repeat exposed a fixture race in
+Process.MainWindowHandle, before installer execution. The test now waits for the
+exact owned main-window PID/caption before commit and quits that UI thread; it
+stops the worker before parent during failure cleanup. Agy approved this bounded
+test-only fix. Final CI repeats the real handoff in separate PowerShell steps.
