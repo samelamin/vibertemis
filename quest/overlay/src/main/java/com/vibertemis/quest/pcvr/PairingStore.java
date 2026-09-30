@@ -20,13 +20,13 @@ public final class PairingStore {
   private static final String ALIAS = "vq_pcvr_pairing_v1";
   private final AtomicFile file;
 
-  interface KeySource {
+  public interface KeySource {
     SecretKey get(boolean create) throws Exception;
   }
 
   private final KeySource keys;
 
-  PairingStore(Context context, KeySource source) {
+  public PairingStore(Context context, KeySource source) {
     file = new AtomicFile(new File(context.getNoBackupFilesDir(), "pcvr-pairing.enc"));
     keys = source;
   }

@@ -25,11 +25,11 @@ public class HostClientTest {
   private volatile String signature, nonce, timestamp, method, path;
   private volatile byte[] received;
 
-  static byte[] resource(String name) throws Exception {
+  public static byte[] resource(String name) throws Exception {
     return HostClient.readBounded(HostClientTest.class.getResourceAsStream("/pcvr/" + name), 16384);
   }
 
-  static HostPairing pairing(String certificate, int port) throws Exception {
+  public static HostPairing pairing(String certificate, int port) throws Exception {
     byte[] pem = resource(certificate + ".pem");
     X509Certificate cert =
         (X509Certificate)

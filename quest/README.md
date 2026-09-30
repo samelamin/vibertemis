@@ -9,8 +9,8 @@ A single arm64 APK shipping two streaming modes from one launcher.
   tracking on Quest3. The PC host runs the ALVR streamer; this APK is
   the headset client. Hardware behavior on Quest3 is UNTESTED.
 
-APK `vibertemis-quest-preview-0.1.0.8.apk`, package
-`com.vibertemis.quest.preview.debug`, version `0.1.0-quest-preview.8`,
+APK `vibertemis-quest-preview-0.1.0.9.apk`, package
+`com.vibertemis.quest.preview.debug`, version `0.1.0-quest-preview.9`,
 `arm64-v8a` only, `minSdk=26`, `targetSdk=34`. No second ALVR headset
 app — the runtime is bundled inside this APK.
 
@@ -20,7 +20,7 @@ app — the runtime is bundled inside this APK.
    <https://developers.meta.com/horizon/documentation/native/android/mobile-device-setup/>.
 2. Connect over USB and accept the "Allow USB debugging?" prompt on
    the headset.
-3. `adb install -r vibertemis-quest-preview-0.1.0.8.apk`.
+3. `adb install -r vibertemis-quest-preview-0.1.0.9.apk`.
 4. Launch under **Unknown Sources**.
 
 ## Screen mode
@@ -74,7 +74,7 @@ is still required; this is an experimental test build.
 ### Windows host setup
 
 1. Keep your existing **Vibeshine** installation unchanged. Run
-   `VibertemisVR-HostManager-Setup-0.1.0.8.exe` in your normal Windows account.
+   `VibertemisVR-HostManager-Setup-0.1.0.9.exe` in your normal Windows account.
    The per-user wizard installs the manager and matching VR runtime. Screen
    streaming still uses your existing Vibeshine; no fork or update is required.
 2. Open **VibertemisVR Host Manager**, then choose **Setup VR**. It detects the
@@ -84,17 +84,31 @@ is still required; this is an experimental test build.
    Close SteamVR and ALVR Dashboard first. Switching an existing ALVR driver
    asks once; its files/settings and unrelated drivers remain intact.
 3. Enable **Keep host ready after Windows sign-in**. The default route chooses
-   the LAN adapter; adapter selection and manual pairing stay under **Advanced**.
-4. In the Windows manager, choose **Pair headset**. On Quest, choose **Setup VR**,
-   then select your saved PC. Compare all four groups of the code shown on both
-   screens and approve on the PC only if they match. The PC prompt closes automatically; Quest finishes
-   saving the pairing. No pairing file is needed.
-   Saved screen-gaming PCs supply addresses only; VR trust is independent of
-   Vibeshine. If no PC is listed, add it in **Screen gaming** first.
-5. Tap **Connect**, grant microphone permission, and confirm the possible
-   SteamVR restart. A detected VR headset takes the tracked PCVR path.
-   **Flat screen** remains an explicit override. Phones take the flat path and
-   do not ask the host to start SteamVR.
+   the LAN adapter; manual adapter and manual IPv4/hostname live under
+   **Advanced**.
+4. Successful **Setup VR** already enables persistent pairing
+   reception on the Windows side. **Pair headset** can re-enable
+   it later if you ever turn it off. There is no separate
+   Moonlight pre-pairing and no pairing file to copy.
+5. On Quest, choose **Setup VR** in the hub. The headset finds
+   standalone Windows hosts on the LAN on its own. **Select the
+   PC** you want to pair with; there is no Setup VR → PCVR
+   submenu.
+6. Compare the code shown on both screens and approve it in the
+   non-modal panel on the Windows manager. The Quest side saves
+   the pairing, and the request closes automatically. Receiving
+   controls remain available. Saved credentials reconnect on a later explicit **Connect**.
+7. If the PC is not visible on the LAN, choose **Enter address**
+   in the Quest setup dialog to type an IPv4 address or hostname with
+   an optional port for an already reachable endpoint. This
+   does not open ports on your router and does not perform
+   public-port forwarding; the native VR transport over the
+   public Internet is not implemented in this build.
+8. Tap **Connect**, grant microphone permission, and confirm the
+   existing SteamVR restart prompt. A detected VR headset takes
+   the tracked PCVR path. **Flat screen** remains an explicit
+   override. Phones take the flat path and do not ask the host to
+   start SteamVR.
 
 After this one-time setup, sign in to Windows and leave the manager in the
 tray. It waits for the saved network, retries startup/crashes (2–30 seconds,
@@ -113,6 +127,11 @@ Disabling the checkbox disables future automatic startup/restoration; use Stop
 as well if you want to stop the current session. Startup is after Windows
 sign-in, not a service running at the login screen.
 
+The Quest side auto-checks for new release metadata when the hub opens and
+when the hub has been idle for the throttled window. The Windows side runs
+the same check on manager open. The download/install/launch confirmation
+remains an explicit OS prompt on both sides.
+
 Paired LAN discovery recovers changed PC addresses after authenticating the
 saved PC identity. Internet use still needs a reachable direct/VPN address.
 See [RECOVERY_PLAN.md](RECOVERY_PLAN.md) for the reboot-to-Quest test checklist.
@@ -124,8 +143,8 @@ keep those native settings. Use **Setup VR** to register the new runtime.
 Do not run the old standalone companion alongside the manager.
 
 Codec/display changes can require a SteamVR restart; save your game before
-confirming Connect. Without companion pairing, the manual route requires
-starting SteamVR on the PC yourself.
+confirming Connect. The explicit restart VR prompt is retained on every
+connect so you can always choose to back out before SteamVR restarts.
 
 ### In-app updates
 

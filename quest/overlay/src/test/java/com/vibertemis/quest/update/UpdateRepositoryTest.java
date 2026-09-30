@@ -148,6 +148,105 @@ public class UpdateRepositoryTest {
         assertTrue(repo.shouldRunByThrottle(false));
     }
 
+    /** Tie-resolution regression: when the most recent outcome is a
+     *  failure that happens to share its timestamp with a prior
+     *  success, the throttle must pick the failure branch (15 min)
+     *  not the success branch (6 h). Otherwise a forced retry would
+     *  be blocked by the 6 h window even though the latest outcome
+     *  was a failure. The bug fixed by the updated
+     *  shouldRunByThrottle.
+     *
+     *  <p>The check uses the inclusive {@code lastFailureAtMs >=
+     *  lastSuccessAtMs} so this regression is exercised as soon as
+     *  the failure timestamp is at or after the success timestamp
+     *  AND lastError is set; the failure branch MUST win on a tie
+     *  (where the failure happens at the same tick as the prior
+     *  success) and also on a strictly-later failure. */
+    @Test public void tieTimestampsUseFailureBranchWhenLastErrorSet() {
+        FakeClock clock = new FakeClock();
+        UpdateRepository repo = new UpdateRepository(freshCache(), clock, 6L, () -> pem);
+        // t0: a successful check.
+        long t0 = clock.now;
+        repo.recordNoNewerAvailable();
+        // 1 min later: a failure. LastFailureAt (t0+1min) >=
+        // LastSuccessAt (t0), so the failure branch wins.
+        clock.now = t0 + 60_000L;
+        repo.recordFailure("network unreachable");
+        UpdateRepository.Snapshot s = repo.snapshot();
+        assertTrue("failure timestamp must be >= success timestamp",
+                s.lastFailureAtMs >= s.lastSuccessAtMs);
+        assertNotNull(s.lastError);
+        // (a) Immediately after the failure, no auto-check.
+        assertFalse(repo.shouldRunByThrottle(false));
+        // (b) At t0+1 min + 14 min, still inside the 15-min
+        // failure window, no auto-check.
+        clock.now = t0 + 60_000L + UpdateRepository.FAILURE_INTERVAL_MS - 60_000L;
+        assertFalse(repo.shouldRunByThrottle(false));
+        // (c) At t0+1 min + 16 min, past the failure window, the
+        // failure branch unlocks and a fresh auto-check can run.
+        clock.now = t0 + 60_000L + UpdateRepository.FAILURE_INTERVAL_MS + 60_000L;
+        assertTrue(repo.shouldRunByThrottle(false));
+    }
+
+    /** True tie scenario: success and failure land on the same
+     *  tick. The throttle check uses {@code lastFailureAtMs >=
+     *  lastSuccessAtMs} so a strict tie must also pick the
+     *  failure branch and unlock after 15 min. The shared helper
+     *  is exposed for both Java and C# so the same scenario is
+     *  covered in the parallel tests/UpdateRepositoryTests.cs. */
+    @Test public void exactTieTimestampUnlocksAfterExactlyFifteenMinutes() {
+        FakeClock clock = new FakeClock();
+        UpdateRepository repo = new UpdateRepository(freshCache(), clock, 6L, () -> pem);
+        // Advance to a fixed moment; do a success and then a
+        // failure on the SAME tick so lastFailureAtMs and
+        // lastSuccessAtMs land at the same value.
+        clock.now = 1_700_000_060_000L;
+        repo.recordNoNewerAvailable();
+        repo.recordFailure("network unreachable");
+        UpdateRepository.Snapshot s = repo.snapshot();
+        assertEquals("exact tie", s.lastFailureAtMs, s.lastSuccessAtMs);
+        assertNotNull(s.lastError);
+        // Advance exactly FAILURE_INTERVAL_MS past the tied
+        // timestamp: the failure branch must unlock.
+        clock.now = s.lastFailureAtMs + UpdateRepository.FAILURE_INTERVAL_MS;
+        assertTrue("exact-tie + failure must unlock after 15 min",
+                repo.shouldRunByThrottle(false));
+    }
+
+    /** Explicit force=true must always bypass the throttle window
+     *  for the user-triggered "Check now" button. */
+    @Test public void forceBypassRegardlessOfWindow() {
+        FakeClock clock = new FakeClock();
+        UpdateRepository repo = new UpdateRepository(freshCache(), clock, 6L, () -> pem);
+        repo.recordNoNewerAvailable();
+        assertTrue(repo.shouldRunByThrottle(true));
+        repo.recordFailure("network unreachable");
+        assertTrue(repo.shouldRunByThrottle(true));
+    }
+
+    /** A new success AFTER a successful check clears the failure
+     *  branch and the throttle returns to the success interval.
+     *  Note: recordNoNewerAvailable preserves the existing
+     *  lastFailureAtMs but clears lastError, so the failure
+     *  branch is no longer the latest outcome. */
+    @Test public void newSuccessAfterOldFailureUsesSuccessBranch() {
+        FakeClock clock = new FakeClock();
+        UpdateRepository repo = new UpdateRepository(freshCache(), clock, 6L, () -> pem);
+        long t0 = clock.now;
+        clock.now = t0 + 60_000L;
+        repo.recordFailure("network unreachable");
+        // 1 ms later, a successful check clears lastError.
+        clock.now = t0 + 60_000L + 1L;
+        repo.recordNoNewerAvailable();
+        UpdateRepository.Snapshot s = repo.snapshot();
+        // lastError cleared; success branch now governs.
+        assertNull("lastError cleared by recordNoNewerAvailable", s.lastError);
+        assertFalse(repo.shouldRunByThrottle(false));
+        // Past the success window: success branch unlocks.
+        clock.now = t0 + 60_000L + 1L + UpdateRepository.SUCCESS_INTERVAL_MS + 1L;
+        assertTrue(repo.shouldRunByThrottle(false));
+    }
+
     @Test public void noNewerAvailableIsSuccess() throws Exception {
         FakeClock clock = new FakeClock();
         UpdateRepository repo = new UpdateRepository(freshCache(), clock, 6L, () -> pem);

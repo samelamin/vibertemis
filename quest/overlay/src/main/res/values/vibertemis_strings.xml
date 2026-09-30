@@ -43,13 +43,16 @@
 
     <!-- Updates row: a single primary button plus a status badge that
          only appears when a verified update is available. The badge
-         does not block gaming. -->
+         does not block gaming. The badge is also surfaced briefly
+         after a successful no-newer-available check so the user can
+         see that the latest known state has been confirmed. -->
     <string name="hub_btn_updates">App updates</string>
     <string name="hub_updates_badge_default">No updates available.</string>
     <string name="hub_updates_badge_available">Update %1$s available — tap App updates to install.</string>
     <string name="hub_updates_badge_ready">Update %1$s is verified and ready to install.</string>
     <string name="hub_updates_badge_checking">Checking for updates…</string>
     <string name="hub_updates_badge_offline">Update check unavailable. Tap App updates to retry.</string>
+    <string name="hub_updates_badge_current">App is up to date.</string>
 
     <!-- Back row in nested settings / setup. -->
     <string name="back_row_title">Back</string>

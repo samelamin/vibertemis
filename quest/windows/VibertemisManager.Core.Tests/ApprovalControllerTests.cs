@@ -351,4 +351,15 @@ public sealed class ApprovalControllerTests
         var m2 = c.Render(Now);
         Assert.True(m2.RequestPaneVisible);
     }
+    [Fact]
+    public void HiddenMarkerWithoutRequestKeepsManagementAvailable()
+    {
+        var controller = NewController();
+        controller.MarkHidden("previous-request");
+        var model = controller.Render(Now);
+        Assert.True(model.PanelVisible);
+        Assert.False(model.RequestPaneVisible);
+        Assert.True(model.PauseEnabled && model.TurnOffEnabled && model.ForgetEnabled);
+        Assert.False(model.ApproveEnabled || model.RejectEnabled || model.HideEnabled);
+    }
 }

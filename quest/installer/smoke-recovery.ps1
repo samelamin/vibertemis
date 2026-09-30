@@ -5,7 +5,7 @@
 #     behaviour.
 #   - Setup VR button label announces the headset-pairing consent.
 #   - Pair headset (primary path) enables persisted receiving and reveals
-#     the inline panel; Approve button stays disabled until a LAN
+#     management controls; the request pane stays hidden until a LAN
 #     /pairing/begin actually surfaces a pending request. Manual export
 #     stays under Advanced.
 #   - Seamless receiving flow: a disposable LAN client does
@@ -189,14 +189,14 @@ function New-AdminAuth {
     return @{ 'X-Vq-Ts' = "$ts"; 'X-Vq-Nonce' = $nc; 'X-Vq-Sig' = $sig }
 }
 function Send-Admin {
-    param([string]$Path, [object]$Payload)
+    param([string]$Path, [object]$Payload, [switch]$AllowError)
     $statePath = Join-Path $pairingDir 'state.json'
     $state = Get-Content $statePath -Raw | ConvertFrom-Json
     $bodyJson = if ($null -ne $Payload) { $Payload | ConvertTo-Json -Depth 8 -Compress } else { '{}' }
     $bodyBytes = [System.Text.Encoding]::UTF8.GetBytes($bodyJson)
     $headers = New-AdminAuth -Token $state.token -Path $Path -BodyBytes $bodyBytes
     Invoke-RestMethod -Uri ("https://127.0.0.1:28541$Path") -Method Post -Body $bodyBytes `
-        -ContentType 'application/json' -Headers $headers -SkipCertificateCheck
+        -ContentType 'application/json' -Headers $headers -SkipCertificateCheck -SkipHttpErrorCheck:$AllowError
 }
 # Simulate a disposable LAN client doing /pairing/begin. The
 # returned challenge plus the server-computed code (queried via
@@ -271,13 +271,15 @@ try {
     # immediately and reveals the inline panel.
     [RecoverySmokeUi]::Click($pair)
     Wait-Until { [RecoverySmokeUi]::Find($script:managerProcess.Id,'Host ready: receiving pairing requests is ON.') -ne [IntPtr]::Zero } 'receiving ON after Pair headset'
-    Wait-Until { [RecoverySmokeUi]::Find($script:managerProcess.Id,'Receiving pairing requests') -ne [IntPtr]::Zero } 'approval panel surfaces after Pair headset'
-    if ([RecoverySmokeUi]::IsWindowEnabled([RecoverySmokeUi]::Find($script:managerProcess.Id,'Codes match — approve'))) {
-        throw 'Approval enabled before a headset request'
+    Wait-Until { [RecoverySmokeUi]::FindVisible($script:managerProcess.Id,'Waiting for a Quest request. Put on your Quest, choose Setup VR and select this PC.') -ne [IntPtr]::Zero } 'ready for headset request'
+    foreach ($label in @('Pause 1 hour','Turn off','Forget paired headsets…')) {
+        $control = [RecoverySmokeUi]::FindVisible($script:managerProcess.Id,$label)
+        if ($control -eq [IntPtr]::Zero -or -not [RecoverySmokeUi]::IsWindowEnabled($control)) { throw "Management control unavailable: $label" }
     }
-    # Hide the panel for now so we can drive a fresh LAN begin.
-    [RecoverySmokeUi]::Click([RecoverySmokeUi]::Find($script:managerProcess.Id,'Hide'))
-    Wait-Until { [RecoverySmokeUi]::Find($script:managerProcess.Id,'Receiving pairing requests') -eq [IntPtr]::Zero } 'approval panel hidden'
+    foreach ($label in @('Codes match — approve','Reject','Hide')) {
+        if ([RecoverySmokeUi]::FindVisible($script:managerProcess.Id,$label) -ne [IntPtr]::Zero) { throw "Request control visible before a request: $label" }
+    }
+    if ([RecoverySmokeUi]::FindRegexVisible($script:managerProcess.Id,'\A[0-9A-F]{4}(-[0-9A-F]{4}){3}\z') -ne [IntPtr]::Zero) { throw 'Comparison code visible before a request' }
     if (Get-Process -Name vrserver,vrmonitor,vrcompositor -ErrorAction SilentlyContinue) { throw 'Pairing unexpectedly started SteamVR' }
     # Production startup checkbox must register the exact installed executable.
     $readyLabel = 'Keep host ready after Windows sign-in'
@@ -331,7 +333,7 @@ try {
     # an immediate "expired" reading would catch the
     # Unix-seconds-as-tick bug where every pending was treated
     # as already past.
-    $expiryHwnd = [RecoverySmokeUi]::FindVisible($script:managerProcess.Id, 'Time remaining: ')
+    $expiryHwnd = [RecoverySmokeUi]::FindRegexVisible($script:managerProcess.Id, 'Time remaining: ')
     if ($expiryHwnd -eq [IntPtr]::Zero) {
         throw 'Expiry label not visible while a fresh pending is on screen'
     }
@@ -363,7 +365,7 @@ try {
     }
 
     # Capture a PNG screenshot of the manager window for CI review.
-    $shotDir = Join-Path (Split-Path $Manager -Parent) 'installer'
+    $shotDir = Join-Path $PSScriptRoot '../../build/installer'
     if (-not (Test-Path $shotDir)) { New-Item -ItemType Directory -Path $shotDir | Out-Null }
     $shotPath = Join-Path $shotDir 'smoke-pairing.png'
     $rootHwnd = (Get-Process -Id $script:managerProcess.Id).MainWindowHandle
@@ -417,11 +419,8 @@ try {
     [RecoverySmokeUi]::Click($resumeBtn)
     Wait-Until { [RecoverySmokeUi]::Find($script:managerProcess.Id,'Host ready: receiving pairing requests is ON.') -ne [IntPtr]::Zero } 'resumed label'
 
-    # ---- Error retry path: a decision that fails must leave
-    # Approve enabled so the owner can retry. Drive a fresh LAN
-    # begin, then issue a decision with a wrong code so the
-    # server emits INVALID and the inline panel surfaces the
-    # error text. Approve must stay enabled.
+    # A rejected admin decision must preserve the pending request so the
+    # owner can still make a valid decision through the visible UI.
     $begin2 = New-LanBegin -Address $adapter.Address
     $sessionId2 = $begin2.Challenge.session_id
     $serverNonce2 = $begin2.Challenge.server_nonce
@@ -436,23 +435,17 @@ try {
     $expectedCode2 = $script:expectedCode2
     $approveBtn2 = [RecoverySmokeUi]::FindVisible($script:managerProcess.Id, 'Codes match — approve')
     if ($approveBtn2 -eq [IntPtr]::Zero) { throw 'Approve button missing for retry test' }
-    # Construct an INVALID decision by signing with a tampered
-    # code. The manager posts to /pairing/admin/decision with the
-    # wrong code; the server returns code=INVALID.
-    $tamperedCode = '0000-1111-2222-3333'
-    $decisionPayload = @{ session_id = $sessionId2; code = $tamperedCode; approve = $true } | ConvertTo-Json -Compress
-    $resp = Send-Admin '/pairing/admin/decision' ($decisionPayload | ConvertFrom-Json)
-    # The manager surfaces the error inline via the
-    # owner-controlled text. We can't drive the manager's
-    # own decision via Send-Admin (that hits the same admin
-    # endpoint the manager uses); instead we verify the
-    # invalid path is reachable through the admin endpoint
-    # and the manager's panel would retry. The retry path
-    # itself is exercised by the controller tests.
-    if ($resp.error) {
-        # Sanity check: the admin endpoint surfaces a structured
-        # error envelope.
-    }
+    $tamperedCode = if ($expectedCode2 -eq '0000-1111-2222-3333') { 'FFFF-EEEE-DDDD-CCCC' } else { '0000-1111-2222-3333' }
+    $resp = Send-Admin '/pairing/admin/decision' @{ session_id = $sessionId2; code = $tamperedCode; approve = $true } -AllowError
+    if ($resp.code -ne 'INVALID') { throw 'Wrong comparison code was not rejected as INVALID' }
+    $stillPending = Send-Admin '/pairing/admin/pending' $null
+    if ($stillPending.session_id -ne $sessionId2 -or $stillPending.state -ne 'pending') { throw 'Invalid decision lost the pending request' }
+    Wait-Until {
+        $button = [RecoverySmokeUi]::FindVisible($script:managerProcess.Id, 'Reject')
+        $button -ne [IntPtr]::Zero -and [RecoverySmokeUi]::IsWindowEnabled($button)
+    } 'pending request remains actionable after invalid admin decision'
+    [RecoverySmokeUi]::Click([RecoverySmokeUi]::FindVisible($script:managerProcess.Id, 'Reject'))
+    Wait-Until { (Send-Admin '/pairing/admin/pending' $null).state -eq 'denied' } 'valid UI rejection after invalid decision'
     $begin2.Key.Dispose()
 
     # Persistence: after a successful approve, the manager persists

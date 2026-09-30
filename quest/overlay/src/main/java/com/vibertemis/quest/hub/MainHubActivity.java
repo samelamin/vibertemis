@@ -24,6 +24,7 @@ import com.vibertemis.quest.pcvr.HostPairing;
 import com.vibertemis.quest.pcvr.PairingStore;
 import com.vibertemis.quest.pcvr.PcvrOptions;
 import com.vibertemis.quest.pcvr.PcvrSettingsActivity;
+import com.vibertemis.quest.pcvr.VrSetupDiscovery;
 import com.limelight.PcView;
 import com.limelight.R;
 import com.limelight.preferences.StreamSettings;
@@ -92,6 +93,7 @@ public class MainHubActivity extends Activity {
     private SettingsController settingsController;
 
     private boolean requestPending;
+    private boolean permissionContinuationPending;
     private boolean connectPending;
     private long restartConsentUntil;
     private boolean resumed;
@@ -99,9 +101,23 @@ public class MainHubActivity extends Activity {
     private com.vibertemis.quest.update.UpdateRepository updateRepository;
     private com.vibertemis.quest.update.UpdateRepository.Observer updateObserver;
     private volatile HostClient hostClient;
-    private com.vibertemis.quest.pcvr.StandalonePairingClient vrBootstrap;
+    private com.vibertemis.quest.pcvr.PairingSession vrBootstrap;
     private android.app.AlertDialog connectDialog;
     private final java.util.concurrent.ExecutorService connectWorker = java.util.concurrent.Executors.newSingleThreadExecutor();
+    /**
+     * Transient dialogs that survive a single user action but
+     * MUST be dismissed when the hub is destroyed. The setup and
+     * connect dialogs have their own dedicated fields and lifecycle;
+     * everything else (the Advanced picker, the post-enrollment
+     * "Paired" notice, the deferred pairingNotice dialog shown on
+     * resume, the VR-setup-needs-attention error dialog, the
+     * connect-options picker, the mic recovery dialog, and the
+     * restart-confirmation dialog) is recorded here so onDestroy
+     * can dismiss them. A late callback landing on an already-
+     * destroyed activity must NEVER show a new dialog.
+     */
+    private final java.util.List<android.app.AlertDialog> transientDialogs =
+            new java.util.ArrayList<>();
     private boolean launchPending;
     /**
      * Set true by {@code onPause} when {@code launchPending} was true
@@ -112,6 +128,17 @@ public class MainHubActivity extends Activity {
      */
     private boolean launchLeftHub;
     private String pairingNotice;
+    /** The Setup-VR discovery dialog currently being shown to the
+     *  user (searching / found / empty / manual). Tracked so onPause
+     *  can dismiss it and onDestroy / generation bumps can ignore
+     *  late discovery callbacks. */
+    private android.app.AlertDialog setupDialog;
+    /** Monotonic id for VR-setup discoveries. Every discovery pass
+     *  bumps this counter; late callbacks from a cancelled pass see
+     *  a stale id and ignore themselves. */
+    private volatile int discoveryGeneration;
+    /** The currently running setup discovery session. Cancellable. */
+    private volatile com.vibertemis.quest.pcvr.VrSetupDiscovery runningDiscovery;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -263,7 +290,7 @@ public class MainHubActivity extends Activity {
         super.onResume();
         resumed = true;
         if (pairingNotice != null) {
-            new android.app.AlertDialog.Builder(this).setTitle("VR pairing").setMessage(pairingNotice).setPositiveButton("Done", null).show();
+            trackDialog(new android.app.AlertDialog.Builder(this).setTitle("VR pairing").setMessage(pairingNotice).setPositiveButton("Done", null).show());
             pairingNotice = null;
         }
         settingsController.refresh();
@@ -279,10 +306,13 @@ public class MainHubActivity extends Activity {
             launchPending = false;
             launchLeftHub = false;
         }
-        // The hub NEVER auto-launches from onResume. Returning from the
-        // streaming settings screen, the setup screen, the system
-        // settings screen, or the PCVR / Screen gaming activity is not a
-        // signal to launch anything. Status refresh only.
+        // Continue only an explicit Connect whose permission result arrived
+        // while paused. Ordinary resumes never initiate a VR connection.
+        if (permissionContinuationPending) {
+            permissionContinuationPending = false;
+            if (!isFinishing() && !isDestroyed() && hasMicPermission()
+                    && VrCapabilities.isHeadset(this)) launchSteamVr();
+        }
         triggerUpdateCheckIfIdle(false);
     }
 
@@ -293,6 +323,14 @@ public class MainHubActivity extends Activity {
         // Removing the headset to approve on the PC must not cancel enrollment.
         // Actual VR launch requests still cancel when leaving the foreground.
         if (vrBootstrap == null) cancelHostConnection();
+        // Setup VR discovery is a UI affordance: it is always
+        // bounded to the hub lifetime. Cancelling here protects the
+        // hub against a stale callback landing after the user
+        // dismissed the picker. Enrollment is intentionally NOT
+        // cancelled here: the user may take off the headset to
+        // approve on the PC and the request must survive the pause.
+        cancelVrSetupDiscovery();
+        if (setupDialog != null) { try { setupDialog.dismiss(); } catch (Exception ignored) { } setupDialog = null; }
         settingsController.unregister();
         // Mark that we actually left for a launched activity. A
         // permission dialog pause may arrive BEFORE launchPending is
@@ -304,6 +342,20 @@ public class MainHubActivity extends Activity {
         if (launchPending) {
             launchLeftHub = true;
         }
+    }
+
+    /** Register a transient dialog so it is dismissed on destroy.
+     *  The dialog itself is returned so call sites can keep the
+     *  fluent {@code .show()} pattern. Late callbacks that try
+     *  to show a new dialog after destroy return null from the
+     *  {@link #showLateDialogIfAlive(android.app.AlertDialog)}
+     *  guard below. */
+    private android.app.AlertDialog trackDialog(android.app.AlertDialog d) {
+        if (d != null) {
+            transientDialogs.add(d);
+            d.setOnDismissListener(ignored -> transientDialogs.remove(d));
+        }
+        return d;
     }
 
     private void renderStatus() {
@@ -382,7 +434,8 @@ public class MainHubActivity extends Activity {
             // Do not launch.
             return;
         }
-        launchSteamVr();
+        if (!resumed) permissionContinuationPending = true;
+        else launchSteamVr();
     }
 
     private void showMicRecoveryDialog(final boolean permanentlyDenied) {
@@ -399,7 +452,7 @@ public class MainHubActivity extends Activity {
             b.setPositiveButton(R.string.mic_recovery_retry,
                     (d, w) -> requestMicForSteamVr());
         }
-        b.show();
+        trackDialog(b.show());
     }
 
     private void openAppSettings() {
@@ -494,6 +547,30 @@ public class MainHubActivity extends Activity {
         return com.vibertemis.quest.pcvr.NativePeerIdentity.loadOrCreate(getApplicationContext());
     }
 
+    /** Discovery seam so tests can inject a fake NSD driver.
+     *  Production always uses the real {@link android.net.nsd.NsdManager}. */
+    protected com.vibertemis.quest.pcvr.VrSetupDiscovery createVrSetupDiscovery() {
+        return new com.vibertemis.quest.pcvr.VrSetupDiscovery(this);
+    }
+
+    /** Pairing-session factory seam. Tests override this to inject
+     *  a deterministic fake {@link com.vibertemis.quest.pcvr.PairingSession}
+     *  so the enrollment lifecycle (code callback, deadline, save,
+     *  cancel) can be driven without the real TLS server. Production
+     *  returns a fresh {@link com.vibertemis.quest.pcvr.StandalonePairingClient}
+     *  for every call. */
+    protected com.vibertemis.quest.pcvr.PairingSession createStandalonePairingClient() {
+        return new com.vibertemis.quest.pcvr.StandalonePairingClient();
+    }
+
+    /** PairingStore factory seam. Production wraps AndroidKeyStore;
+     *  tests inject a deterministic AES key via the package-private
+     *  constructor so the save path can be verified without a real
+     *  keystore. */
+    protected com.vibertemis.quest.pcvr.PairingStore createPairingStore() {
+        return new com.vibertemis.quest.pcvr.PairingStore(getApplicationContext());
+    }
+
     protected boolean usesNativeRuntime() { return PcvrOptions.PYROWAVE_BUILD; }
 
     private void launchSteamVr() {
@@ -505,94 +582,397 @@ public class MainHubActivity extends Activity {
 
     private void showVrAdvanced() {
         if (!resumed || connectPending || launchPending || requestPending) return;
-        new android.app.AlertDialog.Builder(this).setTitle("Advanced VR pairing")
+        trackDialog(new android.app.AlertDialog.Builder(this).setTitle("Advanced VR pairing")
             .setMessage("Use a pairing file for an older host, or open VR manually if the PC is already prepared.")
             .setPositiveButton("Import pairing file", (d,w) -> {
-                if(resumed && !connectPending && !launchPending) startActivity(new Intent(this,PcvrSettingsActivity.class).putExtra(PcvrSettingsActivity.EXTRA_MANUAL_PAIRING, true));
+                if (!resumed || connectPending || launchPending) return;
+                launchPending = true;
+                try {
+                    startActivity(new Intent(this, PcvrSettingsActivity.class)
+                            .putExtra(PcvrSettingsActivity.EXTRA_MANUAL_PAIRING, true));
+                } catch (android.content.ActivityNotFoundException | SecurityException e) {
+                    launchPending = false;
+                    Toast.makeText(this, "Could not open pairing settings. Try again.", Toast.LENGTH_LONG).show();
+                }
             })
             .setNeutralButton("Manual VR", (d,w) -> {
                 if(!resumed || connectPending || launchPending || !VrCapabilities.isHeadset(this) || !hasMicPermission()) return;
                 if(usesNativeRuntime()) confirmPcvrRestart(this::dispatchSteamVr); else dispatchSteamVr();
             })
-            .setNegativeButton("Back", (d,w) -> { if(resumed) showVrSetup(); }).show();
+            .setNegativeButton("Back", (d,w) -> { if(resumed) showVrSetup(); }).show());
     }
 
+    /** Show the Setup VR flow. Discovers candidates via NSD and
+     *  dedupes them against saved Moonlight addresses (which are
+     *  treated as hints even without a saved serverCert). When
+     *  nothing is found the user sees an explicit empty state with
+     *  Retry / Enter address / Advanced actions. The Screen-gaming
+     *  detour is intentionally NOT surfaced here: pairing VR to a
+     *  PC is a separate workflow from pairing Screen gaming, and
+     *  routing the user through Screen gaming would force them
+     *  through a Vibeshine flow they do not need. */
     private void showVrSetup() {
-        if (connectPending || launchPending) return;
-        java.util.List<com.limelight.nvstream.http.ComputerDetails> paired = new java.util.ArrayList<>();
-        com.limelight.computers.ComputerDatabaseManager db = new com.limelight.computers.ComputerDatabaseManager(this);
-        try { for (com.limelight.nvstream.http.ComputerDetails pc : db.getAllComputers()) if (pc.serverCert != null) paired.add(pc); }
-        finally { db.close(); }
-        if (paired.isEmpty()) {
-            new android.app.AlertDialog.Builder(this).setTitle("Pair your PC first")
-                .setMessage("Add your PC in Screen gaming, then return here. In Windows VR Host Manager, choose Pair headset. VR pairing uses a separate approval; Vibeshine stays unchanged.")
-                .setPositiveButton("Screen gaming", (d,w) -> { if(resumed) launchScreenGaming(); })
-                .setNeutralButton("Advanced pairing", (d,w) -> showVrAdvanced())
-                .setNegativeButton("Cancel",null).show();
+        if (!resumed || isFinishing() || isDestroyed() || connectPending || launchPending) return;
+        // Cancel any in-flight discovery from a previous pass.
+        cancelVrSetupDiscovery();
+        final int generation = ++discoveryGeneration;
+        // Show the "Searching…" dialog synchronously so the user
+        // gets immediate feedback. Late callbacks check generation
+        // before swapping the dialog body.
+        android.app.AlertDialog searching = new android.app.AlertDialog.Builder(this)
+                .setTitle("Set up VR")
+                .setMessage("Searching for your PC on the local network…")
+                .setNegativeButton("Cancel", (d, w) -> cancelVrSetupDiscovery())
+                .setOnCancelListener(d -> cancelVrSetupDiscovery())
+                .show();
+        setupDialog = searching;
+        final com.vibertemis.quest.pcvr.VrSetupDiscovery discovery = createVrSetupDiscovery();
+        runningDiscovery = discovery;
+        // discovered is final, populated by the worker, then read
+        // by the post-onUiThread lambda. Capture it inside an
+        // effectively-final holder so the lambda compiles.
+        final java.util.concurrent.atomic.AtomicReference<java.util.List<com.vibertemis.quest.pcvr.VrSetupDiscovery.Candidate>> discoveredRef =
+                new java.util.concurrent.atomic.AtomicReference<>(
+                        new java.util.ArrayList<com.vibertemis.quest.pcvr.VrSetupDiscovery.Candidate>());
+        // The saved Moonlight DB hint scan runs on the same
+        // single-thread connectWorker as the discovery so the UI
+        // thread never blocks on a potentially-expensive SQLite
+        // query. The result is captured by dbHintsRef and the UI
+        // only sees the merged list once both are ready.
+        final java.util.concurrent.atomic.AtomicReference<java.util.List<com.vibertemis.quest.pcvr.VrSetupDiscovery.Candidate>> dbHintsRef =
+                new java.util.concurrent.atomic.AtomicReference<>(
+                        new java.util.ArrayList<com.vibertemis.quest.pcvr.VrSetupDiscovery.Candidate>());
+        connectWorker.execute(() -> {
+            java.util.List<com.vibertemis.quest.pcvr.VrSetupDiscovery.Candidate> discovered =
+                    new java.util.ArrayList<>();
+            try {
+                discovered = discovery.browse();
+            } catch (java.io.IOException ignored) {
+                // LAN discovery unavailable; treat as empty so the
+                // user still sees the explicit empty state below.
+            }
+            discoveredRef.set(discovered);
+            // Off-UI: scan the saved Moonlight database for hints.
+            dbHintsRef.set(loadSavedMoonlightHints(discovered));
+            runOnUiThread(() -> {
+                if (generation != discoveryGeneration || isFinishing() || isDestroyed()) return;
+                if (runningDiscovery == discovery) runningDiscovery = null;
+                if (setupDialog != null && setupDialog.isShowing()) {
+                    try { setupDialog.dismiss(); } catch (Exception ignored) { }
+                }
+                setupDialog = null;
+                renderSetupCandidates(discoveredRef.get(), dbHintsRef.get(), generation);
+            });
+        });
+    }
+
+    /** Read saved Moonlight PC addresses off the UI thread and
+     *  return them as untrusted VR-setup hints. A DB hint is
+     *  skipped entirely when its IP matches a discovered
+     *  candidate so the discovered custom port wins (a hostile
+     *  or stale DB row never overrides the freshly-advertised
+     *  service port). Hints keep the schema reserved for the
+     *  picker even when they have no VR server cert: the
+     *  authenticated TLS handshake still has to succeed, the hint
+     *  is only a list entry.
+     *
+     *  <p><b>Address shape:</b>
+     *  {@link com.limelight.nvstream.http.ComputerDetails.AddressTuple}
+     *  carries the host as {@code a.address} (bare, no
+     *  {@code host:port} concatenation) and the port as a
+     *  separate {@code int} field. The stored port is the
+     *  Moonlight / Sunshine GameStream port (47989 etc.), NOT a
+     *  VR port, so it must NEVER be reused for the VR
+     *  enrollment. Every hint uses {@link
+     *  VrSetupDiscovery#DEFAULT_VR_PORT} and lets the
+     *  authenticated TLS handshake confirm the real listener port
+     *  on the PC. IPv6 hints are rejected because the VR
+     *  discovery path only accepts IPv4 (see
+     *  {@link com.vibertemis.quest.pcvr.VrSetupDiscovery#sanitize});
+     *  an IPv6 row in the Moonlight DB has no useful VR mapping. */
+    java.util.List<com.vibertemis.quest.pcvr.VrSetupDiscovery.Candidate> loadSavedMoonlightHints(
+            java.util.List<com.vibertemis.quest.pcvr.VrSetupDiscovery.Candidate> discovered) {
+        java.util.List<com.vibertemis.quest.pcvr.VrSetupDiscovery.Candidate> out =
+                new java.util.ArrayList<>();
+        if (discovered == null) return out;
+        java.util.Set<String> discoveredIps = new java.util.HashSet<>();
+        for (com.vibertemis.quest.pcvr.VrSetupDiscovery.Candidate c : discovered) {
+            if (c != null && c.address != null) discoveredIps.add(c.address);
+        }
+        com.limelight.computers.ComputerDatabaseManager db = null;
+        try {
+            db = new com.limelight.computers.ComputerDatabaseManager(getApplicationContext());
+            for (com.limelight.nvstream.http.ComputerDetails pc : db.getAllComputers()) {
+                com.limelight.nvstream.http.ComputerDetails.AddressTuple a =
+                        pc.activeAddress != null
+                                ? pc.activeAddress
+                                : (pc.manualAddress != null ? pc.manualAddress : pc.localAddress);
+                if (a == null || a.address == null || a.address.isEmpty()) continue;
+                String host = a.address;
+                // Reject IPv6 hints. AddressTuple strips brackets
+                // from IPv6 literals, so the colon count is the
+                // giveaway — a single colon means IPv4 port is
+                // encoded in the address (a malformed row), more
+                // than one colon means IPv6.
+                if (host.indexOf(':') >= 0) continue;
+                // The hint port is always the VR default. The
+                // stored GameStream port is never the VR port.
+                int dbPort = VrSetupDiscovery.DEFAULT_VR_PORT;
+                // Discovered custom port wins over the DB row for
+                // the same IP. Skip the hint entirely so the user
+                // sees one entry per machine, not two.
+                if (discoveredIps.contains(host)) continue;
+                String displayName = (pc.name == null || pc.name.isEmpty()) ? host : pc.name;
+                out.add(new com.vibertemis.quest.pcvr.VrSetupDiscovery.Candidate(
+                        displayName, host, dbPort));
+            }
+        } catch (Throwable dbScanFailure) {
+            // The Moonlight SQLite layer is OPTIONAL for VR pairing.
+            // A missing / locked / non-Writable / corrupt DB row
+            // must NEVER leave the picker stuck on the searching
+            // dialog. Swallow the failure and return whatever hints
+            // we have; the caller still has the discovered list
+            // and the user still has the manual-entry + advanced
+            // escape hatches.
+            Log.w(TAG, "saved Moonlight DB scan failed; continuing without hints", dbScanFailure);
+        } finally {
+            if (db != null) { try { db.close(); } catch (Exception ignored) { } }
+        }
+        return out;
+    }
+
+    /** Cancel the current discovery pass. Bumps the generation so
+     *  late callbacks short-circuit and the VrSetupDiscovery's own
+     *  cancellation flag wakes the bounded result poll within
+     *  ~CANCEL_POLL_MS. Safe to call from any state. */
+    private void cancelVrSetupDiscovery() {
+        if (runningDiscovery != null) {
+            try { runningDiscovery.cancel(); } catch (Exception ignored) { }
+            runningDiscovery = null;
+        }
+        discoveryGeneration++;
+    }
+
+    /** Render the candidate picker. Discovered PCs come first; saved
+     *  Moonlight PCs are deduped and shown second as hints even when
+     *  they have no serverCert. Both lists are pre-loaded off the UI
+     *  thread by {@link #loadSavedMoonlightHints}; this method only
+     *  shapes and shows the picker. When nothing was found the user
+     *  sees the explicit "No VR PC found" empty state with Retry /
+     *  Enter address / Advanced options. Screen-gaming is NOT offered
+     *  here: that route is reserved for the Screen-gaming flow,
+     *  not for VR pairing. */
+    private void renderSetupCandidates(java.util.List<com.vibertemis.quest.pcvr.VrSetupDiscovery.Candidate> discovered,
+                                       java.util.List<com.vibertemis.quest.pcvr.VrSetupDiscovery.Candidate> dbHints,
+                                       int generation) {
+        if (!resumed || connectPending || launchPending || isFinishing() || isDestroyed()) return;
+        if (generation != discoveryGeneration) return;
+        java.util.List<com.vibertemis.quest.pcvr.VrSetupDiscovery.Candidate> merged = new java.util.ArrayList<>();
+        java.util.Set<String> seen = new java.util.HashSet<>();
+        if (discovered != null) {
+            for (com.vibertemis.quest.pcvr.VrSetupDiscovery.Candidate c : discovered) {
+                String key = c.address + ":" + c.port;
+                if (seen.add(key)) merged.add(c);
+            }
+        }
+        // DB hints: dedup by host+port against the discovered list.
+        // The hint list itself is already filtered to skip IPs that
+        // matched a discovered candidate, so this loop is the second
+        // line of defence against double entries from a same-host
+        // collision.
+        if (dbHints != null) {
+            for (com.vibertemis.quest.pcvr.VrSetupDiscovery.Candidate c : dbHints) {
+                String key = c.address + ":" + c.port;
+                if (seen.add(key)) merged.add(c);
+            }
+        }
+        if (merged.isEmpty()) {
+            // Explicit empty state. Screen-gaming is NOT a route
+            // here; VR pairing is a separate workflow that runs on
+            // top of the same LAN reachability as Screen gaming
+            // but uses its own approval on the PC.
+            android.app.AlertDialog empty = new android.app.AlertDialog.Builder(this)
+                    .setTitle("No VR PC found")
+                    .setMessage("We did not find a PC running VR Host Manager on the local network. Open VR Host Manager on the PC and choose Setup VR (or Pair headset), then choose Retry. You can also enter the address by hand or import a saved pairing file under Advanced.")
+                    .setPositiveButton("Retry", (d, w) -> { if (resumed && !connectPending && !launchPending) showVrSetup(); })
+                    .setNeutralButton("Enter address", (d, w) -> { if (resumed && !connectPending && !launchPending) showManualEntry(); })
+                    .setNegativeButton("Advanced", (d, w) -> { if (resumed && !connectPending && !launchPending) showVrAdvanced(); })
+                    .show();
+            setupDialog = empty;
             return;
         }
-        String[] names = new String[paired.size()];
-        for (int i=0;i<names.length;i++) names[i]=paired.get(i).name;
-        new android.app.AlertDialog.Builder(this).setTitle("Choose your PC for VR")
-            .setItems(names,(d,which)->enrollVrHost(paired.get(which)))
-            .setNeutralButton("Advanced pairing",(d,w)->showVrAdvanced())
-            .setNegativeButton("Cancel",null).show();
+        String[] names = new String[merged.size()];
+        for (int i = 0; i < names.length; i++) names[i] = merged.get(i).display();
+        final VrSetupDiscovery.Candidate[] selected = merged.toArray(new VrSetupDiscovery.Candidate[0]);
+        android.app.AlertDialog picker = new android.app.AlertDialog.Builder(this)
+                .setTitle("Choose your PC for VR")
+                .setItems(names, (d, which) -> {
+                    if (generation != discoveryGeneration || !resumed || isFinishing() || isDestroyed()) return;
+                    if (connectPending || launchPending) return;
+                    enrollVrHost(selected[which]);
+                })
+                .setPositiveButton("Enter address", (d, w) -> { if (resumed && !connectPending && !launchPending) showManualEntry(); })
+                .setNeutralButton("Retry", (d, w) -> { if (resumed && !connectPending && !launchPending) showVrSetup(); })
+                .setNegativeButton("Advanced", (d, w) -> { if (resumed && !connectPending && !launchPending) showVrAdvanced(); })
+                .show();
+        setupDialog = picker;
     }
 
-    private void enrollVrHost(com.limelight.nvstream.http.ComputerDetails pc) {
+    /** Manual entry dialog. Accepts a validated PC endpoint with an
+     *  optional VR port (default 28540). URI credentials, paths,
+     *  queries, fragments, and invalid ports are rejected with a
+     *  clear error so a typo never reaches the wire. */
+    private void showManualEntry() {
+        if (!resumed || connectPending || launchPending) return;
+        final android.widget.EditText input = new android.widget.EditText(this);
+        input.setHint("pc-host[:port]");
+        input.setSingleLine(true);
+        input.setMinHeight(80);
+        android.app.AlertDialog dialog = new android.app.AlertDialog.Builder(this)
+                .setTitle("Enter PC address")
+                .setMessage("Type the PC's local address (for example, 192.168.1.10). Default VR port is 28540.")
+                .setView(input)
+                .setPositiveButton("Pair", null)
+                .setNegativeButton("Back", (d, w) -> { if (resumed && !connectPending && !launchPending) showVrSetup(); })
+                .create();
+        dialog.setOnShowListener(d -> dialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE)
+                .setOnClickListener(v -> {
+                    String text = input.getText().toString().trim();
+                    com.vibertemis.quest.pcvr.VrSetupDiscovery.ParsedEndpoint endpoint;
+                    try {
+                        endpoint = VrSetupDiscovery.parseManualEndpoint(
+                                text, VrSetupDiscovery.DEFAULT_VR_PORT);
+                    } catch (IllegalArgumentException ex) {
+                        input.setError(ex.getMessage());
+                        return;
+                    }
+                    dialog.dismiss();
+                    // No resplit: parseManualEndpoint returns the
+                    // validated host/port as a typed pair.
+                    enrollVrHost(endpoint.host, endpoint.port);
+                }));
+        dialog.show();
+        setupDialog = dialog;
+    }
+
+    /** Enrollment entry point used by the setup picker. The candidate
+     *  is fully validated by {@link VrSetupDiscovery#sanitize} before
+     *  this point. The enrollment driver computes the comparison
+     *  code and the monotonic deadline from the server-supplied
+     *  {@code ttl_seconds} (1..180). The dialog shows the code; a
+     *  Handler ticks the countdown each second. The deadline cannot
+     *  be extended by repeated callbacks or poll responses. */
+    void enrollVrHost(com.vibertemis.quest.pcvr.VrSetupDiscovery.Candidate candidate) {
+        enrollVrHost(candidate.address, candidate.port);
+    }
+
+    void enrollVrHost(String host, int port) {
         if (connectPending || launchPending || !resumed) return;
         connectPending=true;
         final int generation=++connectGeneration;
-        final com.vibertemis.quest.pcvr.StandalonePairingClient bootstrap =
-            new com.vibertemis.quest.pcvr.StandalonePairingClient();
+        final com.vibertemis.quest.pcvr.PairingSession bootstrap =
+            createStandalonePairingClient();
         vrBootstrap=bootstrap;
-        connectDialog=new android.app.AlertDialog.Builder(this).setTitle("Setting up VR")
-            .setMessage("Connecting to "+pc.name+". In Windows VR Host Manager, choose Pair headset…")
+        final android.os.Handler ui = new android.os.Handler(android.os.Looper.getMainLooper());
+        final Runnable[] tick = new Runnable[1];
+        final long[] lastShownSecs = new long[] { -1L };
+        connectDialog=trackDialog(new android.app.AlertDialog.Builder(this).setTitle("Connecting to your PC")
+            .setMessage("Contacting " + host + ". Windows Setup VR enables pairing automatically. If receiving is off, choose Pair headset on the PC.")
             .setNegativeButton("Cancel",(d,w)->cancelHostConnection())
-            .setOnCancelListener(d->cancelHostConnection()).show();
-        connectWorker.execute(()->{
+            .setOnCancelListener(d->cancelHostConnection()).show());
+        connectWorker.execute(() -> {
             try {
-                HostPairing enrolled = bootstrap.enroll(pc, code -> runOnUiThread(() -> {
+                HostPairing enrolled = bootstrap.enroll(host, port, code -> runOnUiThread(() -> {
                     if (generation != connectGeneration || isFinishing() || isDestroyed() || connectDialog == null) return;
-                    connectDialog.setTitle("Compare codes, then approve on PC");
-                    connectDialog.setMessage(code + "\n\nIn Windows VR Host Manager, approve only if every character matches. Reject any mismatch. This approval is needed once.");
+                    connectDialog.setTitle("Approve matching code on Windows");
+                    String body = code
+                            + "\n\nOn the PC, compare every character and approve. Mismatches mean a different PC; cancel and retry.";
+                    connectDialog.setMessage(body);
                     android.widget.TextView message = connectDialog.findViewById(android.R.id.message);
                     if (message != null) message.setTypeface(android.graphics.Typeface.MONOSPACE);
-                }));
-                final HostPairing result=enrolled;
-                runOnUiThread(()->{
-                    if (generation!=connectGeneration || isFinishing() || isDestroyed()) return;
-                    try { new PairingStore(getApplicationContext()).save(result); }
-                    catch(Exception e) {
-                        finishHostConnection();Toast.makeText(this,"Could not save VR pairing. Retry Setup VR.",Toast.LENGTH_LONG).show();return;
+                    // Kick the countdown. The deadline was set
+                    // BEFORE this callback fired, so the first tick
+                    // already observes a non-zero remaining time.
+                    if (tick[0] == null) {
+                        tick[0] = new Runnable() {
+                            @Override public void run() {
+                                if (generation != connectGeneration || isFinishing() || isDestroyed() || connectDialog == null) return;
+                                long remaining = bootstrap.remainingDeadlineMs();
+                                long secs = remaining / 1000L;
+                                if (secs != lastShownSecs[0]) {
+                                    lastShownSecs[0] = secs;
+                                    StringBuilder b = new StringBuilder(code);
+                                    if (secs >= 0L) {
+                                        b.append("\n\nOn the PC, compare every character and approve. Mismatches mean a different PC; cancel and retry.")
+                                         .append("\nTime remaining on PC window: ").append(secs).append("s.");
+                                    }
+                                    connectDialog.setMessage(b.toString());
+                                    android.widget.TextView m = connectDialog.findViewById(android.R.id.message);
+                                    if (m != null) m.setTypeface(android.graphics.Typeface.MONOSPACE);
+                                }
+                                if (remaining > 0L) {
+                                    ui.postDelayed(this, 1000L);
+                                }
+                            }
+                        };
                     }
+                    ui.removeCallbacks(tick[0]);
+                    ui.post(tick[0]);
+                }));
+                if (generation != connectGeneration || isFinishing() || isDestroyed()) return;
+                // Persist an approved credential off the UI thread. If Cancel
+                // races a save already in progress, retain that credential but
+                // suppress all late UI and never start VR automatically.
+                try { createPairingStore().save(enrolled); }
+                catch (Exception e) {
+                    throw new com.vibertemis.quest.pcvr.StandalonePairingClient.SetupFailure(
+                            "Could not save VR pairing. Retry Setup VR.");
+                }
+                if (generation != connectGeneration || isFinishing() || isDestroyed()) return;
+                runOnUiThread(() -> {
+                    if (tick[0] != null) ui.removeCallbacks(tick[0]);
+                    if (generation!=connectGeneration || isFinishing() || isDestroyed()) return;
                     finishHostConnection();
                     if (!resumed) {
-                        pairingNotice = "VR pairing ready. Choose Connect when you’re ready; SteamVR starts from the headset.";
+                        pairingNotice = "Paired. Choose Connect when you're ready; SteamVR starts from the headset.";
                         return;
                     }
-                    new android.app.AlertDialog.Builder(this).setTitle("VR pairing ready")
-                        .setMessage("Your PC is paired for VR. Choose Connect when you’re ready; SteamVR starts from the headset.")
-                        .setPositiveButton("Done",null).show();
+                    trackDialog(new android.app.AlertDialog.Builder(this).setTitle("Paired")
+                        .setMessage("Your PC is paired for VR. Tap Connect on the headset to start SteamVR. SteamVR may prompt for confirmation on the PC before it restarts.")
+                        .setPositiveButton("Done",null).show());
                 });
             } catch(Exception e) {
-                final String message=e instanceof com.vibertemis.quest.pcvr.StandalonePairingClient.SetupFailure
-                    ? e.getMessage() : "Could not finish VR setup. Open Setup VR in the Windows VR Host Manager, then retry. Your previous pairing is kept.";
-                runOnUiThread(()->{
+                final String message;
+                final boolean retryable;
+                if (e instanceof com.vibertemis.quest.pcvr.StandalonePairingClient.SetupFailure) {
+                    com.vibertemis.quest.pcvr.StandalonePairingClient.SetupFailure sf =
+                            (com.vibertemis.quest.pcvr.StandalonePairingClient.SetupFailure) e;
+                    message = sf.getMessage();
+                    retryable = !com.vibertemis.quest.pcvr.StandalonePairingClient.CODE_INVALID.equals(sf.code);
+                } else {
+                    message = "Could not reach your PC. Check that VR Host Manager is running and the address is reachable, then retry.";
+                    retryable = true;
+                }
+                runOnUiThread(() -> {
+                    if (tick[0] != null) ui.removeCallbacks(tick[0]);
                     if(generation!=connectGeneration || isFinishing() || isDestroyed())return;
                     finishHostConnection();
                     if (!resumed) { pairingNotice = message; return; }
-                    new android.app.AlertDialog.Builder(this).setTitle("VR setup needs attention").setMessage(message)
-                        .setPositiveButton("Retry",(d,w)->showVrSetup()).setNegativeButton("Close",null).show();
+                    android.app.AlertDialog.Builder b = new android.app.AlertDialog.Builder(this)
+                            .setTitle("VR setup needs attention").setMessage(message)
+                            .setNegativeButton("Close",null);
+                    if (retryable) b.setPositiveButton("Retry", (d,w) -> showVrSetup());
+                    trackDialog(b.show());
                 });
             }
         });
     }
 
     private void confirmPcvrRestart(Runnable connect) {
+        if (!resumed || isFinishing() || isDestroyed() || connectPending || launchPending) return;
         connectPending = true;
         final int generation = ++connectGeneration;
-        connectDialog = new android.app.AlertDialog.Builder(this)
+        connectDialog = trackDialog(new android.app.AlertDialog.Builder(this)
             .setTitle("Connect to PCVR?")
             .setMessage("SteamVR may restart to apply your headset and codec settings. Save any VR game in progress on the PC first.")
             .setNegativeButton("Cancel", (d, w) -> cancelHostConnection())
@@ -603,7 +983,7 @@ public class MainHubActivity extends Activity {
                 if (!resumed || isFinishing() || isDestroyed() || !VrCapabilities.isHeadset(this) || !hasMicPermission()) return;
                 restartConsentUntil = android.os.SystemClock.elapsedRealtime() + 120000;
                 connect.run();
-            }).show();
+            }).show());
     }
 
     private void startPcvrConnection() {
@@ -613,11 +993,11 @@ public class MainHubActivity extends Activity {
         final int generation = ++connectGeneration;
         final HostClient client = createHostClient();
         hostClient = client;
-        connectDialog = new android.app.AlertDialog.Builder(this)
+        connectDialog = trackDialog(new android.app.AlertDialog.Builder(this)
                 .setTitle("Starting PCVR")
                 .setMessage("Contacting your PC and waiting for SteamVR…")
                 .setNegativeButton("Cancel", (d,w) -> cancelHostConnection())
-                .setOnCancelListener(d -> cancelHostConnection()).show();
+                .setOnCancelListener(d -> cancelHostConnection()).show());
         connectWorker.execute(() -> {
             try {
                 HostPairing pairing = loadHostPairing();
@@ -649,24 +1029,24 @@ public class MainHubActivity extends Activity {
                     if (generation != connectGeneration || !connectPending) return;
                     finishHostConnection();
                     if (!resumed || isFinishing() || isDestroyed()) return;
-                    new android.app.AlertDialog.Builder(this).setTitle("PCVR connection stopped").setMessage(message)
+                    trackDialog(new android.app.AlertDialog.Builder(this).setTitle("PCVR connection stopped").setMessage(message)
                         .setPositiveButton("Retry", (d,w) -> launchSteamVr())
                         .setNegativeButton("Cancel", null)
-                        .setNeutralButton("Connection options", (d,w) -> showConnectionOptions()).show();
+                        .setNeutralButton("Connection options", (d,w) -> showConnectionOptions()).show());
                 });
             }
         });
     }
 
     private void showConnectionOptions() {
-        new android.app.AlertDialog.Builder(this).setTitle("PCVR connection options")
+        trackDialog(new android.app.AlertDialog.Builder(this).setTitle("PCVR connection options")
             .setItems(new String[]{"Pair or change PC", "Open PCVR manually"}, (d,which) -> {
                 if (which == 0) showVrSetup();
                 else if (resumed && hasMicPermission() && VrCapabilities.isHeadset(this)) {
                     if (usesNativeRuntime()) confirmPcvrRestart(this::dispatchSteamVr);
                     else dispatchSteamVr();
                 }
-            }).setNegativeButton("Cancel", null).show();
+            }).setNegativeButton("Cancel", null).show());
     }
 
     private void finishHostConnection() {
@@ -685,6 +1065,17 @@ public class MainHubActivity extends Activity {
 
     @Override protected void onDestroy() {
         cancelHostConnection();
+        cancelVrSetupDiscovery();
+        permissionContinuationPending = false;
+        // Dismiss listeners remove entries; iterate a snapshot.
+        for (android.app.AlertDialog d : new java.util.ArrayList<>(transientDialogs)) {
+            if (d != null && d.isShowing()) {
+                try { d.dismiss(); } catch (Exception ignored) { }
+            }
+        }
+        transientDialogs.clear();
+        if (setupDialog != null) { try { setupDialog.dismiss(); } catch (Exception ignored) { } setupDialog = null; }
+        if (connectDialog != null) { try { connectDialog.dismiss(); } catch (Exception ignored) { } connectDialog = null; }
         connectWorker.shutdownNow();
         if (updateRepository != null && updateObserver != null) updateRepository.removeObserver(updateObserver);
         super.onDestroy();
@@ -732,16 +1123,30 @@ public class MainHubActivity extends Activity {
     /**
      * Trigger a metadata-only update check when the hub is idle and
      * not in the middle of another dispatch. The shared repository
-     * throttles repeated calls (6 h success, 15 min failure); the
+     * throttles repeated calls (6 h success, 15 min failure) and
+     * coalesces concurrent triggers onto the in-flight handle; the
      * hub never blocks the user or cancels an existing in-flight
      * check. Errors are intentionally absorbed because a failed
      * background check must not block gaming.
      *
-     * <p>A live PCVR session ({@code <pkg>:pcvr} process) suppresses
-     * the auto-trigger: in-VR update prompts are distracting and the
-     * metadata itself does not need to be checked while the headset
-     * is being used. The user can still tap "Check now" in the
-     * updates screen for a forced refresh.
+     * <p>The auto-trigger is suppressed while the host is busy:
+     * <ul>
+     *   <li>a live PCVR session ({@code <pkg>:pcvr} process) — in-VR
+     *       update prompts are distracting and the metadata itself
+     *       does not need to be checked while the headset is being
+     *       used;</li>
+     *   <li>an in-flight connect / VR launch / pairing request —
+     *       the metadata check shares the same shared repository
+     *       and would interfere with the user-visible flow;</li>
+     *   <li>a pending permission request — the round-trip is short
+     *       and dispatching a check on top would race with the
+     *       upcoming launch.</li>
+     * </ul>
+     * The next {@code onResume} after the host goes idle will pick
+     * up the deferred check through the same repository.
+     *
+     * <p>The user can always tap "Check now" in the updates screen
+     * for a forced refresh.
      */
     private void triggerUpdateCheckIfIdle(boolean force) {
         com.vibertemis.quest.update.UpdateRepository repository =
@@ -750,6 +1155,9 @@ public class MainHubActivity extends Activity {
         if (!force) {
             if (!repository.shouldRunByThrottle(false)) return;
             if (isLivePcvrSessionRunning()) return;
+            // Defer while any user-visible dispatch is in flight.
+            // The next idle onResume will run the check naturally.
+            if (launchPending || requestPending || connectPending) return;
         }
         try { repository.requestCheck(force); }
         catch (IllegalStateException ignored) { /* bind missing - skip */ }
@@ -781,6 +1189,23 @@ public class MainHubActivity extends Activity {
      * Render the hub updates badge from a shared snapshot. The badge
      * is intentionally lightweight: a single status line that the
      * user can ignore. It NEVER blocks Connect or any other launch.
+     *
+     * <p>Status visibility ladder:
+     * <ol>
+     *   <li>checking — a metadata check is in flight;</li>
+     *   <li>downloaded ready — verified APK on disk (always wins
+     *       over an available metadata-only newer candidate because
+     *       the verified download is what the user can install);</li>
+     *   <li>available — newer signed metadata is known, no verified
+     *       APK yet;</li>
+     *   <li>offline — last check failed; user can retry from the
+     *       updates screen;</li>
+     *   <li>current — a successful check found no newer release;
+     *       the badge stays visible until the user opens the screen
+     *       so the check outcome is always visible.</li>
+     * </ol>
+     * No "up to date" badge is shown before a successful check has
+     * happened — the badge is hidden when nothing is known yet.
      */
     private void renderUpdatesBadge(com.vibertemis.quest.update.UpdateRepository.Snapshot snap) {
         TextView badge = findViewById(R.id.hub_updates_badge);
@@ -791,22 +1216,26 @@ public class MainHubActivity extends Activity {
             badge.setVisibility(View.VISIBLE);
             return;
         }
-        if (snap.hasAvailable()) {
-            if (snap.hasDownloaded()) {
-                badge.setText(getString(R.string.hub_updates_badge_ready, snap.downloaded.version));
-            } else {
-                badge.setText(getString(R.string.hub_updates_badge_available, snap.available.version));
-            }
-            badge.setVisibility(View.VISIBLE);
-            return;
-        }
         if (snap.hasDownloaded()) {
             badge.setText(getString(R.string.hub_updates_badge_ready, snap.downloaded.version));
             badge.setVisibility(View.VISIBLE);
             return;
         }
+        if (snap.hasAvailable()) {
+            badge.setText(getString(R.string.hub_updates_badge_available, snap.available.version));
+            badge.setVisibility(View.VISIBLE);
+            return;
+        }
         if (snap.lastError != null) {
             badge.setText(R.string.hub_updates_badge_offline);
+            badge.setVisibility(View.VISIBLE);
+            return;
+        }
+        if (snap.lastSuccessAtMs > 0) {
+            // A successful check ran and reported no newer release.
+            // Surface "current" until something newer shows up, so the
+            // user has visible confirmation that the app is checked.
+            badge.setText(R.string.hub_updates_badge_current);
             badge.setVisibility(View.VISIBLE);
             return;
         }

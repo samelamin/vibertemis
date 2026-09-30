@@ -41,4 +41,17 @@ public final class UpdateRepositoryProvider {
             e.shutdownNow();
         }
     }
+
+    /** Test-only install path that bypasses the production
+     *  resource load. The lifecycle tests supply their own
+     *  already-bound repository (with a fake source) so they
+     *  can assert the open / pause / resume / close path without
+     *  touching the real {@code quest_update_key} PEM or the
+     *  network transport. Package-private so callers outside the
+     *  update package cannot reach it; the lifecycle test lives in
+     *  the same package. */
+    static synchronized void installForTest(UpdateRepository repo) {
+        UpdateRepository prior = INSTANCE.getAndSet(repo);
+        if (prior != null && prior != repo) prior.shutdown();
+    }
 }

@@ -266,8 +266,28 @@ public final class UpdateRepository {
         if (force) return true;
         Snapshot s = snapshot.get();
         long now = clock.now();
-        if (s.lastSuccessAtMs > 0 && (now - s.lastSuccessAtMs) < SUCCESS_INTERVAL_MS) return false;
-        if (s.lastFailureAtMs > 0 && (now - s.lastFailureAtMs) < FAILURE_INTERVAL_MS && s.lastSuccessAtMs < s.lastFailureAtMs) return false;
+        // Failure beats success on a tie. The IN-MEMORY snapshot
+        // (timestamps are not persisted to disk — the activity
+        // history resets across process restarts and the throttle
+        // re-arms on the next open) records the same timestamp for
+        // both fields when a check finishes
+        // (recordAvailable / recordNoNewerAvailable advance
+        // success; recordFailure advances failure). When the latest
+        // outcome was a failure, lastFailureAtMs equals or exceeds
+        // lastSuccessAtMs AND lastError is non-null. We pick the
+        // failure branch on a tie so a forced retry is not blocked
+        // for the rest of the 6-hour success window.
+        boolean failureIsLatestOrTie =
+                s.lastFailureAtMs >= s.lastSuccessAtMs && s.lastError != null;
+        if (failureIsLatestOrTie) {
+            return (now - s.lastFailureAtMs) >= FAILURE_INTERVAL_MS;
+        }
+        if (s.lastSuccessAtMs > 0) {
+            return (now - s.lastSuccessAtMs) >= SUCCESS_INTERVAL_MS;
+        }
+        if (s.lastFailureAtMs > 0) {
+            return (now - s.lastFailureAtMs) >= FAILURE_INTERVAL_MS;
+        }
         return true;
     }
 
@@ -610,4 +630,8 @@ public final class UpdateRepository {
 
     /** Visible for tests so they can inject a hydration result. */
     void hydrateForTest() { hydrateFromCache(); }
+
+    /** Visible for tests so a lifecycle test can assert no
+     *  observer leaks across an activity's destroy path. */
+    int observerCountForTest() { return observers.size(); }
 }
