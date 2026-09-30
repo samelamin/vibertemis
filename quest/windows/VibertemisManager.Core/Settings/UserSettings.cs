@@ -4,9 +4,12 @@
 //   %LOCALAPPDATA%\VibertemisVRHostManager\settings.json
 // They capture the user's IPv4 selection (so we can re-bind the
 // companion on subsequent launches without asking again), the
-// opt-in autostart flag, and an opt-in flag for restoring the
-// companion on startup. Settings never contain credentials or
-// tokens.
+// opt-in "Keep host ready after Windows sign-in" preference,
+// and an opt-in flag for restoring the companion on startup.
+// Settings never contain credentials or tokens.
+//
+// Existing startup choices survive upgrades. A missing settings file receives
+// a recommended pending choice; the Run entry is written on explicit Start.
 using System;
 using System.IO;
 using System.Text.Json;
@@ -25,6 +28,11 @@ public sealed class UserSettings
     public int SchemaVersion { get; set; } = 1;
     public string CompanionListenAddress { get; set; } = "127.0.0.1";
     public ushort CompanionListenPort { get; set; } = 28540;
+
+    // Phase-2 unified keep-ready preference. Optional in the
+    // file so older settings JSON round-trips cleanly.
+    public bool? KeepHostReadyAfterSignIn { get; set; }
+    public bool? StartupPreferencePersisted { get; set; }
 }
 
 public interface ISettingsStore
@@ -47,7 +55,7 @@ public sealed class JsonSettingsStore : ISettingsStore
     public UserSettings Load()
     {
         var file = Path.Combine(_paths.ManagerStateDir, "settings.json");
-        if (!_fs.FileExists(file)) return new UserSettings();
+        if (!_fs.FileExists(file)) return new UserSettings { KeepHostReadyAfterSignIn = true, StartupPreferencePersisted = false };
         try
         {
             var text = _fs.ReadAllText(file);

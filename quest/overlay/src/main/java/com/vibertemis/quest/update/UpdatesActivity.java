@@ -115,7 +115,7 @@ public final class UpdatesActivity extends Activity {
     @SuppressWarnings("deprecation") private void verifyApk(File file,UpdateManifest m) throws Exception {
         UpdateTransport.verifyFile(file,m);
         PackageInfo own=ownPackage();
-        if(m.sequence<=4 || m.versionCode<=version(own) || !m.packageName.equals(getPackageName()))throw new IOException("APK package/version mismatch or downgrade");
+        if(m.sequence<=5 || m.versionCode<=version(own) || !m.packageName.equals(getPackageName()))throw new IOException("APK package/version mismatch or downgrade");
         PackageInfo candidate=getPackageManager().getPackageArchiveInfo(file.getAbsolutePath(),Build.VERSION.SDK_INT>=28?PackageManager.GET_SIGNING_CERTIFICATES:PackageManager.GET_SIGNATURES);
         if(candidate==null || !candidate.packageName.equals(getPackageName()) || version(candidate)!=m.versionCode)throw new IOException("Downloaded APK identity mismatch");
         android.content.pm.Signature[] oldSigners=Build.VERSION.SDK_INT>=28?own.signingInfo.getApkContentsSigners():own.signatures;

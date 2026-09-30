@@ -29,6 +29,8 @@ public class SettingsStoreTests : IDisposable
         Assert.Null(settings.LastSelectedAdapterId);
         Assert.False(settings.AutoStartWithWindows);
         Assert.False(settings.RestoreCompanionOnStartup);
+        Assert.True(settings.KeepHostReadyAfterSignIn);
+        Assert.False(settings.StartupPreferencePersisted);
         Assert.True(settings.ShowTrayOnClose);
         Assert.Equal(28540, settings.CompanionListenPort);
     }
@@ -43,6 +45,8 @@ public class SettingsStoreTests : IDisposable
             LastSelectedAdapterId = "{AAAAAAAA-AAAA}",
             LastSelectedAdapterAddress = "192.168.1.10",
             AutoStartWithWindows = true,
+            KeepHostReadyAfterSignIn = true,
+            StartupPreferencePersisted = true,
             RestoreCompanionOnStartup = true,
             ShowTrayOnClose = false,
             CompanionListenAddress = "192.168.1.10",
@@ -53,6 +57,8 @@ public class SettingsStoreTests : IDisposable
         Assert.Equal(settings.LastSelectedAdapterId, loaded.LastSelectedAdapterId);
         Assert.Equal(settings.LastSelectedAdapterAddress, loaded.LastSelectedAdapterAddress);
         Assert.True(loaded.AutoStartWithWindows);
+        Assert.True(loaded.KeepHostReadyAfterSignIn);
+        Assert.True(loaded.StartupPreferencePersisted);
         Assert.True(loaded.RestoreCompanionOnStartup);
         Assert.False(loaded.ShowTrayOnClose);
         Assert.Equal((ushort)28541, loaded.CompanionListenPort);

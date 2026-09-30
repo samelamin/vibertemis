@@ -9,7 +9,7 @@ public sealed class ReleaseClient : IDisposable
 {
     private readonly HttpClient _http = new(new HttpClientHandler { AllowAutoRedirect = false })
     { Timeout = TimeSpan.FromMinutes(10) };
-    public ReleaseClient() { _http.DefaultRequestHeaders.UserAgent.ParseAdd("VibertemisVR/0.1.0.4"); }
+    public ReleaseClient() { _http.DefaultRequestHeaders.UserAgent.ParseAdd("VibertemisVR/0.1.0.5"); }
     public void Dispose() => _http.Dispose();
 
     public async Task<SignedRelease?> CheckAsync(CancellationToken cancellation)
@@ -33,7 +33,7 @@ public sealed class ReleaseClient : IDisposable
             var signature = await ReadBoundedAsync(new Uri(prefix + "quest-update.json.sig"), 384, cancellation);
             var verified = SignedRelease.Verify(manifest, signature, SignedRelease.EmbeddedPublicKey());
             if (tag != "quest-preview-v" + verified.Version) throw new InvalidDataException("Release tag does not match signed metadata");
-            if (verified.Sequence > SignedRelease.CurrentSequence && new Version(verified.Version) > new Version("0.1.0.4") && (newest is null || verified.Sequence > newest.Sequence)) newest = verified;
+            if (verified.Sequence > SignedRelease.CurrentSequence && new Version(verified.Version) > new Version("0.1.0.5") && (newest is null || verified.Sequence > newest.Sequence)) newest = verified;
         }
         return newest;
     }
@@ -43,7 +43,7 @@ public sealed class ReleaseClient : IDisposable
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
         deadline.CancelAfter(TimeSpan.FromMinutes(10));
         cancellation = deadline.Token;
-        if (release.Sequence <= SignedRelease.CurrentSequence || new Version(release.Version) <= new Version("0.1.0.4")) throw new InvalidDataException("Update would downgrade this installation");
+        if (release.Sequence <= SignedRelease.CurrentSequence || new Version(release.Version) <= new Version("0.1.0.5")) throw new InvalidDataException("Update would downgrade this installation");
         Directory.CreateDirectory(cache);
         var final = Path.Combine(cache, release.Windows.Filename);
         if (File.Exists(final))

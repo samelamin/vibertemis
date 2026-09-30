@@ -42,6 +42,8 @@ using VibertemisManager.Core.Network;
 using VibertemisManager.Core.Settings;
 using VibertemisManager.Core.Steam;
 using VibertemisManager.Core.Update;
+using VibertemisManager.Core.Recovery;
+using System.Net.NetworkInformation;
 
 namespace VibertemisManager.App;
 
@@ -57,7 +59,9 @@ public sealed class MainForm : Form
     private bool _updateBusy;
     private readonly EventWaitHandle _wake = new(false, EventResetMode.AutoReset, Program.MutexName + "-Wake");
     private readonly System.Windows.Forms.Timer _statusTimer = new() { Interval = 1000 };
-    private CompanionLaunchSpec? _runningSpec;
+    private HostRecoveryController _recovery = null!;
+    private string? _lastRecoveryMessage;
+    private bool _populatingAdapters;
 
     private readonly Label _lblHeader = new();
     private readonly Label _lblAdapter = new();
@@ -76,14 +80,12 @@ public sealed class MainForm : Form
     private readonly Button _btnExportPairing = new();
     private readonly Button _btnSetupNetwork = new();
     private readonly CheckBox _chkAutoStart = new();
-    private readonly CheckBox _chkRestoreCompanion = new();
     private readonly ListBox _lstStatus = new();
     private readonly Label _lblVersion = new();
 
     private UserSettings _settings = new();
     private bool _shownFirstTimeTrayHint;
     private bool _suppressAutoStartEvent;
-    private bool _suppressRestoreEvent;
 
     public MainForm(AppServices svc, CliArgs args)
     {
@@ -103,9 +105,10 @@ public sealed class MainForm : Form
         Shown += (_, _) => { if (_args.TrayOnly || _args.Silent) HideToTray(); };
         _statusTimer.Tick += (_, _) => {
             if (_wake.WaitOne(0)) { Show(); ShowInTaskbar = true; WindowState = FormWindowState.Normal; Activate(); }
-            RefreshCompanionStatus();
+            ReconcileHost();
             RefreshDashboardStatus();
         };
+        NetworkChange.NetworkAddressChanged += OnNetworkChanged;
         _statusTimer.Start();
     }
 
@@ -178,13 +181,13 @@ public sealed class MainForm : Form
         root.Controls.Add(new Label { Text = "Firewall" }, 0, 8);
         root.Controls.Add(_btnSetupNetwork, 1, 8);
 
-        _chkAutoStart.Text = "Start VibertemisVR Host Manager with Windows (tray-only)";
+        _chkAutoStart.Text = "Keep host ready after Windows sign-in";
         root.Controls.Add(_chkAutoStart, 0, 9);
         root.SetColumnSpan(_chkAutoStart, 2);
 
-        _chkRestoreCompanion.Text = "Restore companion on next manager launch";
-        root.Controls.Add(_chkRestoreCompanion, 0, 10);
-        root.SetColumnSpan(_chkRestoreCompanion, 2);
+        var readinessHint = new Label { Text = "One-time setup: network access, VR driver and headset pairing. Stop pauses hosting; Start resumes it.", AutoSize = true, MaximumSize = new Size(650, 0) };
+        root.Controls.Add(readinessHint, 0, 10);
+        root.SetColumnSpan(readinessHint, 2);
 
         _lstStatus.Dock = DockStyle.Fill;
         _lstStatus.HorizontalScrollbar = true;
@@ -201,7 +204,7 @@ public sealed class MainForm : Form
         };
         footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        _lblVersion.Text = "0.1.0.4-quest-preview";
+        _lblVersion.Text = "0.1.0.5-quest-preview";
         _lblVersion.AutoSize = true;
         var updateActions = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill };
         updateActions.Controls.Add(_btnUpdate);
@@ -239,20 +242,15 @@ public sealed class MainForm : Form
         _btnExportPairing.Click += (_, _) => ExportPairing();
         _btnSetupNetwork.Click += (_, _) => SetupNetworkAccess();
         _chkAutoStart.CheckedChanged += (_, _) => OnAutoStartToggled();
-        _chkRestoreCompanion.CheckedChanged += (_, _) => OnRestoreToggled();
-
-        _svc.Companion.Exited += (_, e) => OnCompanionExited(e);
     }
 
     private void InitialPopulation()
     {
         _settings = _svc.SettingsStore.Load();
         _suppressAutoStartEvent = true;
-        _chkAutoStart.Checked = _settings.AutoStartWithWindows;
+        _chkAutoStart.Checked = StartupPreference.IsEnabled(_settings);
         _suppressAutoStartEvent = false;
-        _suppressRestoreEvent = true;
-        _chkRestoreCompanion.Checked = _settings.RestoreCompanionOnStartup;
-        _suppressRestoreEvent = false;
+        _recovery = new HostRecoveryController(_svc.Companion, _svc.Adapters, _svc.IntegrityVerifier, BuildCompanionSpec);
         RefreshAdapters();
         RefreshSteamStatus();
         RefreshSteamVrStatus();
@@ -260,10 +258,13 @@ public sealed class MainForm : Form
         RefreshDashboardStatus();
         RefreshFirewallStatus();
         EnsureTrayIcon();
-        if (_settings.RestoreCompanionOnStartup && !_svc.Companion.IsRunning)
+        if (_settings.AutoStartWithWindows)
         {
-            TryStartCompanion(silentIfFails: true);
+            try { _svc.AutoStart.Enable(StartupCommand()); }
+            catch (Exception ex) { LogStatus("Windows startup needs attention: " + ex.Message); }
         }
+        if (_settings.RestoreCompanionOnStartup) _recovery.RequestStart();
+        ReconcileHost();
     }
 
     private void OnLoad()
@@ -289,14 +290,17 @@ public sealed class MainForm : Form
         }
         // Explicit Exit (or process shutdown). Stop only the
         // owned companion child.
-        var result = _svc.Companion.Stop(CompanionStopReason.ExplicitExit, TimeSpan.FromSeconds(5));
+        var result = _recovery.SuspendAndStop();
         if (result.Outcome is CompanionStopOutcome.Denied or CompanionStopOutcome.Timeout)
         {
             LogStatus("Could not stop the host companion: " + result.Error + ". Retry Exit.");
             e.Cancel = true;
             _exitRequested = false;
+            _recovery.Resume();
             return;
         }
+        _statusTimer.Stop();
+        NetworkChange.NetworkAddressChanged -= OnNetworkChanged;
         _updateCancellation?.Cancel();
         _tray?.Dispose();
     }
@@ -336,38 +340,56 @@ public sealed class MainForm : Form
     private void RefreshAdapters()
     {
         if (_svc.Companion.IsRunning) return;
-        var adapters = _svc.Adapters.Enumerate();
-        _cmbAdapter.Items.Clear();
-        NetworkAdapter? selected = null;
-        foreach (var a in adapters)
+        _populatingAdapters = true;
+        try
         {
-            _cmbAdapter.Items.Add(a);
-            if (selected is null)
-            {
-                if (_settings.LastSelectedAdapterId is not null
-                    && string.Equals(_settings.LastSelectedAdapterId, a.Id, StringComparison.Ordinal))
-                    selected = a;
-                else if (_settings.LastSelectedAdapterAddress is not null
-                    && string.Equals(_settings.LastSelectedAdapterAddress, a.Address.ToString(), StringComparison.Ordinal))
-                    selected = a;
-            }
+            var adapters = _svc.Adapters.Enumerate().Where(a => HostRecoveryController.Usable(a.Address)).ToArray();
+            _cmbAdapter.Items.Clear();
+            foreach (var a in adapters) _cmbAdapter.Items.Add(a);
+            var selected = HostRecoveryController.SelectAdapter(adapters, _settings.LastSelectedAdapterId, _settings.LastSelectedAdapterAddress);
+            // Suggest the first NIC only for initial setup. Never persist a
+            // programmatic fallback over a temporarily missing saved NIC.
+            if (selected is null && string.IsNullOrEmpty(_settings.LastSelectedAdapterId) && string.IsNullOrEmpty(_settings.LastSelectedAdapterAddress))
+                selected = adapters.FirstOrDefault();
+            if (selected is not null) _cmbAdapter.SelectedItem = selected;
         }
-        if (selected is null && _cmbAdapter.Items.Count > 0)
-            selected = (NetworkAdapter)_cmbAdapter.Items[0]!;
-        if (selected is not null)
-        {
-            _cmbAdapter.SelectedItem = selected;
-        }
-        LogStatus($"Adapter enumeration: {adapters.Count} reachable IPv4 interface(s).");
+        catch (Exception ex) { LogStatus("Network list unavailable; automatic recovery will retry: " + ex.Message); }
+        finally { _populatingAdapters = false; }
     }
 
     private void OnAdapterPicked()
     {
-        if (!(_cmbAdapter.SelectedItem is NetworkAdapter a)) return;
+        if (_populatingAdapters || _cmbAdapter.SelectedItem is not NetworkAdapter a) return;
         _settings.LastSelectedAdapterId = a.Id;
         _settings.LastSelectedAdapterAddress = a.Address.ToString();
         _settings.CompanionListenAddress = a.Address.ToString();
         SaveSettings();
+        _recovery?.NetworkChanged();
+    }
+
+    private void OnNetworkChanged(object? sender, EventArgs args)
+    {
+        if (IsDisposed || Disposing || !IsHandleCreated) return;
+        try { BeginInvoke(new Action(() => {
+            if (IsDisposed || Disposing || _exitRequested) return;
+            _recovery.NetworkChanged();
+            ReconcileHost();
+            RefreshAdapters();
+        })); } catch (InvalidOperationException) { /* Window closed during callback. */ }
+    }
+
+    private CompanionLaunchSpec BuildCompanionSpec(NetworkAdapter adapter) => new(
+        Path.Combine(_svc.Paths.ProgramsRoot, "manager", "bin", "vibertemis-host-companion.exe"),
+        adapter.Address.ToString(), _settings.CompanionListenPort,
+        adapter.Address.ToString(), _settings.CompanionListenPort,
+        _svc.AlvrLocator.Resolve().SessionJsonPath, _svc.Paths.CompanionStateDir);
+
+    private void ReconcileHost()
+    {
+        if (_exitRequested) return;
+        var status = _recovery.Tick(_settings.LastSelectedAdapterId, _settings.LastSelectedAdapterAddress);
+        if (_lastRecoveryMessage != status.Message) { _lastRecoveryMessage = status.Message; LogStatus(status.Message); }
+        RefreshCompanionStatus();
     }
 
     private void RefreshSteamStatus()
@@ -402,22 +424,14 @@ public sealed class MainForm : Form
 
     private void RefreshCompanionStatus()
     {
-        _cmbAdapter.Enabled = !_svc.Companion.IsRunning;
-        _btnRefreshAdapters.Enabled = !_svc.Companion.IsRunning;
-        _btnExportPairing.Enabled = _svc.Companion.IsRunning;
-        if (_svc.Companion.IsRunning)
-        {
-            _lblCompanion.Text = $"Host companion: running (PID {_svc.Companion.ProcessId})";
-            _btnCompanionToggle.Text = "Stop companion";
-            _btnCompanionToggle.Enabled = true;
-            _btnExportPairing.Enabled = true;
-        }
-        else
-        {
-            _lblCompanion.Text = "Host companion: idle";
-            _btnCompanionToggle.Text = "Start companion";
-            _btnCompanionToggle.Enabled = _cmbAdapter.SelectedItem is NetworkAdapter;
-        }
+        var running = _svc.Companion.IsRunning;
+        var blocked = _recovery.Status.State == HostRecoveryState.IntegrityBlocked;
+        _lblCompanion.Text = _recovery.Status.Message;
+        _cmbAdapter.Enabled = !running;
+        _btnRefreshAdapters.Enabled = !running;
+        _btnExportPairing.Enabled = running && _recovery.RunningSpec is not null;
+        _btnCompanionToggle.Text = running || (_recovery.DesiredRunning && !blocked) ? "Stop companion" : "Start companion";
+        _btnCompanionToggle.Enabled = true;
     }
 
     private void RefreshDashboardStatus()
@@ -445,69 +459,21 @@ public sealed class MainForm : Form
 
     private void ToggleCompanion()
     {
-        if (_svc.Companion.IsRunning)
+        if (_svc.Companion.IsRunning || (_recovery.DesiredRunning && _recovery.Status.State != HostRecoveryState.IntegrityBlocked))
         {
-            var result = _svc.Companion.Stop(CompanionStopReason.ExplicitExit, TimeSpan.FromSeconds(5));
-            if (result.Outcome != CompanionStopOutcome.Stopped && result.Outcome != CompanionStopOutcome.AlreadyExited)
-                LogStatus("Failed to stop companion: " + (result.Error ?? result.Outcome.ToString()));
-            else { _runningSpec = null; RememberCompanion(false); }
+            RememberCompanion(false);
+            var result = _recovery.RequestStop();
+            if (result.Outcome is CompanionStopOutcome.Denied or CompanionStopOutcome.Timeout)
+                LogStatus("Failed to stop companion: " + result.Error);
         }
         else
         {
-            TryStartCompanion(silentIfFails: false);
-        }
-        RefreshCompanionStatus();
-    }
-
-    private void TryStartCompanion(bool silentIfFails)
-    {
-        if (_cmbAdapter.SelectedItem is not NetworkAdapter a)
-        {
-            if (!silentIfFails) LogStatus("Pick an IPv4 adapter first.");
-            return;
-        }
-        var alvr = _svc.AlvrLocator.Resolve();
-        var exe = Path.Combine(_svc.Paths.ProgramsRoot, "manager", "bin", "vibertemis-host-companion.exe");
-        var spec = new CompanionLaunchSpec(
-            CompanionExePath: exe,
-            ListenAddress: a.Address.ToString(),
-            listenPort: _settings.CompanionListenPort,
-            AdvertiseAddress: a.Address.ToString(),
-            AdvertisePort: _settings.CompanionListenPort,
-            AlvrSessionPath: alvr.SessionJsonPath,
-            StateDir: _svc.Paths.CompanionStateDir);
-        try
-        {
-            _svc.Companion.Start(spec, _svc.IntegrityVerifier);
-            _runningSpec = spec;
+            OnAdapterPicked(); // Persist the suggested NIC only on explicit Start.
+            if (StartupPreference.IsEnabled(_settings)) ApplyStartupPreference(true);
             RememberCompanion(true);
-            RefreshCompanionStatus();
-            LogStatus($"Companion started (PID {_svc.Companion.ProcessId}).");
+            _recovery.RequestStart();
         }
-        catch (CompanionIntegrityException ex)
-        {
-            LogStatus("Integrity check failed: " + ex.Message);
-        }
-        catch (InvalidOperationException ex)
-        {
-            LogStatus("Cannot start companion: " + ex.Message);
-        }
-        catch (Exception ex)
-        {
-            LogStatus("Companion launch failed: " + ex.Message);
-        }
-    }
-
-    private void OnCompanionExited(CompanionStopped e)
-    {
-        if (IsDisposed || Disposing || !IsHandleCreated) return;
-        if (InvokeRequired)
-        {
-            BeginInvoke(new Action(() => OnCompanionExited(e)));
-            return;
-        }
-        LogStatus($"Companion exited (PID {e.ProcessId}, code {e.ExitCode}, reason {e.Reason}).");
-        RefreshCompanionStatus();
+        ReconcileHost();
     }
 
     private void OpenDashboard()
@@ -558,17 +524,12 @@ public sealed class MainForm : Form
 
     private async void ExportPairing()
     {
-        if (_cmbAdapter.SelectedItem is not NetworkAdapter a)
-        {
-            LogStatus("Pick an IPv4 adapter first.");
-            return;
-        }
         if (!_svc.Companion.IsRunning)
         {
             LogStatus("Start the companion first; pairing export reuses its advertised address.");
             return;
         }
-        var spec = _runningSpec;
+        var spec = _recovery.RunningSpec;
         if (spec is null) { LogStatus("Restart the companion before exporting pairing."); return; }
         _btnExportPairing.Enabled = false;
         try
@@ -622,23 +583,48 @@ public sealed class MainForm : Form
         finally { if (!IsDisposed) _btnSetupNetwork.Enabled = true; }
     }
 
+    private string StartupCommand() => $"\"{Path.Combine(_svc.Paths.ProgramsRoot, "manager", "VibertemisManager.App.exe")}\" --tray-only --silent";
+
     private void OnAutoStartToggled()
     {
         if (_suppressAutoStartEvent) return;
         var enabled = _chkAutoStart.Checked;
-        var exe = Path.Combine(_svc.Paths.ProgramsRoot, "manager", "VibertemisManager.App.exe");
-        var cmd = $"\"{exe}\" --tray-only --silent";
+        if (ApplyStartupPreference(enabled) && enabled)
+        {
+            OnAdapterPicked();
+            _recovery.RequestStart();
+            ReconcileHost();
+        }
+    }
+
+    private bool ApplyStartupPreference(bool enabled)
+    {
+        var before = (_settings.AutoStartWithWindows, _settings.RestoreCompanionOnStartup,
+            _settings.KeepHostReadyAfterSignIn, _settings.StartupPreferencePersisted);
+        AutoStartState? priorRun = null;
         try
         {
-            if (enabled) _svc.AutoStart.Enable(cmd);
-            else _svc.AutoStart.Disable();
-            _settings.AutoStartWithWindows = enabled;
-            SaveSettings();
-            LogStatus("Start with Windows: " + (enabled ? "enabled" : "disabled"));
+            priorRun = _svc.AutoStart.Inspect();
+            if (enabled) _svc.AutoStart.Enable(StartupCommand()); else _svc.AutoStart.Disable();
+            StartupPreference.Apply(_settings, enabled);
+            _svc.SettingsStore.Save(_settings);
+            LogStatus(enabled ? "Automatic hosting enabled after Windows sign-in." : "Automatic startup disabled. Stop companion also stops this session.");
+            return true;
         }
         catch (Exception ex)
         {
-            LogStatus("Auto-start toggle failed: " + ex.Message);
+            (_settings.AutoStartWithWindows, _settings.RestoreCompanionOnStartup,
+                _settings.KeepHostReadyAfterSignIn, _settings.StartupPreferencePersisted) = before;
+            if (priorRun is not null)
+            {
+                try { if (priorRun.Enabled && priorRun.CommandLine is not null) _svc.AutoStart.Enable(priorRun.CommandLine); else _svc.AutoStart.Disable(); }
+                catch (Exception rollback) { LogStatus("Windows startup needs repair: " + rollback.Message); }
+            }
+            _suppressAutoStartEvent = true;
+            _chkAutoStart.Checked = StartupPreference.IsEnabled(_settings);
+            _suppressAutoStartEvent = false;
+            LogStatus("Could not save automatic hosting: " + ex.Message);
+            return false;
         }
     }
 
@@ -651,18 +637,7 @@ public sealed class MainForm : Form
     private void RememberCompanion(bool enabled)
     {
         _settings.RestoreCompanionOnStartup = enabled;
-        _suppressRestoreEvent = true;
-        _chkRestoreCompanion.Checked = enabled;
-        _suppressRestoreEvent = false;
         SaveSettings();
-    }
-
-    private void OnRestoreToggled()
-    {
-        if (_suppressRestoreEvent) return;
-        _settings.RestoreCompanionOnStartup = _chkRestoreCompanion.Checked;
-        SaveSettings();
-        LogStatus("Restore companion on startup: " + (_settings.RestoreCompanionOnStartup ? "enabled" : "disabled"));
     }
 
     private async Task CheckForUpdates()
@@ -695,10 +670,12 @@ public sealed class MainForm : Form
             // Recheck cached bytes at the execution boundary, then stop only our
             // own companion. Failure keeps this manager open and usable.
             ReleaseClient.VerifyFile(file, release.Windows);
-            var wasRunning = _svc.Companion.IsRunning;
-            var stopped = _svc.Companion.Stop(CompanionStopReason.ManagerExit, TimeSpan.FromSeconds(5));
+            var stopped = _recovery.SuspendAndStop();
             if (stopped.Outcome is CompanionStopOutcome.Denied or CompanionStopOutcome.Timeout)
+            {
+                _recovery.Resume();
                 throw new InvalidOperationException("Could not stop the host companion. " + stopped.Error);
+            }
             try
             {
                 var start = new ProcessStartInfo(file) { UseShellExecute = true };
@@ -708,7 +685,7 @@ public sealed class MainForm : Form
                 _exitRequested = true;
                 Close();
             }
-            catch { if (wasRunning) TryStartCompanion(silentIfFails: false); throw; }
+            catch { _recovery.Resume(); ReconcileHost(); throw; }
         }
         catch (OperationCanceledException) { if (!IsDisposed) LogStatus("Update cancelled or timed out. Your current installation is unchanged."); }
         catch (Exception ex) { if (!IsDisposed) LogStatus("Update unavailable: " + ex.Message); }
@@ -746,6 +723,7 @@ public sealed class MainForm : Form
             return;
         }
         _lstStatus.Items.Add(stamped);
+        while (_lstStatus.Items.Count > 500) _lstStatus.Items.RemoveAt(0);
         _lstStatus.TopIndex = _lstStatus.Items.Count - 1;
     }
 
@@ -753,6 +731,7 @@ public sealed class MainForm : Form
     {
         if (disposing)
         {
+            NetworkChange.NetworkAddressChanged -= OnNetworkChanged;
             _updateCancellation?.Cancel();
             _updates.Dispose();
             _statusTimer.Dispose();

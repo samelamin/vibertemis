@@ -1,7 +1,7 @@
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $repo = (Resolve-Path "$PSScriptRoot/../..").Path
-$setup = (Get-Item "$repo/build/installer/VibertemisVR-HostManager-Setup-0.1.0.4.exe").FullName
+$setup = (Get-Item "$repo/build/installer/VibertemisVR-HostManager-Setup-0.1.0.5.exe").FullName
 $root = Join-Path $env:RUNNER_TEMP ('Vibertemis smoke ü ' + [Guid]::NewGuid().ToString('N'))
 $dest = Join-Path $root 'Custom VR install'
 New-Item -ItemType Directory -Path $root | Out-Null
@@ -17,6 +17,7 @@ $header = [BitConverter]::ToInt32($pe, 0x3c)
 if ([BitConverter]::ToUInt16($pe, $header + 24 + 68) -ne 2) { throw 'Manager is a console app; GUI subsystem required' }
 $verify = Start-Process -FilePath $manager -ArgumentList '--verify-install' -Wait -PassThru
 if ($verify.ExitCode -ne 0) { throw 'Installed payload diagnostic failed' }
+& "$PSScriptRoot/smoke-recovery.ps1" -Manager $manager
 $session = "$dest/runtime/session.json"
 [IO.File]::WriteAllText($session, '{"_smoke":"retain exact bytes"}')
 $sessionHash = (Get-FileHash $session).Hash

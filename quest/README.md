@@ -9,8 +9,8 @@ A single arm64 APK shipping two streaming modes from one launcher.
   tracking on Quest3. The PC host runs the ALVR streamer; this APK is
   the headset client. Hardware behavior on Quest3 is UNTESTED.
 
-APK `vibertemis-quest-preview-0.1.0.4.apk`, package
-`com.vibertemis.quest.preview.debug`, version `0.1.0-quest-preview.4`,
+APK `vibertemis-quest-preview-0.1.0.5.apk`, package
+`com.vibertemis.quest.preview.debug`, version `0.1.0-quest-preview.5`,
 `arm64-v8a` only, `minSdk=26`, `targetSdk=34`. No second ALVR headset
 app — the runtime is bundled inside this APK.
 
@@ -20,7 +20,7 @@ app — the runtime is bundled inside this APK.
    <https://developers.meta.com/horizon/documentation/native/android/mobile-device-setup/>.
 2. Connect over USB and accept the "Allow USB debugging?" prompt on
    the headset.
-3. `adb install -r vibertemis-quest-preview-0.1.0.4.apk`.
+3. `adb install -r vibertemis-quest-preview-0.1.0.5.apk`.
 4. Launch under **Unknown Sources**.
 
 ## Screen mode
@@ -73,7 +73,7 @@ is still required; this is an experimental test build.
 
 ### Windows host setup
 
-1. Run `VibertemisVR-HostManager-Setup-0.1.0.4.exe` in your normal Windows
+1. Run `VibertemisVR-HostManager-Setup-0.1.0.5.exe` in your normal Windows
    account. The per-user wizard installs the manager and matching VR runtime.
    Keep Vibeshine installed for flat streaming. No PowerShell is needed.
 2. Open **VibertemisVR Host Manager**. Use its prerequisite buttons if Steam,
@@ -83,7 +83,7 @@ is still required; this is an experimental test build.
    on Private/Domain networks. Open **ALVR Dashboard**, complete its first-run
    wizard and register the matching VR driver; its wizard handles streaming
    firewall rules. Do this once before connecting.
-4. Click **Start companion**, then **Export pairing file**. Copy the revealed
+4. Enable **Keep host ready after Windows sign-in**, then click **Start companion** if it is stopped. Click **Export pairing file**. Copy the revealed
    `pairing-export.json` to Quest Downloads over USB, open **PCVR settings**,
    and import it. Keep this credential private; remove the transferred copy
    after import. Trust the headset in ALVR Dashboard on first connection.
@@ -92,11 +92,26 @@ is still required; this is an experimental test build.
    path automatically. **Flat screen** remains an explicit override. Phones
    take the flat path and do not ask the host to start SteamVR.
 
-The host companion remembers a successful start. Closing the manager window
-keeps it in the tray; **Exit** stops its companion, leaving SteamVR running.
-**Start with Windows** is opt-in. After pairing, LAN discovery can recover a
-changed PC address, but still verifies the saved PC identity before connecting.
-Discovery, settings and opening the app never start SteamVR.
+After this one-time setup, sign in to Windows and leave the manager in the
+tray. It waits for the saved network, retries startup/crashes (2–30 seconds,
+then a 60-second cooldown after repeated failures), and rebinds its connection
+service when that adapter's address changes. Pairing stays intact. This never
+starts or stops SteamVR by itself; the paired Quest Connect request starts VR.
+A missing saved adapter waits instead of switching to a different network.
+
+**Keep host ready after Windows sign-in** is the single startup setting.
+For a new installation it is recommended before the first explicit Start.
+Existing preview4 startup choices are preserved: enable this checkbox once if
+it was previously off. Closing the window keeps hosting in the tray. **Stop
+companion** pauses hosting and next-launch restoration until you Start again.
+**Exit** stops the current companion but preserves next-login restoration.
+Disabling the checkbox disables future automatic startup/restoration; use Stop
+as well if you want to stop the current session. Startup is after Windows
+sign-in, not a service running at the login screen.
+
+Paired LAN discovery recovers changed PC addresses after authenticating the
+saved PC identity. Internet use still needs a reachable direct/VPN address.
+See [RECOVERY_PLAN.md](RECOVERY_PLAN.md) for the reboot-to-Quest test checklist.
 
 For an existing ZIP setup, pairing in the user profile is reused. Its ALVR
 session stays in the old ZIP folder; close VR and use Explorer to copy that
