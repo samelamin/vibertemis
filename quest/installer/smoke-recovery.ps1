@@ -106,11 +106,11 @@ try {
     if ($script:child.ProcessId -eq $oldId) { throw 'Expected replacement companion' }
     if ((Get-FileHash $identity).Hash -ne $identityHash) { throw 'Recovery changed pairing identity' }
     # Explicit Stop must defeat automatic recovery for longer than its retry cap.
-    [RecoverySmokeUi]::Click([RecoverySmokeUi]::Find($script:managerProcess.Id,'Stop companion'))
+    [RecoverySmokeUi]::Click([RecoverySmokeUi]::Find($script:managerProcess.Id,'Stop hosting'))
     Wait-Until { -not (Find-Child) } 'explicit Stop'
     Start-Sleep -Seconds 35
     if (Find-Child) { throw 'Explicit Stop resurrected companion' }
-    [RecoverySmokeUi]::Click([RecoverySmokeUi]::Find($script:managerProcess.Id,'Start companion'))
+    [RecoverySmokeUi]::Click([RecoverySmokeUi]::Find($script:managerProcess.Id,'Start hosting'))
     Wait-Listening
     Stop-TestProcesses
     # Emulate the registered login command in a new process, with persisted state.
