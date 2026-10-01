@@ -2,8 +2,20 @@
 # Build the Vibertemis XR Preview APK from a freshly-fetched + overlaid
 # upstream tree.
 #
-# This script runs the unit-test suite (testNonRootDebugUnitTest) and then
-# assembles the nonRoot debug APK (assembleNonRootDebug).
+# This script:
+#   1. Stages the pinned-NDK libc++_shared.so into jniLibs/ BEFORE Gradle
+#      runs (the ALVR / Pyro / Pyrowave shared libraries all link against
+#      libc++_shared.so, which Android's loader will not resolve from the
+#      system; see quest/docs/native-runtime-provenance.md).
+#   2. Writes an NDK runtime provenance sidecar next to the APK build
+#      outputs so the release pack ships an exact-match runtime binary
+#      and its pinned-NDK hash.
+#   3. Runs the unit-test suite (testNonRootDebugUnitTest).
+#   4. Assembles the nonRoot debug APK (assembleNonRootDebug).
+#   5. Runs quest/build/verify-apk-native.py as a mandatory gate that
+#      rejects any APK whose lib/<abi>/*.so set does not close the
+#      DT_NEEDED closure and does not include libc++_shared.so +
+#      libopenxr_loader.so + libalvr_client_openxr.so.
 #
 # Inputs:
 #   build/quest/upstream/      prepared by quest/build/fetch.sh and
@@ -13,6 +25,8 @@
 # Outputs:
 #   build/quest/upstream/app/build/outputs/apk/nonRoot/debug/app-nonRoot-debug.apk
 #   build/quest/upstream/app/build/test-results/testNonRootDebugUnitTest/  JUnit XML
+#   build/quest/upstream/app/build/ndk-runtime-provenance.txt            NDK + libc++_shared.so hash + provenance
+#   build/quest/upstream/app/build/ndk-runtime-NOTICE.txt                pinned-NDK license notices for that runtime
 #
 # Environment overrides (all optional):
 #   ANDROID_HOME / ANDROID_SDK_ROOT  path to Android SDK
@@ -97,6 +111,83 @@ cd "${UPSTREAM}"
 
 python3 "${REPO_ROOT}/quest/native/check-android.py"
 
+# 5a. Stage the NDK libc++_shared.so into the upstream jniLibs/ tree
+#     BEFORE Gradle runs. The ALVR v20.14.1 native client, the Pyro
+#     client and the Pyrowave shared library are all built with
+#     ``-DANDROID_STL=c++_shared`` (see quest/native/build-android.sh)
+#     and their DT_NEEDED chains reference ``libc++_shared.so``.
+#     Android's loader will not resolve it from the system; the
+#     runtime MUST be packaged under ``lib/arm64-v8a/`` in the APK.
+#     This stage is the bounded packaging fix for the released
+#     preview9 APK that shipped without this runtime (see
+#     quest/docs/native-runtime-provenance.md).
+JNILIBS_DIR="${UPSTREAM}/app/src/main/jniLibs/arm64-v8a"
+NDK_LLVM_BIN="${NDK_DIR}/toolchains/llvm/prebuilt/linux-x86_64/bin"
+NDK_RUNTIME_SRC="${NDK_DIR}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so"
+NDK_RUNTIME_DST="${JNILIBS_DIR}/libc++_shared.so"
+mkdir -p "${JNILIBS_DIR}"
+log "Staging libc++_shared.so from pinned NDK ${NDK_VERSION} (aarch64-linux-android)"
+if [[ ! -f "${NDK_RUNTIME_SRC}" ]]; then
+  die "pinned NDK ${NDK_VERSION} is missing libc++_shared.so at ${NDK_RUNTIME_SRC}; sdkmanager 'ndk;${NDK_VERSION}' first"
+fi
+# Always (re)stage from the pinned NDK; the prior build's runtime is
+# replaced so a stale runtime cannot survive a rebuild. Other native libraries are stripped
+# (see quest/native/build-android.sh) and we want the runtime to be
+# stripped too so its size matches the rest of the package.
+cp -f "${NDK_RUNTIME_SRC}" "${NDK_RUNTIME_DST}"
+"${NDK_LLVM_BIN}/llvm-strip" --strip-unneeded "${NDK_RUNTIME_DST}"
+
+# Record runtime provenance next to the built APK so the release
+# pack can ship an exact-match binary + its pinned-NDK hash.
+PROVENANCE_DIR="${UPSTREAM}/app/build"
+mkdir -p "${PROVENANCE_DIR}"
+PROVENANCE_FILE="${PROVENANCE_DIR}/ndk-runtime-provenance.txt"
+RUNTIME_SHA="$(sha256sum "${NDK_RUNTIME_DST}" | awk '{print $1}')"
+SOURCE_SHA="$(sha256sum "${NDK_RUNTIME_SRC}" | awk '{print $1}')"
+{
+  printf 'ndk_version         %s\n' "${NDK_VERSION}"
+  printf 'runtime_source      %s\n' "${NDK_RUNTIME_SRC}"
+  printf 'runtime_soname      libc++_shared.so\n'
+  printf 'runtime_abi         aarch64-linux-android\n'
+  printf 'runtime_sha256      %s\n' "${RUNTIME_SHA}"
+  printf 'ndk_source_sha256   %s\n' "${SOURCE_SHA}"
+  printf 'strip_status        stripped (llvm-strip --strip-unneeded)\n'
+} > "${PROVENANCE_FILE}"
+log "libc++_shared.so staged (sha256=${RUNTIME_SHA}); provenance written to ${PROVENANCE_FILE}"
+
+# 5b. Concatenate the pinned NDK's license notices next to the
+#      provenance sidecar so the release pack ships the runtime
+#      attribution required for the packaged binary. This is
+#      fail-closed: a missing notice aborts the build rather than
+#      shipping a runtime whose attribution cannot be reproduced.
+#      Both notices are copied verbatim under explicit section
+#      labels; no line is rewritten, reordered or elided.
+NDK_NOTICE="${NDK_DIR}/NOTICE"
+NDK_TOOLCHAIN_NOTICE="${NDK_DIR}/NOTICE.toolchain"
+if [[ ! -f "${NDK_NOTICE}" ]]; then
+  die "pinned NDK ${NDK_VERSION} is missing ${NDK_NOTICE}; sdkmanager 'ndk;${NDK_VERSION}' first"
+fi
+if [[ ! -f "${NDK_TOOLCHAIN_NOTICE}" ]]; then
+  die "pinned NDK ${NDK_VERSION} is missing ${NDK_TOOLCHAIN_NOTICE}; sdkmanager 'ndk;${NDK_VERSION}' first"
+fi
+NOTICE_FILE="${PROVENANCE_DIR}/ndk-runtime-NOTICE.txt"
+{
+  printf 'NDK runtime license notices\n'
+  printf 'ndk_version         %s\n' "${NDK_VERSION}"
+  printf 'ndk_dir             %s\n' "${NDK_DIR}"
+  printf 'runtime_soname      libc++_shared.so\n'
+  printf 'runtime_abi         aarch64-linux-android\n'
+  printf 'runtime_sha256      %s\n' "${RUNTIME_SHA}"
+  printf '\n'
+  printf -- '===== BEGIN %s =====\n' "${NDK_NOTICE}"
+  cat "${NDK_NOTICE}"
+  printf '\n===== END %s =====\n\n' "${NDK_NOTICE}"
+  printf -- '===== BEGIN %s =====\n' "${NDK_TOOLCHAIN_NOTICE}"
+  cat "${NDK_TOOLCHAIN_NOTICE}"
+  printf '\n===== END %s =====\n' "${NDK_TOOLCHAIN_NOTICE}"
+} > "${NOTICE_FILE}"
+log "NDK notices concatenated into ${NOTICE_FILE}"
+
 # 6. First Quest3 test package: arm64-v8a only, minSdk 26, target 34.
 #    Debug build is signed with the AGP debug keystore so users can sideload.
 ./gradlew \
@@ -114,3 +205,23 @@ log "APK                : ${APK}"
 if [[ -f "${APK}" ]]; then
   log "APK SHA-256        : $(sha256sum "${APK}" | awk '{print $1}')"
 fi
+
+# 7. Native runtime closure verification (mandatory gate). The
+#    verifier rejects any APK whose lib/<abi>/*.so set fails the
+#    DT_NEEDED closure that Android's loader will walk at process
+#    start, and it explicitly requires libc++_shared.so +
+#    libopenxr_loader.so + libalvr_client_openxr.so to be packaged.
+#    This catches a missing C++ runtime, missing transitive
+#    dependency, wrong-ABI archive, duplicate SONAME or malformed
+#    ELF before the APK is shipped. Verifier is a stdlib-only ELF
+#    parser.
+if [[ ! -f "${APK}" ]]; then
+  die "assemble succeeded but APK missing at ${APK}"
+fi
+export ANDROID_NDK_HOME="${NDK_DIR}"
+VERIFIER="${REPO_ROOT}/quest/build/verify-apk-native.py"
+log "Running native runtime verifier: ${VERIFIER} ${APK}"
+if ! python3 "${VERIFIER}" "${APK}" --runtime-sha256 "${RUNTIME_SHA}"; then
+  die "native runtime verifier rejected the APK; see errors above"
+fi
+log "Native runtime verifier passed for ${APK}"
