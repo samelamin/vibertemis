@@ -5,6 +5,7 @@ import android.content.Context;
 import android.app.ActivityManager;
 import android.os.Process;
 import android.view.View;
+import android.widget.Button;
 import org.json.JSONObject;
 import org.junit.After;
 import org.junit.Before;
@@ -17,17 +18,14 @@ import org.robolectric.Shadows;
 import org.robolectric.android.controller.ActivityController;
 import org.robolectric.annotation.Config;
 import org.robolectric.shadows.ShadowActivityManager;
-import org.robolectric.shadows.ShadowLooper;
 
 import java.io.File;
 import java.io.FileOutputStream;
 import java.security.KeyPair;
-import java.security.KeyPairGenerator;
 import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
-import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -40,60 +38,54 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 /**
- * Production-event-path tests for {@link UpdatesActivity}. The
- * earlier {@code UpdatesActivityActionStateTest} only asserted
- * static labels; these tests exercise the actual download / install
- * / cancel / destroy paths through the {@link
- * UpdatesActivity.TransportFactory} and trust-key seams.
+ * Production-event-path tests for the single-action
+ * {@link UpdatesActivity}. Every test drives the one real primary
+ * button through {@code performClick()}; there is no second in-app
+ * Install tap, so an update is "installed" here exactly when the
+ * activity hands the APK to the OS installer.
  *
- * <p>Each test installs a fake {@code TransportFactory} that returns
- * real {@link UpdateTransport} instances with the {@code cancelled}
- * flag pre-set, so we can drive the worker's
- * publish-then-cancel-then-network sequence deterministically
- * without ever touching the real GitHub transport or a network
- * sandbox. The tests assert the production state machine:
- * <ul>
- *   <li>terminal download failure clears {@code actionKind}, keeps
- *       {@code actionError}, and re-enables the buttons,</li>
- *   <li>terminal install failure does the same, scoped to
- *       {@code lastFailedKind = "install"},</li>
- *   <li>a user-triggered retry clears the prior failure before the
- *       new operation starts,</li>
- *   <li>destroy before transport publication never starts a
- *       download,</li>
- *   <li>auto metadata refresh never erases a visible
- *       {@code actionError},</li>
- *   <li>the cancel button is visible only for download,</li>
- *   <li>live VR preserves the available / downloaded message AND
- *       blocks the corresponding button.</li>
- * </ul>
+ * <p>The remote is the only fake: a {@link
+ * UpdatesActivity.TransportFactory} yields real {@link
+ * UpdateTransport} instances whose {@code cancelled} flag is preset,
+ * so the worker's publish/cancel sequence runs deterministically
+ * without touching GitHub. The digest / package / versionCode /
+ * signer checks are the production ones, driven through
+ * {@link UpdateTestFixture}.
  */
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 28)
 public class UpdatesActivityActionStateTest {
 
-    private File tmpRoot;
-    private UpdateRepositoryBindings.DiskCache cache;
+    /** Installed versionCode for these tests: older than every release
+     *  they publish, so an offer is legitimate. */
+    private static final long INSTALLED_VERSION = 6L;
+
+    private KeyPair keyPair;
+    private String keyPem;
     private UpdateRepository repo;
     private ExecutorService exec;
-    private String keyPem;
-    private KeyPair keyPair;
     private RecordingTransportFactory transportFactory;
     private UpdatesActivity activeActivity;
     private boolean liveVr;
 
     @Before public void setup() throws Exception {
-        tmpRoot = new File(System.getProperty("java.io.tmpdir"),
-                "vq-upd-action-" + UUID.randomUUID().toString());
-        assertTrue(tmpRoot.mkdirs());
-        cache = new UpdateRepositoryBindings.DiskCache(tmpRoot);
-        KeyPairGenerator gen = KeyPairGenerator.getInstance("RSA");
-        gen.initialize(3072);
-        keyPair = gen.generateKeyPair();
-        keyPem = "-----BEGIN PUBLIC KEY-----\n"
-                + Base64.getEncoder().encodeToString(keyPair.getPublic().getEncoded())
-                + "\n-----END PUBLIC KEY-----";
-        repo = new UpdateRepository(cache, () -> 1_700_000_000_000L, 6L, () -> keyPem);
+        keyPair = UpdateTestFixture.newKeyPair();
+        keyPem = UpdateTestFixture.pemFor(keyPair);
+        // The app under test reports whatever the real build declares, so
+        // pin an installed version that is legitimately older than the
+        // releases these tests publish. The production downgrade checks are
+        // never relaxed to make an offer appear.
+        UpdateTestFixture.installSigningIdentity(UpdateTestFixture.context(),
+                INSTALLED_VERSION, true);
+        // Production roots the repository cache at the application cache
+        // dir, which puts every release-bound copy inside the FileProvider
+        // path the manifest declares (cache-path updates/). Rooting the
+        // fixture anywhere else would fail the hand-off on a provider
+        // restriction that says nothing about the update, so the real
+        // provider keeps checking the real layout.
+        repo = new UpdateRepository(
+                new UpdateRepositoryBindings.DiskCache(UpdateTestFixture.context().getCacheDir()),
+                () -> 1_700_000_000_000L, 6L, () -> keyPem);
         exec = UpdateRepository.newDefaultExecutor();
         repo.bindExecutor(exec, new UpdateRepository.CheckSource() {
             @Override public Result check(long currentVersionCode) {
@@ -101,19 +93,13 @@ public class UpdatesActivityActionStateTest {
             }
         });
         UpdateRepositoryProvider.installForTest(repo);
-        // Default: every transport the factory returns is
-        // pre-cancelled so download() throws an InterruptedIOException.
-        // Tests that want a different outcome override this with a
-        // dedicated factory.
         transportFactory = new RecordingTransportFactory(true);
         UpdatesActivity.installTransportFactoryForTest(transportFactory);
-        // Provide a deterministic trust key so the activity's
-        // download worker can construct a transport without
-        // touching R.raw.quest_update_key (which is not present
-        // under Robolectric).
         UpdatesActivity.installTrustKeyProviderForTest(activity -> keyPem);
-        // Default: no live VR. Individual tests opt in by calling
-        // setLiveVrRunning(true).
+        // androidx memoises the FileProvider strategy per authority for the
+        // whole JVM while Robolectric hands each test a fresh cache dir, so
+        // the memo has to go before a real hand-off resolves its path.
+        UpdateTestFixture.resetFileProviderStrategyCache();
         ShadowActivityManager am = Shadows.shadowOf(
                 (android.app.ActivityManager) RuntimeEnvironment.getApplication()
                         .getSystemService(Activity.ACTIVITY_SERVICE));
@@ -125,7 +111,6 @@ public class UpdatesActivityActionStateTest {
         repo.shutdown();
         exec.shutdownNow();
         exec.awaitTermination(2, TimeUnit.SECONDS);
-        deleteRecursive(tmpRoot);
         UpdatesActivity.installTransportFactoryForTest(new UpdatesActivity.TransportFactory() {
             @Override public UpdateTransport create(String trustedKey) {
                 return new UpdateTransport(trustedKey);
@@ -145,18 +130,6 @@ public class UpdatesActivityActionStateTest {
         });
     }
 
-    private static void deleteRecursive(File f) {
-        if (!f.exists()) return;
-        if (f.isDirectory()) {
-            File[] children = f.listFiles();
-            if (children != null) for (File c : children) deleteRecursive(c);
-        }
-        if (!f.delete()) throw new RuntimeException("delete failed " + f);
-    }
-
-    /** Build a body + signature for the given fields, using the
-     *  shared test key pair. Returns the canonical 384-byte signature
-     *  plus the UTF-8 body. */
     private byte[] buildManifestBody(String version, long sequence, long versionCode,
                                      long apkBytes, String apkSha, String signerSha) throws Exception {
         JSONObject apk = new JSONObject()
@@ -185,14 +158,13 @@ public class UpdatesActivityActionStateTest {
         return s.sign();
     }
 
-    private byte[] sha256(byte[] in) throws Exception {
-        return MessageDigest.getInstance("SHA-256").digest(in);
+    private String sha256(byte[] in) throws Exception {
+        return UpdateManifest.hex(MessageDigest.getInstance("SHA-256").digest(in));
     }
 
-    /** Persist an available snapshot into the shared repository. */
     private void recordAvailable(String version, long sequence, long versionCode,
                                  byte[] apkBytes, String signerSha) throws Exception {
-        String apkSha = UpdateManifest.hex(sha256(apkBytes));
+        String apkSha = sha256(apkBytes);
         byte[] body = buildManifestBody(version, sequence, versionCode,
                 apkBytes.length, apkSha, signerSha);
         byte[] sig = sign(body);
@@ -201,15 +173,15 @@ public class UpdatesActivityActionStateTest {
     }
 
     private void configureProcesses(Context context, boolean running) {
-        android.app.ActivityManager manager = (android.app.ActivityManager) context.getSystemService(Activity.ACTIVITY_SERVICE);
+        android.app.ActivityManager manager =
+                (android.app.ActivityManager) context.getSystemService(Activity.ACTIVITY_SERVICE);
         List<android.app.ActivityManager.RunningAppProcessInfo> processes = new ArrayList<>();
-        {
-            android.app.ActivityManager.RunningAppProcessInfo process = new android.app.ActivityManager.RunningAppProcessInfo();
-            process.processName = context.getPackageName() + (running ? ":pcvr" : "");
-            process.pid = Process.myPid();
-            process.importance = android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND;
-            processes.add(process);
-        }
+        android.app.ActivityManager.RunningAppProcessInfo process =
+                new android.app.ActivityManager.RunningAppProcessInfo();
+        process.processName = context.getPackageName() + (running ? ":pcvr" : "");
+        process.pid = Process.myPid();
+        process.importance = android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND;
+        processes.add(process);
         Shadows.shadowOf(manager).setProcesses(processes);
     }
 
@@ -233,19 +205,43 @@ public class UpdatesActivityActionStateTest {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
         do {
             Shadows.shadowOf(android.os.Looper.getMainLooper()).idle();
-            if (activeActivity == null || activeActivity.isDestroyed() || (activeActivity.currentActionKindForTest() == null && !repo.snapshot().checking)) return;
+            if (activeActivity == null || activeActivity.isDestroyed()
+                    || ("IDLE".equals(activeActivity.runningStageForTest()) && !repo.snapshot().checking)) return;
             try { Thread.sleep(10); } catch (InterruptedException e) { Thread.currentThread().interrupt(); return; }
         } while (System.nanoTime() < deadline);
         Shadows.shadowOf(android.os.Looper.getMainLooper()).idle();
+    }
+
+    /** Wait for the install-permission dialog to come up. */
+    private void idleUntilPermission(UpdatesActivity a) throws Exception {
+        long deadline = System.currentTimeMillis() + 3000;
+        while (System.currentTimeMillis() < deadline) {
+            Shadows.shadowOf(android.os.Looper.getMainLooper()).idle();
+            if (a.awaitingPermissionForTest()) return;
+            Thread.sleep(10);
+        }
+        Shadows.shadowOf(android.os.Looper.getMainLooper()).idle();
+        assertTrue("the install-permission dialog must come up (stage="
+                        + a.runningStageForTest() + ")", a.awaitingPermissionForTest());
+    }
+
+    /** Click the one real primary button. */
+    private static void clickPrimary(UpdatesActivity a) {
+        a.primaryButtonForTest().performClick();
+    }
+
+    private static void clickCancel(UpdatesActivity a) {
+        a.cancelButtonForTest().performClick();
     }
 
     // ------------------------------------------------------------------
     //  Production-event-path assertions
     // ------------------------------------------------------------------
 
-    /** The earlier reflection-label test: the metadata "Checking"
-     *  label never appears as the steady state. */
+    /** The metadata "Checking" label is a transient stage, never the
+     *  steady state the user is left looking at. */
     @Test public void metadataCheckingIsNotConfusedWithDownloadProgress() throws Exception {
+        recordAvailable("0.1.0.7", 7, 7, new byte[]{1, 2, 3, 4}, UpdateTestFixture.SIGNER_SHA256);
         ActivityController<UpdatesActivity> ctl = openActivity();
         try {
             idleAll();
@@ -258,197 +254,142 @@ public class UpdatesActivityActionStateTest {
         }
     }
 
-    /** Terminal download failure must clear actionKind (so the
-     *  buttons re-enable), preserve actionError so the user sees the
-     *  failure, and remember lastFailedKind so the "Tap Download to
-     *  retry" hint is accurate. The factory returns a transport
-     *  with {@code cancelled=true}, so the worker's first
-     *  download() throws InterruptedIOException. */
+    /**
+     * A terminal download failure must clear the busy stage (so the
+     * single button re-enables), preserve the error, and remember
+     * that an UPDATE failed so Retry re-runs the update rather than a
+     * fresh check.
+     */
     @Test public void terminalDownloadFailureReenablesButtonsAndPreservesError() throws Exception {
-        recordAvailable("0.1.0.7", 7, 7, new byte[]{1, 2, 3, 4}, "0".repeat(64));
+        recordAvailable("0.1.0.7", 7, 7, new byte[]{1, 2, 3, 4}, UpdateTestFixture.SIGNER_SHA256);
         ActivityController<UpdatesActivity> ctl = openActivity();
         try {
             idleAll();
-            // Drive the user click. The activity guards
-            // downloadUpdate on actionKind == null; with the
-            // pre-cancelled transport, the worker will throw and
-            // transition to terminal-error state.
-            assertNull("precondition: idle", ctl.get().currentActionKindForTest());
-            assertTrue("download button must be enabled with available manifest",
-                    ctl.get().isDownloadButtonEnabledForTest());
+            assertEquals("precondition: idle", "IDLE", ctl.get().runningStageForTest());
+            assertEquals("precondition: primary offers the update",
+                    UpdatesActivity.PrimaryAction.UPDATE, ctl.get().primaryActionForTest());
+            assertTrue("primary must be enabled", ctl.get().isPrimaryEnabledForTest());
 
-            // Programmatically dispatch the click: the listener is
-            // userInitiatedNewOperation(); downloadUpdate(). We
-            // cannot call View.performClick from this test surface
-            // easily, so we call the same private methods via the
-            // public observer / test helper. Instead we reflectively
-            // invoke downloadUpdate, which is package-private.
-            invokeDownload(ctl.get());
+            clickPrimary(ctl.get());
             idleAll();
 
-            assertEquals("download failure must clear actionKind",
-                    null, ctl.get().currentActionKindForTest());
+            assertEquals("download failure must clear the stage",
+                    "IDLE", ctl.get().runningStageForTest());
             assertNotNull("download failure must preserve actionError",
                     ctl.get().currentActionErrorForTest());
-            assertEquals("lastFailedKind must remember which op failed",
-                    "download", ctl.get().currentLastFailedKindForTest());
-            assertTrue("download button must re-enable after terminal failure",
-                    ctl.get().isDownloadButtonEnabledForTest());
-            assertTrue("install button stays disabled (no downloaded slot)",
-                    !ctl.get().isInstallButtonEnabledForTest());
+            assertEquals("lastFailedKind must remember the update failed",
+                    "update", ctl.get().currentLastFailedKindForTest());
+            assertEquals("primary must bind RETRY after a failed update",
+                    UpdatesActivity.PrimaryAction.RETRY, ctl.get().primaryActionForTest());
+            assertEquals("visible label must be Retry", "Retry", ctl.get().primaryLabelForTest());
+            assertTrue("primary must re-enable after terminal failure",
+                    ctl.get().isPrimaryEnabledForTest());
             String text = ctl.get().windowStatusText();
             assertTrue("status must include the failure message: " + text,
                     text.contains("failed"));
             assertTrue("status must hint to retry: " + text,
-                    text.contains("Tap") && text.contains("retry"));
-            // Terminal UI must not release busy before transport cleanup.
+                    text.contains("Tap Retry"));
             assertNull("terminal worker must clear its transport",
                     ctl.get().publishedTransportForTest());
-            // At least one transport was created.
             assertTrue("factory must have produced a transport",
                     transportFactory.created.get() > 0);
+            // The pinned target is released on failure.
+            assertNull("failure must release the pinned target",
+                    ctl.get().pinnedVersionForTest());
         } finally {
             ctl.pause().stop().destroy();
         }
     }
 
-    /** The cancel button is reserved for the DOWNLOAD action.
-     *  Metadata check and install use no cancel button. To assert
-     *  the in-flight download state, the factory is gated on a
-     *  latch so the worker is parked inside {@code download()}
-     *  with actionKind = "download"; cancel must be visible. After
-     *  release, the pre-cancelled transport throws and the cancel
-     *  button hides. For install, the worker thread is gated on
-     *  the same latch so actionKind = "install" is observable and
-     *  the cancel button must remain hidden. */
-    @Test public void cancelButtonOnlyForDownload() throws Exception {
-        // Open without an available manifest: the user can still
-        // press "Check now" (force=true) which sets actionKind =
-        // "check" without entering the download worker.
+    /**
+     * Cancel is available for the whole pre-handoff window (download,
+     * verification, installer preparation) and retires once the OS
+     * installer owns the screen.
+     */
+    @Test public void cancelIsAvailableUntilSystemHandoff() throws Exception {
         ActivityController<UpdatesActivity> ctl = openActivity();
         try {
             idleAll();
-            // Trigger a Check now: this enters actionKind = "check".
-            // The cancel button must stay hidden.
-            invokeTriggerCheckForced(ctl.get());
-            idleAll();
-            assertEquals("check action must not show the cancel button",
-                    View.GONE, ctl.get().cancelVisibilityForTest());
-            // Drain.
-            idleAll();
-            assertEquals("after check completes the cancel button stays hidden",
+            // A metadata check is not cancellable.
+            assertEquals("idle state hides cancel",
                     View.GONE, ctl.get().cancelVisibilityForTest());
 
-            // Now record an available manifest and gate the
-            // download so we can observe actionKind = "download".
-            recordAvailable("0.1.0.7", 7, 7, new byte[]{1, 2, 3, 4}, "0".repeat(64));
+            recordAvailable("0.1.0.7", 7, 7, new byte[]{1, 2, 3, 4}, UpdateTestFixture.SIGNER_SHA256);
             idleAll();
-            try {
-                // Gate the factory so the worker parks INSIDE
-                // factory.create(). downloadUpdate has already set
-                // actionKind = "download" before starting the
-                // worker, so we can observe the cancel button
-                // while the worker is parked.
-                final CountDownLatch workerInsideCreate = new CountDownLatch(1);
-                final CountDownLatch releaseCreate = new CountDownLatch(1);
-                UpdatesActivity.installTransportFactoryForTest(new UpdatesActivity.TransportFactory() {
-                    @Override public UpdateTransport create(String trustedKey) {
-                        workerInsideCreate.countDown();
-                        try { releaseCreate.await(5, TimeUnit.SECONDS); }
-                        catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
-                        UpdateTransport transport = new UpdateTransport(trustedKey);
-                        transport.cancel();
-                        return transport;
-                    }
-                });
-                invokeDownload(ctl.get());
-                assertTrue("worker must reach the factory gate",
-                        workerInsideCreate.await(2, TimeUnit.SECONDS));
-                // Worker is parked inside create(); actionKind is
-                // "download" (set by downloadUpdate before
-                // worker.start). The cancel button MUST be visible.
-                assertEquals("download action must show the cancel button",
-                        View.VISIBLE, ctl.get().cancelVisibilityForTest());
-                releaseCreate.countDown();
-            } finally {
-                // The factory is restored by the @After hook.
-            }
-            idleAll();
-            // After the worker throws (no network), the terminal-
-            // error render hides the cancel button.
-            assertEquals("after download failure the cancel button hides",
-                    View.GONE, ctl.get().cancelVisibilityForTest());
 
-            // For the install path we need a downloaded slot.
-            File apkFile = writeFakeDownloadedApk("0.1.0.8", 8, 8, new byte[]{5, 6, 7, 8});
-            recordAvailable("0.1.0.8", 8, 8, new byte[]{5, 6, 7, 8}, "0".repeat(64));
-            byte[] body = buildManifestBody("0.1.0.8", 8, 8, 4, UpdateManifest.hex(sha256(new byte[]{5,6,7,8})), "0".repeat(64));
-            byte[] sig = sign(body);
-            UpdateManifest m = UpdateManifest.verify(body, sig, keyPem);
-            repo.recordDownloaded(m, body, sig, apkFile);
+            final CountDownLatch workerInsideCreate = new CountDownLatch(1);
+            final CountDownLatch releaseCreate = new CountDownLatch(1);
+            UpdatesActivity.installTransportFactoryForTest(new UpdatesActivity.TransportFactory() {
+                @Override public UpdateTransport create(String trustedKey) {
+                    workerInsideCreate.countDown();
+                    try { releaseCreate.await(5, TimeUnit.SECONDS); }
+                    catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
+                    UpdateTransport transport = new UpdateTransport(trustedKey);
+                    transport.cancel();
+                    return transport;
+                }
+            });
+            clickPrimary(ctl.get());
+            assertTrue("worker must reach the factory gate",
+                    workerInsideCreate.await(2, TimeUnit.SECONDS));
+            assertEquals("download in flight must show cancel",
+                    View.VISIBLE, ctl.get().cancelVisibilityForTest());
+            // While busy the label stays pinned to the release the
+            // attempt is working on, and the primary is disabled so
+            // the visible label can never promise a second tap.
+            assertEquals("Update to 0.1.0.7", ctl.get().primaryLabelForTest());
+            assertFalse("primary must be disabled while an attempt runs",
+                    ctl.get().isPrimaryEnabledForTest());
+            assertEquals("the pinned target must be the offered release",
+                    "0.1.0.7", ctl.get().pinnedVersionForTest());
+            releaseCreate.countDown();
             idleAll();
-            invokeInstall(ctl.get());
-            idleAll();
-            assertEquals("install action must not show the cancel button",
+            assertEquals("after the attempt ends the cancel button hides",
                     View.GONE, ctl.get().cancelVisibilityForTest());
         } finally {
             ctl.pause().stop().destroy();
         }
     }
 
-    /** When the user retries a failed download, the prior failure
-     *  message must be cleared at the moment the new operation
-     *  starts (so the in-progress label is visible immediately),
-     *  not after the new download terminates. The test asserts:
-     *  - click download (factory throws)
-     *  - after first attempt: actionError = "Update cancelled..."
-     *  - click download again
-     *  - very quickly (before the worker throws again) actionError
-     *    is null because the click listener cleared it */
-    @Test public void downloadRetryClearsPriorFailureError() throws Exception {
-        recordAvailable("0.1.0.7", 7, 7, new byte[]{1, 2, 3, 4}, "0".repeat(64));
+    /**
+     * The retry tap clears the prior failure immediately so the
+     * in-progress stage is visible straight away, and the retry
+     * re-runs the UPDATE (a second transport) rather than a check.
+     */
+    @Test public void updateRetryClearsPriorFailureError() throws Exception {
+        recordAvailable("0.1.0.7", 7, 7, new byte[]{1, 2, 3, 4}, UpdateTestFixture.SIGNER_SHA256);
         ActivityController<UpdatesActivity> ctl = openActivity();
         try {
             idleAll();
-            // First attempt.
-            invokeDownload(ctl.get());
+            clickPrimary(ctl.get());
             idleAll();
             assertNotNull("first attempt must produce an actionError",
                     ctl.get().currentActionErrorForTest());
-            String firstError = ctl.get().currentActionErrorForTest();
-            assertEquals("download", ctl.get().currentLastFailedKindForTest());
+            assertEquals("update", ctl.get().currentLastFailedKindForTest());
 
-            // Second attempt: actionError must clear before the
-            // worker thread runs. After the click listener, before
-            // idleAll, the state already has actionError == null.
-            // We trigger the click and immediately read.
-            clickDownloadAndCaptureMidState(ctl.get());
+            assertEquals("Retry must be the visible label",
+                    "Retry", ctl.get().primaryLabelForTest());
+            clickPrimary(ctl.get());
             idleAll();
-            assertNotNull("retry must finish with its own transport error", ctl.get().currentActionErrorForTest());
-            assertEquals(2, transportFactory.created.get());
+            assertNotNull("retry must finish with its own transport error",
+                    ctl.get().currentActionErrorForTest());
+            assertEquals("retry must re-run the update, not the check",
+                    "update", ctl.get().currentLastFailedKindForTest());
+            assertEquals("a retry must produce a second transport",
+                    2, transportFactory.created.get());
             String text = ctl.get().windowStatusText();
-            // After both attempts, render shows the failure label
-            // (either first or second is the same canned message).
             assertTrue("render must continue to show the retry hint: " + text,
-                    text.contains("Tap") && text.contains("retry"));
+                    text.contains("Tap Retry"));
         } finally {
             ctl.pause().stop().destroy();
         }
     }
 
-    /** Destroy before transport publication must cancel the
-     *  transport the worker is about to use, never publish it to
-     *  the activity, and never invoke download(). The factory
-     *  creates a NORMAL non-cancelled real UpdateTransport, retains
-     *  it, signals entered, then parks on a release latch. While
-     *  the worker is parked, the activity's transport field is
-     *  still null. The test clicks the actual Download button,
-     *  waits for the worker to enter, destroys the activity while
-     *  the worker is parked, and releases the latch. The worker
-     *  wakes up, sees destroyed=true, calls local.cancel() on its
-     *  retained transport, and returns without publishing. The test
-     *  polls a bounded real clock for the retained transport's
-     *  cancelled flag, then asserts the production guarantees. */
+    /**
+     * Destroy before transport publication must cancel the transport
+     * the worker is about to use, never publish it, and never leave a
+     * live observer behind.
+     */
     @Test public void destroyBeforeTransportPublicationCancelsTransport() throws Exception {
         final CountDownLatch workerEntered = new CountDownLatch(1);
         final CountDownLatch release = new CountDownLatch(1);
@@ -466,22 +407,17 @@ public class UpdatesActivityActionStateTest {
             }
         });
         try {
-            recordAvailable("0.1.0.7", 7, 7, new byte[]{1, 2, 3, 4}, "0".repeat(64));
+            recordAvailable("0.1.0.7", 7, 7, new byte[]{1, 2, 3, 4}, UpdateTestFixture.SIGNER_SHA256);
             ActivityController<UpdatesActivity> ctl = openActivity();
             try {
                 idleAll();
-                clickButton(ctl.get(), "download");
+                clickPrimary(ctl.get());
                 assertTrue("worker must reach factory.create()",
                         workerEntered.await(2, TimeUnit.SECONDS));
                 assertNull("precondition: transport not yet published",
                         ctl.get().publishedTransportForTest());
                 ctl.pause().stop().destroy();
                 release.countDown();
-                // Wait for the worker to reach the destroyed
-                // check and call local.cancel() on its retained
-                // transport. actionKind is intentionally NOT
-                // cleared by the destroy path, so we poll on
-                // retained[0].cancelled instead.
                 long deadline = System.currentTimeMillis() + 2000;
                 while (System.currentTimeMillis() < deadline) {
                     idleAll();
@@ -492,8 +428,7 @@ public class UpdatesActivityActionStateTest {
                 assertNotNull("factory must produce a transport", retained[0]);
                 assertTrue("destroy before publish must cancel the retained transport",
                         retained[0].cancelled);
-                assertEquals("factory must produce exactly one transport",
-                        1, created.get());
+                assertEquals("factory must produce exactly one transport", 1, created.get());
                 assertNull("transport field must never be published",
                         ctl.get().publishedTransportForTest());
                 assertEquals("destroy must remove the activity's observer",
@@ -507,18 +442,12 @@ public class UpdatesActivityActionStateTest {
         }
     }
 
-    /** Cancel clicked before the worker has had a chance to publish
-     *  its transport must still cancel the transport the worker is
-     *  about to use. The factory creates a NORMAL non-cancelled
-     *  real UpdateTransport, retains it, signals entered, then
-     *  parks on a release latch. The test clicks the actual
-     *  Download button, waits for the worker to enter, then clicks
-     *  the actual Cancel button while the worker is still parked.
-     *  The cancel listener sets the downloadCancelled flag even
-     *  though the transport field is null. The latch is released;
-     *  the worker wakes up, sees downloadCancelled=true, calls
-     *  local.cancel() on its retained transport, and the finally
-     *  clears actionKind so the buttons re-enable for a retry. */
+    /**
+     * Cancel clicked before the worker published its transport must
+     * still invalidate the attempt: the retained transport is
+     * cancelled, the stage returns to idle, and no error is raised
+     * because the user asked for this.
+     */
     @Test public void cancelBeforeTransportPublicationCancelsTransport() throws Exception {
         final CountDownLatch workerEntered = new CountDownLatch(1);
         final CountDownLatch release = new CountDownLatch(1);
@@ -536,39 +465,40 @@ public class UpdatesActivityActionStateTest {
             }
         });
         try {
-            recordAvailable("0.1.0.7", 7, 7, new byte[]{1, 2, 3, 4}, "0".repeat(64));
+            recordAvailable("0.1.0.7", 7, 7, new byte[]{1, 2, 3, 4}, UpdateTestFixture.SIGNER_SHA256);
             ActivityController<UpdatesActivity> ctl = openActivity();
             try {
                 idleAll();
-                clickButton(ctl.get(), "download");
+                clickPrimary(ctl.get());
                 assertTrue("worker must reach factory.create()",
                         workerEntered.await(2, TimeUnit.SECONDS));
                 assertNull("precondition: transport not yet published",
                         ctl.get().publishedTransportForTest());
-                clickButton(ctl.get(), "cancel");
+                clickCancel(ctl.get());
                 release.countDown();
-                // Wait for the worker to reach the
-                // downloadCancelled check and the finally's
-                // runOnUiThread that clears actionKind.
                 long deadline = System.currentTimeMillis() + 2000;
                 while (System.currentTimeMillis() < deadline) {
                     idleAll();
                     if (retained[0] != null && retained[0].cancelled
-                            && ctl.get().currentActionKindForTest() == null) break;
+                            && "IDLE".equals(ctl.get().runningStageForTest())) break;
                     try { Thread.sleep(20); }
                     catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
                 }
                 assertNotNull("factory must produce a transport", retained[0]);
                 assertTrue("cancel before publish must cancel the retained transport",
                         retained[0].cancelled);
-                assertEquals("factory must produce exactly one transport",
-                        1, created.get());
-                assertNull("transport field must be cleared in worker finally",
+                assertEquals("factory must produce exactly one transport", 1, created.get());
+                assertNull("transport field must be cleared in the worker",
                         ctl.get().publishedTransportForTest());
-                assertNull("cancel before publish must clear actionKind",
-                        ctl.get().currentActionKindForTest());
-                assertNull("cancel before publish must not surface an actionError",
+                assertEquals("cancel before publish must clear the stage",
+                        "IDLE", ctl.get().runningStageForTest());
+                assertNull("cancel must release the pinned target",
+                        ctl.get().pinnedVersionForTest());
+                assertNull("cancel must not surface an actionError",
                         ctl.get().currentActionErrorForTest());
+                assertTrue("cancel must be explained to the user: "
+                                + ctl.get().windowStatusText(),
+                        ctl.get().windowStatusText().toLowerCase().contains("cancel"));
             } finally {
                 release.countDown();
                 if (!ctl.get().isDestroyed()) ctl.pause().stop().destroy();
@@ -578,17 +508,16 @@ public class UpdatesActivityActionStateTest {
         }
     }
 
-    /** A successful metadata refresh must NOT erase a still-visible
-     *  actionError. We set up an existing download failure, then
-     *  drive the auto-check to completion on open and assert the
-     *  failure message remains. */
+    /**
+     * A background metadata refresh must never erase a still-visible
+     * failure the user has not acted on yet.
+     */
     @Test public void autoMetadataRefreshDoesNotEraseActionError() throws Exception {
-        recordAvailable("0.1.0.7", 7, 7, new byte[]{1, 2, 3, 4}, "0".repeat(64));
+        recordAvailable("0.1.0.7", 7, 7, new byte[]{1, 2, 3, 4}, UpdateTestFixture.SIGNER_SHA256);
         ActivityController<UpdatesActivity> ctl = openActivity();
         try {
             idleAll();
-            // Force a download failure so actionError is set.
-            invokeDownload(ctl.get());
+            clickPrimary(ctl.get());
             idleAll();
             assertNotNull("precondition: actionError set after download failure",
                     ctl.get().currentActionErrorForTest());
@@ -596,35 +525,35 @@ public class UpdatesActivityActionStateTest {
             assertTrue("precondition: render shows the failure: " + before,
                     before.contains("failed"));
 
-            // Now drive a Check now. triggerCheck does NOT clear
-            // actionError. The auto-check returns Result.none()
-            // synchronously; lastSuccessAtMs advances; render()
-            // is called via the observer; the actionError stays.
-            invokeTriggerCheckForced(ctl.get());
+            // Force another metadata check through the repository.
+            repo.requestCheck(true).await(2_000L);
             idleAll();
-            assertNotNull("actionError must survive a Check now",
+            assertNotNull("actionError must survive a metadata refresh",
                     ctl.get().currentActionErrorForTest());
             String after = ctl.get().windowStatusText();
             assertTrue("render must still show the failure: " + after,
                     after.contains("failed"));
             assertTrue("render must still hint to retry: " + after,
-                    after.contains("Tap") && after.contains("retry"));
+                    after.contains("Tap Retry"));
             assertFalse("render must NOT have been overwritten by 'up to date': " + after,
                     after.toLowerCase().contains("up to date"));
+            assertEquals("a background check must not retarget the button",
+                    UpdatesActivity.PrimaryAction.RETRY, ctl.get().primaryActionForTest());
         } finally {
             ctl.pause().stop().destroy();
         }
     }
 
-    /** Live VR preserves the available message AND disables the
-     *  download button. The render shows "Update X.X available.
-     *  Close your VR session to download.". */
-    @Test public void liveVrPreservesAvailableStateAndDisablesDownload() throws Exception {
-        recordAvailable("0.1.0.7", 7, 7, new byte[]{1, 2, 3, 4}, "0".repeat(64));
+    /**
+     * Live VR keeps the offer visible (the user can see what is
+     * waiting) but disables the single action, because downloading or
+     * installing mid-session is exactly what we must not do.
+     */
+    @Test public void liveVrPreservesAvailableStateAndDisablesUpdate() throws Exception {
+        recordAvailable("0.1.0.7", 7, 7, new byte[]{1, 2, 3, 4}, UpdateTestFixture.SIGNER_SHA256);
         ActivityController<UpdatesActivity> ctl = openActivity();
         try {
             idleAll();
-            // The onCreate auto-trigger is suppressed by live VR.
             setLiveVrRunning(true);
             idleAll();
             String text = ctl.get().windowStatusText();
@@ -632,27 +561,23 @@ public class UpdatesActivityActionStateTest {
                     text.contains("0.1.0.7") && text.contains("available"));
             assertTrue("live VR must include the close hint: " + text,
                     text.toLowerCase().contains("close your vr session"));
-            assertFalse("download must be disabled while live VR is running",
-                    ctl.get().isDownloadButtonEnabledForTest());
-            assertFalse("install must be disabled while live VR is running",
-                    ctl.get().isInstallButtonEnabledForTest());
+            assertEquals("live VR must disable the single action",
+                    UpdatesActivity.PrimaryAction.NONE, ctl.get().primaryActionForTest());
+            assertFalse("primary must be disabled while live VR is running",
+                    ctl.get().isPrimaryEnabledForTest());
         } finally {
             setLiveVrRunning(false);
             ctl.pause().stop().destroy();
         }
     }
 
-    /** Live VR preserves the downloaded message AND disables the
-     *  install button. The render shows "Verified update X.X is
-     *  ready to install. Close your VR session to continue.". */
-    @Test public void liveVrPreservesDownloadedStateAndDisablesInstall() throws Exception {
-        recordAvailable("0.1.0.7", 7, 7, new byte[]{1, 2, 3, 4}, "0".repeat(64));
-        File apkFile = writeFakeDownloadedApk("0.1.0.7", 7, 7, new byte[]{1, 2, 3, 4});
-        byte[] body = buildManifestBody("0.1.0.7", 7, 7, 4,
-                UpdateManifest.hex(sha256(new byte[]{1, 2, 3, 4})), "0".repeat(64));
-        byte[] sig = sign(body);
-        UpdateManifest m = UpdateManifest.verify(body, sig, keyPem);
-        repo.recordDownloaded(m, body, sig, apkFile);
+    /** Live VR also blocks the cached-verify/install path. */
+    @Test public void liveVrPreservesDownloadedStateAndDisablesUpdate() throws Exception {
+        long installed = UpdateTestFixture.installedVersionCode(UpdateTestFixture.context());
+        UpdateTestFixture.installSigningIdentity(UpdateTestFixture.context(), installed, true);
+        byte[] apk = new byte[]{1, 2, 3, 4};
+        recordAvailable("0.1.0.7", 7, installed + 1, apk, UpdateTestFixture.SIGNER_SHA256);
+        recordDownloadedFixture("0.1.0.7", 7, installed + 1, apk);
 
         ActivityController<UpdatesActivity> ctl = openActivity();
         try {
@@ -660,228 +585,203 @@ public class UpdatesActivityActionStateTest {
             setLiveVrRunning(true);
             idleAll();
             String text = ctl.get().windowStatusText();
-            assertTrue("live VR must preserve the downloaded version line: " + text,
-                    text.contains("Verified update") && text.contains("0.1.0.7"));
+            assertTrue("live VR must preserve the cached version line: " + text,
+                    text.contains("0.1.0.7"));
             assertTrue("live VR must include the close hint: " + text,
                     text.toLowerCase().contains("close your vr session"));
-            assertFalse("download must be disabled while live VR is running",
-                    ctl.get().isDownloadButtonEnabledForTest());
-            assertFalse("install must be disabled while live VR is running",
-                    ctl.get().isInstallButtonEnabledForTest());
+            assertEquals("live VR must disable the single action",
+                    UpdatesActivity.PrimaryAction.NONE, ctl.get().primaryActionForTest());
+            assertFalse("primary must be disabled while live VR is running",
+                    ctl.get().isPrimaryEnabledForTest());
         } finally {
             setLiveVrRunning(false);
             ctl.pause().stop().destroy();
         }
     }
 
-    /** Terminal install failure preserves actionError with
-     *  lastFailedKind = "install". We trigger the failure via live
-     *  VR so the worker's ensureIdle() throws. */
-    @Test public void installFailurePreservesErrorWithInstallKind() throws Exception {
-        recordAvailable("0.1.0.7", 7, 7, new byte[]{1, 2, 3, 4}, "0".repeat(64));
-        File apkFile = writeFakeDownloadedApk("0.1.0.7", 7, 7, new byte[]{1, 2, 3, 4});
-        byte[] body = buildManifestBody("0.1.0.7", 7, 7, 4,
-                UpdateManifest.hex(sha256(new byte[]{1, 2, 3, 4})), "0".repeat(64));
-        byte[] sig = sign(body);
-        UpdateManifest m = UpdateManifest.verify(body, sig, keyPem);
-        repo.recordDownloaded(m, body, sig, apkFile);
+    /**
+     * A verification failure keeps the pinned release named, so the
+     * status tells the user which update failed.
+     */
+    @Test public void verificationFailurePreservesErrorWithUpdateKind() throws Exception {
+        long installed = UpdateTestFixture.installedVersionCode(UpdateTestFixture.context());
+        UpdateTestFixture.installSigningIdentity(UpdateTestFixture.context(), installed, true);
+        byte[] apk = new byte[]{1, 2, 3, 4};
+        recordAvailable("0.1.0.7", 7, installed + 1, apk, UpdateTestFixture.SIGNER_SHA256);
+        recordDownloadedFixture("0.1.0.7", 7, installed + 1, apk);
+        // The cached bytes exist and hash correctly, but no archive
+        // identity is published, so PackageManager cannot vouch for
+        // the package / versionCode / signer.
+        UpdateTestFixture.clearArchiveInfo(UpdateTestFixture.context(), repo.snapshot().downloadedApk);
 
         ActivityController<UpdatesActivity> ctl = openActivity();
         try {
             idleAll();
-            // Now turn on live VR. The install worker calls
-            // ensureIdle() which throws because pcvr is running.
-            setLiveVrRunning(true);
+            clickPrimary(ctl.get());
             idleAll();
-            // invokeInstall will hit ensureIdle and surface the
-            // exception in the worker thread.
-            invokeInstall(ctl.get());
-            idleAll();
-            assertEquals("install failure must clear actionKind",
-                    null, ctl.get().currentActionKindForTest());
-            assertNotNull("install failure must preserve actionError",
+            assertEquals("verification failure must clear the stage",
+                    "IDLE", ctl.get().runningStageForTest());
+            assertNotNull("verification failure must preserve actionError",
                     ctl.get().currentActionErrorForTest());
-            assertEquals("lastFailedKind must be install",
-                    "install", ctl.get().currentLastFailedKindForTest());
+            assertEquals("lastFailedKind must be the update",
+                    "update", ctl.get().currentLastFailedKindForTest());
+            assertEquals("primary must bind RETRY",
+                    UpdatesActivity.PrimaryAction.RETRY, ctl.get().primaryActionForTest());
             String text = ctl.get().windowStatusText();
-            assertTrue("status must hint 'Tap Install to retry': " + text,
-                    text.contains("Tap Install to retry"));
+            assertTrue("status must hint to retry the update: " + text,
+                    text.contains("Tap Retry"));
         } finally {
-            setLiveVrRunning(false);
             ctl.pause().stop().destroy();
         }
     }
 
-    private void recordDownloadedFixture() throws Exception {
-        byte[] bytes = new byte[]{1, 2, 3, 4};
-        recordAvailable("0.1.0.7", 7, 7, bytes, "0".repeat(64));
-        UpdateRepository.Snapshot snapshot = repo.snapshot();
-        repo.recordDownloaded(snapshot.available, snapshot.availableManifestBytes,
-                snapshot.availableSignatureBytes, writeFakeDownloadedApk("0.1.0.7", 7, 7, bytes));
-    }
-
-    @Test public void corruptDownloadedApkCanBeDownloadedAgain() throws Exception {
-        recordDownloadedFixture();
-        try (FileOutputStream out = new FileOutputStream(repo.snapshot().downloadedApk, true)) { out.write(99); }
-        ActivityController<UpdatesActivity> ctl = openActivity();
-        try {
-            idleAll();
-            clickButton(ctl.get(), "install");
-            idleAll();
-            assertFalse(repo.snapshot().hasDownloaded());
-            assertTrue(repo.snapshot().hasAvailable());
-            assertTrue(ctl.get().isDownloadButtonEnabledForTest());
-            assertFalse(ctl.get().isInstallButtonEnabledForTest());
-            assertTrue(ctl.get().windowStatusText().contains("Tap Download update"));
-            ctl.pause().resume();
-            idleAll();
-            assertTrue(ctl.get().windowStatusText().contains("Tap Download update"));
-            setLiveVrRunning(true);
-            assertTrue(ctl.get().windowStatusText().contains("Close your VR session"));
-            assertFalse(ctl.get().windowStatusText().contains("to install"));
-        } finally { ctl.pause().stop().destroy(); }
-    }
-
-    @Test public void deniedInstallPermissionKeepsDownloadAndNoticeAcrossResume() throws Exception {
-        recordDownloadedFixture();
-        ActivityController<UpdatesActivity> ctl = openActivity();
-        try {
-            idleAll();
-            ctl.get().onActivityResult(801, Activity.RESULT_CANCELED, null);
-            ctl.pause().resume();
-            idleAll();
-            assertTrue(repo.snapshot().hasDownloaded());
-            assertTrue(ctl.get().windowStatusText().contains("permission was not granted"));
-        } finally { ctl.pause().stop().destroy(); }
-    }
-
-    @Test public void cancelledInstallerKeepsDownloadAndNoticeAcrossResume() throws Exception {
-        recordDownloadedFixture();
-        ActivityController<UpdatesActivity> ctl = openActivity();
-        try {
-            idleAll();
-            ctl.get().onActivityResult(802, Activity.RESULT_CANCELED, null);
-            ctl.pause().resume();
-            idleAll();
-            assertTrue(repo.snapshot().hasDownloaded());
-            assertTrue(ctl.get().windowStatusText().toLowerCase().contains("cancel"));
-        } finally { ctl.pause().stop().destroy(); }
-    }
-
-    // ------------------------------------------------------------------
-    //  Private reflection / invocation helpers — narrowly scoped to
-    //  the test class so production source has no public surface for
-    //  them.
-    // ------------------------------------------------------------------
-
-    private static void invokeDownload(UpdatesActivity a) {
-        try {
-            java.lang.reflect.Method m = UpdatesActivity.class
-                    .getDeclaredMethod("downloadUpdate");
-            m.setAccessible(true);
-            m.invoke(a);
-        } catch (java.lang.reflect.InvocationTargetException ite) {
-            // The worker thread wraps everything in try/catch; the
-            // reflective invocation itself only fails on visible
-            // IllegalAccess / NoSuchMethod, which we want surfaced.
-            Throwable cause = ite.getCause();
-            if (cause instanceof RuntimeException) throw (RuntimeException) cause;
-            throw new RuntimeException(cause);
-        } catch (ReflectiveOperationException roe) {
-            throw new RuntimeException(roe);
-        }
-    }
-
-    private static void invokeInstall(UpdatesActivity a) {
-        try {
-            java.lang.reflect.Method m = UpdatesActivity.class
-                    .getDeclaredMethod("installUpdate");
-            m.setAccessible(true);
-            m.invoke(a);
-        } catch (java.lang.reflect.InvocationTargetException ite) {
-            Throwable cause = ite.getCause();
-            if (cause instanceof RuntimeException) throw (RuntimeException) cause;
-            throw new RuntimeException(cause);
-        } catch (ReflectiveOperationException roe) {
-            throw new RuntimeException(roe);
-        }
-    }
-
-    private static void invokeTriggerCheckForced(UpdatesActivity a) {
-        try {
-            java.lang.reflect.Method m = UpdatesActivity.class
-                    .getDeclaredMethod("triggerCheck", boolean.class);
-            m.setAccessible(true);
-            m.invoke(a, true);
-        } catch (java.lang.reflect.InvocationTargetException ite) {
-            Throwable cause = ite.getCause();
-            if (cause instanceof RuntimeException) throw (RuntimeException) cause;
-            throw new RuntimeException(cause);
-        } catch (ReflectiveOperationException roe) {
-            throw new RuntimeException(roe);
-        }
-    }
-
-    /** Click the actual Button field by name. The race tests drive
-     *  the production click listeners via performClick, not via
-     *  reflective shortcuts, so the download / cancel handlers run
-     *  exactly as they do for a real user. */
-    private static void clickButton(UpdatesActivity a, String fieldName) {
-        try {
-            java.lang.reflect.Field f = UpdatesActivity.class.getDeclaredField(fieldName);
-            f.setAccessible(true);
-            View v = (View) f.get(a);
-            v.performClick();
-        } catch (ReflectiveOperationException roe) {
-            throw new RuntimeException(roe);
-        }
-    }
-
-    private static void clickDownloadAndCaptureMidState(UpdatesActivity a) {
-        // The user-click path is: userInitiatedNewOperation(); downloadUpdate().
-        // We invoke the same private methods reflectively to
-        // capture the moment between clearing the error and the
-        // worker thread's terminal-failure render.
-        try {
-            java.lang.reflect.Method clear = UpdatesActivity.class
-                    .getDeclaredMethod("userInitiatedNewOperation");
-            clear.setAccessible(true);
-            clear.invoke(a);
-            // Assert mid-state immediately after the click listener's
-            // first half runs.
-            assertNull("userInitiatedNewOperation must clear actionError",
-                    a.currentActionErrorForTest());
-            assertNull("userInitiatedNewOperation must clear lastFailedKind",
-                    a.currentLastFailedKindForTest());
-            // Now invoke the actual downloadUpdate. The worker
-            // thread runs asynchronously; we let it finish.
-            java.lang.reflect.Method dl = UpdatesActivity.class
-                    .getDeclaredMethod("downloadUpdate");
-            dl.setAccessible(true);
-            dl.invoke(a);
-        } catch (java.lang.reflect.InvocationTargetException ite) {
-            Throwable cause = ite.getCause();
-            if (cause instanceof RuntimeException) throw (RuntimeException) cause;
-            throw new RuntimeException(cause);
-        } catch (ReflectiveOperationException roe) {
-            throw new RuntimeException(roe);
-        }
-    }
-
-    private File writeFakeDownloadedApk(String version, long sequence, long versionCode,
-                                        byte[] apkBytes) throws Exception {
-        File apkFile = new File(tmpRoot, "fake-" + version + ".apk");
-        try (FileOutputStream out = new FileOutputStream(apkFile)) {
-            out.write(apkBytes);
-        }
+    private File writeFakeDownloadedApk(String version, byte[] apkBytes) throws Exception {
+        File apkFile = UpdateTestFixture.writeBytes(
+                UpdateTestFixture.scratchFile("fake-" + version + ".apk"), apkBytes);
         return apkFile;
     }
 
-    /** Records the number of times the factory produced a transport
-     *  and pre-cancels every transport it yields so the worker's
-     *  download() throws InterruptedIOException immediately.
-     *  Tests that want a different outcome replace the factory via
-     *  {@link UpdatesActivity#installTransportFactoryForTest}. */
+    private void recordDownloadedFixture(String version, long sequence, long versionCode,
+                                         byte[] apkBytes) throws Exception {
+        String apkSha = sha256(apkBytes);
+        byte[] body = buildManifestBody(version, sequence, versionCode,
+                apkBytes.length, apkSha, UpdateTestFixture.SIGNER_SHA256);
+        byte[] sig = sign(body);
+        UpdateManifest m = UpdateManifest.verify(body, sig, keyPem);
+        File fakeApk = writeFakeDownloadedApk(version, apkBytes);
+        repo.recordDownloaded(m, body, sig, fakeApk);
+        UpdateTestFixture.publishArchiveInfo(UpdateTestFixture.context(),
+                repo.snapshot().downloadedApk, versionCode);
+    }
+
+    /**
+     * A cached APK that no longer verifies must be purged so the next
+     * Update downloads fresh bytes, and the status must point at the
+     * retry rather than pretending the cached copy is good.
+     */
+    @Test public void corruptDownloadedApkCanBeDownloadedAgain() throws Exception {
+        long installed = UpdateTestFixture.installedVersionCode(UpdateTestFixture.context());
+        UpdateTestFixture.installSigningIdentity(UpdateTestFixture.context(), installed, true);
+        byte[] apk = new byte[]{1, 2, 3, 4};
+        recordAvailable("0.1.0.7", 7, installed + 1, apk, UpdateTestFixture.SIGNER_SHA256);
+        recordDownloadedFixture("0.1.0.7", 7, installed + 1, apk);
+
+        // Corrupt the persisted APK so its digest no longer matches the
+        // signed manifest, and drop the archive identity too.
+        File cached = repo.snapshot().downloadedApk;
+        try (FileOutputStream out = new FileOutputStream(cached, true)) { out.write(99); }
+        UpdateTestFixture.clearArchiveInfo(UpdateTestFixture.context(), cached);
+
+        ActivityController<UpdatesActivity> ctl = openActivity();
+        try {
+            idleAll();
+            clickPrimary(ctl.get());
+            idleAll();
+
+            assertFalse("a corrupt cached APK must be purged",
+                    repo.snapshot().hasDownloaded());
+            assertTrue("the verified metadata must survive the purge",
+                    repo.snapshot().hasAvailable());
+            assertEquals("the single action must offer the update again",
+                    UpdatesActivity.PrimaryAction.RETRY, ctl.get().primaryActionForTest());
+            assertTrue("the failure must be visible: " + ctl.get().windowStatusText(),
+                    ctl.get().windowStatusText().contains("failed"));
+            assertTrue("the status must name the retry path: "
+                            + ctl.get().windowStatusText(),
+                    ctl.get().windowStatusText().contains("Tap Retry"));
+
+            // A pause/resume cycle must not resurrect the purged cache.
+            ctl.pause().resume();
+            idleAll();
+            assertFalse("the purged cache must stay purged across resume",
+                    repo.snapshot().hasDownloaded());
+            assertNotNull("a retry must still be offered after resume",
+                    ctl.get().currentActionErrorForTest());
+        } finally {
+            ctl.pause().stop().destroy();
+        }
+    }
+
+    /** Denying the source-install permission keeps the verified
+     * download and explains what happened. The Settings screen is
+     * answered for real and the result carries the request code that
+     * launch actually used. */
+    @Test public void deniedInstallPermissionKeepsDownloadAndNoticeAcrossResume() throws Exception {
+        long installed = UpdateTestFixture.installedVersionCode(UpdateTestFixture.context());
+        UpdateTestFixture.installSigningIdentity(UpdateTestFixture.context(), installed, false);
+        byte[] apk = new byte[]{1, 2, 3, 4};
+        recordAvailable("0.1.0.7", 7, installed + 1, apk, UpdateTestFixture.SIGNER_SHA256);
+        recordDownloadedFixture("0.1.0.7", 7, installed + 1, apk);
+
+        ActivityController<UpdatesActivity> ctl = openActivity();
+        try {
+            idleAll();
+            clickPrimary(ctl.get());
+            idleUntilPermission(ctl.get());
+            android.app.AlertDialog dialog = (android.app.AlertDialog)
+                    org.robolectric.shadows.ShadowDialog.getLatestDialog();
+            assertNotNull("the permission dialog must be on screen", dialog);
+            dialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE).performClick();
+            Shadows.shadowOf(android.os.Looper.getMainLooper()).idle();
+            org.robolectric.shadows.ShadowActivity.IntentForResult settings =
+                    Shadows.shadowOf(ctl.get()).getNextStartedActivityForResult();
+            assertNotNull("the Settings screen must be launched", settings);
+            // The user comes back without granting.
+            ctl.pause();
+            ctl.get().onActivityResult(settings.requestCode, Activity.RESULT_CANCELED, null);
+            ctl.resume();
+            idleAll();
+            assertTrue("the verified download must survive a denial",
+                    repo.snapshot().hasDownloaded());
+            assertEquals("the stage must clear after a denial",
+                    "IDLE", ctl.get().runningStageForTest());
+            assertTrue("the user must be told the permission was refused: "
+                            + ctl.get().windowStatusText(),
+                    ctl.get().windowStatusText().contains("permission was not granted"));
+            assertEquals("the single action must offer the cached update again",
+                    UpdatesActivity.PrimaryAction.UPDATE, ctl.get().primaryActionForTest());
+        } finally {
+            ctl.pause().stop().destroy();
+        }
+    }
+
+    /**
+     * A cancelled installer is not an install: the verified download
+     * is kept and the status says so.
+     */
+    @Test public void cancelledInstallerKeepsDownloadAndNoticeAcrossResume() throws Exception {
+        long installed = UpdateTestFixture.installedVersionCode(UpdateTestFixture.context());
+        UpdateTestFixture.installSigningIdentity(UpdateTestFixture.context(), installed, true);
+        byte[] apk = new byte[]{1, 2, 3, 4};
+        recordAvailable("0.1.0.7", 7, installed + 1, apk, UpdateTestFixture.SIGNER_SHA256);
+        recordDownloadedFixture("0.1.0.7", 7, installed + 1, apk);
+
+        ActivityController<UpdatesActivity> ctl = openActivity();
+        try {
+            idleAll();
+            clickPrimary(ctl.get());
+            idleAll();
+            assertTrue("the APK must have been handed to the OS",
+                    ctl.get().handedToSystemForTest());
+            org.robolectric.shadows.ShadowActivity.IntentForResult launched =
+                    Shadows.shadowOf(ctl.get()).getNextStartedActivityForResult();
+            assertNotNull("the installer must be launched", launched);
+            ctl.get().onActivityResult(launched.requestCode, Activity.RESULT_CANCELED, null);
+            idleAll();
+            assertTrue("the verified download must survive a cancelled install",
+                    repo.snapshot().hasDownloaded());
+            assertEquals("the stage must clear",
+                    "IDLE", ctl.get().runningStageForTest());
+            assertTrue("the status must not claim a completed install: "
+                            + ctl.get().windowStatusText(),
+                    ctl.get().windowStatusText().toLowerCase().contains("not installed"));
+        } finally {
+            ctl.pause().stop().destroy();
+        }
+    }
+
+    /** Records the number of transports produced and pre-cancels each
+     *  one so {@code download()} throws InterruptedIOException. */
     static final class RecordingTransportFactory implements UpdatesActivity.TransportFactory {
         final AtomicInteger created = new AtomicInteger();
         final boolean preCancel;

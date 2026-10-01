@@ -7,96 +7,267 @@ import android.net.Uri;
 import android.os.*;
 import android.provider.Settings;
 import android.view.View;
+import android.view.ViewGroup;
 import android.widget.*;
 import androidx.core.content.FileProvider;
 import com.limelight.R;
 import java.io.*;
 import java.security.MessageDigest;
 import java.util.List;
-import java.util.concurrent.*;
 
 /**
- * Idle 2D update flow; verified APK still requires the OS installation
- * prompt.
+ * Idle 2D update flow with a single update action.
  *
- * <p>State is consumed from the app-scoped {@link UpdateRepository}.
- * The activity does NOT require an explicit Check button click — the
- * shared repository already carries whatever the most recent metadata
- * check produced. A "Check now" button remains so the user can force
- * a refresh through the throttle; "Download update" appears once
- * verified available metadata is present and no downloaded slot is
- * already ready for the same release; "Install update" appears once a
- * verified APK is on disk.
+ * <p>One primary button carries a release all the way to the Android
+ * installer: the tap pins an immutable {@link Attempt} (release,
+ * versionCode, APK digest, signed metadata bytes), downloads the APK
+ * when the verified cache is not already an exact match, verifies it,
+ * and opens the OS installer. There is no second in-app Install tap and
+ * Android's own permission / install consent prompts are untouched.
  *
- * <p>Activity lifecycle does not cancel the shared check. The
- * repository owns its executor; the activity only registers /
- * unregisters an observer.
+ * <p>State ownership:
+ * <ul>
+ *   <li>The UI thread is the sole mutator of {@link Stage}, the pinned
+ *       attempt, the hand-off record and the terminal-error fields.
+ *       Workers only read them (they are safely published) and report
+ *       back through {@link #publishToUi}.</li>
+ *   <li>A worker that finishes after its attempt was cancelled or
+ *       superseded reports failure without touching the repository, so
+ *       a late transport can neither overwrite nor purge the cache.</li>
+ *   <li>Downloading mutates one shared staging file, so the
+ *       file-mutating part of a download is serialized process-wide
+ *       across Activity instances, and the bytes are bound to a
+ *       release-specific copy before that boundary is released.</li>
+ *   <li>Only that release-bound copy is ever verified or handed to
+ *       Android, so a later attempt cannot disturb an update that is
+ *       already pinned.</li>
+ * </ul>
+ *
+ * <p>Trust is unchanged: the pinned digest gates every byte we keep,
+ * the archive must match this package / versionCode, the signer must
+ * equal the installed signer, and the APK is handed over through the
+ * {@link UpdateFileProvider} content URI. A cached APK that fails an
+ * integrity check is purged so the next attempt downloads fresh bytes;
+ * a verified cache survives Cancel, a denial, and any failure that is
+ * not evidence of corruption (a live VR session, for instance).
  */
 public final class UpdatesActivity extends Activity {
+
+    /**
+     * Request codes must fit the lower 16 bits Android accepts, and
+     * must stay clear of the range fragments reserve, so each launch
+     * takes the next code in the process.
+     */
+    private static final int FIRST_REQUEST_CODE = 0x5100;
+    private static final int LAST_REQUEST_CODE = 0xFFFF;
+    private static final java.util.concurrent.atomic.AtomicInteger NEXT_REQUEST_CODE =
+            new java.util.concurrent.atomic.AtomicInteger(FIRST_REQUEST_CODE);
+
+    /** Allocate a fresh request code, or fail closed when the 16-bit
+     *  space is exhausted rather than reissuing a live code. */
+    private static int allocateRequestCode() {
+        int code = NEXT_REQUEST_CODE.getAndIncrement();
+        if (code > LAST_REQUEST_CODE) {
+            NEXT_REQUEST_CODE.set(FIRST_REQUEST_CODE);
+            return -1;
+        }
+        return code;
+    }
+
+    /** The action the single primary button is bound to. The label and
+     *  the click dispatch are both derived from this enum, so they
+     *  cannot diverge. */
+    enum PrimaryAction {
+        /** An operation is running, VR is live, or the update service
+         *  is unavailable: the button is disabled. */
+        NONE,
+        /** Nothing is advertised and nothing is cached: the user can
+         *  force a metadata check. */
+        CHECK,
+        /** A newer release is advertised or its verified APK is cached:
+         *  one tap downloads (if needed), verifies, and opens the
+         *  installer. */
+        UPDATE,
+        /** The last attempt failed: re-run the operation that failed
+         *  rather than checking again first. */
+        RETRY,
+        /** Android owns the installer and has not told us whether the
+         *  install completed. Re-run the same pinned release. */
+        RETRY_UNCONFIRMED
+    }
+
+    /** The stage of the running attempt. Owned by the UI thread;
+     *  {@link #VERIFYING} covers "verifying" and "verified, hand-off
+     *  pending" so a completion that lands while paused can be resumed
+     *  from the very stage it left. {@link #INSTALLER_UNCONFIRMED} is a
+     *  resting state, not work in flight: Android owns the installer and
+     *  nothing here can say whether it succeeded. */
+    private enum Stage {
+        IDLE, CHECKING, DOWNLOADING, VERIFYING, INSTALLER, AWAITING_SYSTEM, INSTALLER_UNCONFIRMED
+    }
+
+    /**
+     * An immutable, pinned update target. Everything that decides what
+     * gets installed is captured at click time so a concurrent
+     * metadata refresh cannot change what this attempt installs.
+     *
+     * <p>Immutable fields are published safely by the final-field
+     * guarantee, so a worker may read a pinned attempt it was handed
+     * without further synchronisation. Cancellation lives on the
+     * attempt itself rather than in a per-Activity flag, so a newer
+     * attempt can never clear the cancellation of an older one.
+     */
+    static final class Attempt {
+        final UpdateManifest manifest;
+        final byte[] manifestBytes;
+        final byte[] signatureBytes;
+        /** The release-bound copy of the APK: verified here and handed
+         *  to Android. It is never the shared download staging file. */
+        final File cachedApk;
+        /** Monotonic id; a newer attempt (or a cancel) supersedes it. */
+        final int generation;
+        private final java.util.concurrent.atomic.AtomicBoolean cancelled =
+                new java.util.concurrent.atomic.AtomicBoolean();
+
+        Attempt(UpdateManifest manifest, byte[] manifestBytes, byte[] signatureBytes,
+                File cachedApk, int generation) {
+            this.manifest = manifest;
+            this.manifestBytes = manifestBytes == null ? null : manifestBytes.clone();
+            this.signatureBytes = signatureBytes == null ? null : signatureBytes.clone();
+            this.cachedApk = cachedApk;
+            this.generation = generation;
+        }
+
+        String version() { return manifest.version; }
+
+        /** The APK only counts when it is the pinned release. */
+        boolean hasCachedApk() { return cachedApk != null && cachedApk.isFile(); }
+
+        boolean isCancelled() { return cancelled.get(); }
+
+        void cancel() { cancelled.set(true); }
+
+        Attempt withApk(File verified) {
+            return new Attempt(manifest, manifestBytes, signatureBytes, verified, generation);
+        }
+
+        boolean sameTargetAs(Attempt other) {
+            return other != null
+                    && generation == other.generation
+                    && manifest.versionCode == other.manifest.versionCode
+                    && manifest.sha256.equals(other.manifest.sha256);
+        }
+    }
+
+    /**
+     * The single outstanding hand-off to the OS. It records the exact
+     * request code the launch used, so a result is only ever accepted
+     * for the launch it answers: a result that arrives for an earlier
+     * request cannot be confused with the live one, and therefore
+     * cannot authorise, or invalidate, whatever is running now.
+     *
+     * <p>A result code is only ever recorded after that exact match, and
+     * its presence is what separates "Android told us this did not
+     * happen" from "Android told us nothing at all".
+     *
+     * <p>While only the install-permission dialog is up nothing has been
+     * launched, so there is no request code to match and a permission
+     * result cannot be accepted at all.
+     */
+    private static final class SystemHandoff {
+        /** Waiting on the install-permission dialog; nothing launched. */
+        static final int AWAITING_PERMISSION = 0;
+        /** Waiting on the "allow from this source" Settings screen. */
+        static final int AWAITING_SETTINGS = 1;
+        /** The APK is with the OS installer. */
+        static final int AWAITING_INSTALLER = 2;
+        /** No request is in flight. */
+        static final int NO_REQUEST = 0;
+
+        final int phase;
+        final int requestCode;
+        final int generation;
+        final Attempt attempt;
+        /** Set only by a result carrying this record's own request code. */
+        boolean resultReceived;
+        int resultCode;
+
+        SystemHandoff(int phase, int requestCode, Attempt attempt) {
+            this.phase = phase;
+            this.requestCode = requestCode;
+            this.generation = attempt == null ? -1 : attempt.generation;
+            this.attempt = attempt;
+        }
+
+        /** True while this record still describes the live attempt. */
+        boolean describes(Attempt live) {
+            return live != null
+                    && attempt != null
+                    && generation == live.generation
+                    && attempt.sameTargetAs(live);
+        }
+
+        /** Record a result that matched this exact launch. */
+        void recordResult(int code) {
+            this.resultReceived = true;
+            this.resultCode = code;
+        }
+    }
+
     private TextView status;
-    private Button check, download, install, cancel;
-    /** Volatile because {@link #onRepositoryUpdate} writes it on the
-     *  repository's executor and the UI thread reads it from
-     *  {@link #render()} / the click handlers. Also because the
-     *  download worker thread publishes the transport here, and the
-     *  UI thread reads it from {@link #onDestroy()} to cancel any
-     *  in-flight network call. */
+    private TextView installedVersionView;
+    private Button primary;
+    private Button cancel;
+    private Button back;
+
     private volatile UpdateTransport transport;
-    /** Per-download cancel flag, volatile across UI/worker threads.
-     *  Reset at the start of each download. */
-    private volatile boolean downloadCancelled;
-    /** Volatile for the same reason as {@link #transport}: the
-     *  repository observer writes it on its executor, the UI thread
-     *  reads it from render() and the action click handlers. */
     private volatile UpdateRepository.Snapshot current;
     private UpdateRepository repository;
-    /** True while the shared repository is fetching metadata. Render
-     *  uses this to surface the in-flight label. It does NOT cover
-     *  download / install: those use {@link #actionKind} so the
-     *  download / install progress and errors are never overwritten
-     *  by a generic "Checking…" label. */
-    private boolean metadataChecking;
-    /** Active local operation: "check", "download", "install",
-     *  null when idle. Cleared when the operation TERMINATES
-     *  (success OR failure) so the buttons re-enable; the
-     *  completion-side error (if any) is preserved in
-     *  {@link #actionError} until the user starts a new operation.
-     *  This is the "active action busy" state and is intentionally
-     *  separate from a "completed error operation" — the latter is
-     *  expressed by {@code actionKind == null} AND
-     *  {@code actionError != null}. */
-    private String actionKind;
-    /** Error from the most recently TERMINATED operation. Preserved
-     *  across renders and across metadata check completions until
-     *  the user starts a new operation. */
+
+    /** UI-owned; read by workers through the volatile publication. */
+    private volatile Stage stage = Stage.IDLE;
+    /** UI-owned; read by workers through the volatile publication. */
+    private volatile Attempt attempt;
+    private int generationCounter;
     private String actionError;
-    /** Captures which operation produced {@link #actionError} so the
-     *  "Tap X to retry" hint in the terminal-error state stays
-     *  accurate even after {@link #actionKind} has been cleared. */
     private String lastFailedKind;
-    /** Non-terminal result notice (permission denied, install
-     *  cancelled, settings unavailable, ActivityNotFoundException).
-     *  Preserved across renders and across onResume auto-checks so
-     *  the next background metadata check never erases a
-     *  still-visible result. Cleared by
-     *  {@link #userInitiatedNewOperation}. Render shows it above any
-     *  snapshot copy so the user always sees the outcome of their
-     *  last install attempt. */
     private String resultNotice;
-    private String actionInProgressText;
     private boolean observerRegistered;
-    private boolean inflightWaiterAlive;
     private volatile boolean destroyed;
+    private volatile boolean resumed;
+
+    /** True from the moment the APK is handed to the OS installer until
+     *  the activity comes back. */
+    private volatile boolean handedToSystem;
+    /** A permission answer is outstanding: the dialog is up or the
+     *  Settings screen owns the screen. */
+    private volatile boolean awaitingPermission;
+    /** The one outstanding hand-off, or null. UI-owned. */
+    private SystemHandoff handoff;
+    /** The install-permission dialog, while it is on screen. */
+    private AlertDialog permissionDialog;
+    /** A verification that completed while paused queues one
+     *  continuation; this holds it until onResume. UI-owned. */
+    private Attempt queuedContinuation;
+    private boolean continuationQueued;
+
+    /** The action the primary button is currently bound to. */
+    private volatile PrimaryAction boundPrimaryAction = PrimaryAction.NONE;
+
     private final UpdateRepository.Observer observer = this::onRepositoryUpdate;
-    private static final int SOURCE_PERMISSION=801, INSTALL=802;
-    private File cacheRoot() { return new File(getCacheDir(),"updates"); }
+
+    /**
+     * The file-mutating part of a download is process-wide state (one
+     * shared staging APK), so it is serialized across Activity
+     * instances: a destroyed or cancelled instance can neither
+     * interleave writes with nor be overwritten by a newer attempt.
+     */
+    private static final Object DOWNLOAD_BOUNDARY = new Object();
+
+    private File cacheRoot() { return new File(getCacheDir(), "updates"); }
 
     /** Narrow injectable seam for {@link UpdateTransport} so the
-     *  production code path (a real network transport) can be
-     *  swapped for a fake in tests without editing UpdateTransport
-     *  itself. The default factory constructs the package-private
-     *  {@link UpdateTransport} directly; tests override via
-     *  {@link #installTransportFactoryForTest}. */
+     *  production code path can be swapped for a fake in tests. */
     public interface TransportFactory {
         UpdateTransport create(String trustedKey);
     }
@@ -107,12 +278,8 @@ public final class UpdatesActivity extends Activity {
         }
     };
 
-    /** Replace the static {@link TransportFactory} seam. Tests pass a
-     *  fake that records creation / download calls so the destroy-
-     *  before-publication path can be asserted without hitting the
-     *  real network. */
     static void installTransportFactoryForTest(TransportFactory f) {
-        transportFactory = f;
+        if (f != null) transportFactory = f;
     }
 
     private static volatile java.util.function.Function<UpdatesActivity, String> trustKeyProvider =
@@ -130,10 +297,6 @@ public final class UpdatesActivity extends Activity {
                 }
             };
 
-    /** Replace the {@link #trustKeyProvider} for tests that exercise
-     *  the download worker. The default loads the embedded PEM from
-     *  {@code R.raw.quest_update_key}, which is unavailable under
-     *  Robolectric unless the test adds the raw resource. */
     static void installTrustKeyProviderForTest(java.util.function.Function<UpdatesActivity, String> provider) {
         trustKeyProvider = provider;
     }
@@ -144,50 +307,148 @@ public final class UpdatesActivity extends Activity {
 
     @Override public void onCreate(Bundle saved) {
         super.onCreate(saved);
-        LinearLayout layout=new LinearLayout(this); layout.setOrientation(LinearLayout.VERTICAL);
-        int pad=(int)(24*getResources().getDisplayMetrics().density);layout.setPadding(pad,pad,pad,pad);
-        TextView heading=new TextView(this);heading.setText("App updates");heading.setTextSize(26);layout.addView(heading);
-        TextView description=new TextView(this);description.setText("Quest preview updates are checked before installation. Close your game first. Android will ask you to confirm installation. Update your Windows host separately from its manager.");
-        description.setTextSize(17);layout.addView(description);
-        status=new TextView(this);status.setTextSize(17);layout.addView(status);
-        check=button(layout,"Check now");download=button(layout,"Download update");install=button(layout,"Install update");cancel=button(layout,"Cancel download");
-        button(layout,"Back").setOnClickListener(v->finish());
-        ScrollView scroll=new ScrollView(this);scroll.addView(layout);setContentView(scroll);
-        check.setOnClickListener(v->{ userInitiatedNewOperation(); triggerCheck(true); });
-        download.setOnClickListener(v->{ userInitiatedNewOperation(); downloadUpdate(); });
-        install.setOnClickListener(v->{ userInitiatedNewOperation(); installUpdate(); });
-        cancel.setOnClickListener(v->{downloadCancelled=true;if(transport!=null)transport.cancel();});
-        status.setText("Installed version: "+installedVersion());
-        repository = UpdateRepositoryProvider.get(getApplicationContext());
-        if (repository != null) {
-            repository.addObserver(observer);
-            observerRegistered = true;
-            UpdateRepository.Snapshot s = repository.snapshot();
-            current = s;
-            render();
-            // Auto-trigger a metadata check on open. The repository
-            // coalesces concurrent triggers onto the in-flight handle
-            // and the same gate the hub uses on onResume, so opening
-            // the updates screen never starts a second parallel
-            // request. The Check now button stays available for a
-            // forced refresh.
-            if (repository.shouldRunByThrottle(false)) {
-                triggerCheck(false);
-            }
-        } else {
-            render();
-        }
+        float density = getResources().getDisplayMetrics().density;
+        int pad = Math.round(24 * density);
+        int sp = Math.round(8 * density);
+
+        ScrollView scroll = new ScrollView(this);
+        scroll.setBackgroundColor(getResources().getColor(R.color.upd_panel_bg));
+        scroll.setFillViewport(true);
+
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setPadding(pad, pad, pad, pad);
+        card.setBackgroundColor(getResources().getColor(R.color.upd_panel_card));
+
+        LinearLayout.LayoutParams cardParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
+        cardParams.setMargins(pad, pad, pad, pad);
+        scroll.addView(card, cardParams);
+
+        TextView heading = new TextView(this);
+        heading.setText(R.string.upd_title);
+        heading.setTextSize(26);
+        heading.setTextColor(getResources().getColor(R.color.upd_panel_fg));
+        heading.setTypeface(heading.getTypeface(), android.graphics.Typeface.BOLD);
+        card.addView(heading, lp(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 0, 0, 0, 0));
+
+        TextView description = new TextView(this);
+        description.setText(R.string.upd_intro);
+        description.setTextSize(15);
+        description.setTextColor(getResources().getColor(R.color.upd_panel_subtle));
+        description.setLineSpacing(0f, 1.2f);
+        card.addView(description, lp(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT, sp, 0, 0, sp));
+
+        installedVersionView = new TextView(this);
+        installedVersionView.setTextSize(15);
+        installedVersionView.setTextColor(getResources().getColor(R.color.upd_panel_subtle));
+        card.addView(installedVersionView, lp(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT, sp, 0, 0, sp));
+
+        status = new TextView(this);
+        status.setTextSize(17);
+        status.setTextColor(getResources().getColor(R.color.upd_panel_fg));
+        status.setLineSpacing(0f, 1.3f);
+        card.addView(status, lp(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 0, 0, 0, Math.round(16 * density)));
+
+        primary = createPrimaryButton(card, density);
+        cancel = createSecondaryButton(card, getString(R.string.upd_action_cancel), density);
+        back = createSecondaryButton(card, getString(R.string.upd_action_back), density);
+
+        cancel.setOnClickListener(v -> onCancelClicked());
+        primary.setOnClickListener(v -> {
+            // The retry branch must know which operation failed, so
+            // both the bound action and its failure kind are captured
+            // before the terminal state is cleared.
+            PrimaryAction action = boundPrimaryAction;
+            String failedKind = lastFailedKind;
+            clearTerminalState();
+            dispatchPrimaryAction(action, failedKind);
+        });
+        back.setOnClickListener(v -> finish());
+
+        setContentView(scroll);
+
+        refreshInstalledVersionView();
+        acquireRepository();
     }
 
-    private Button button(LinearLayout layout,String text) {
-        Button b=new Button(this);b.setText(text);b.setMinHeight((int)(52*getResources().getDisplayMetrics().density));
-        layout.addView(b,new LinearLayout.LayoutParams(-1,-2));return b;
+    private LinearLayout.LayoutParams lp(int w, int h, int t, int l, int r, int b) {
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(w, h);
+        p.topMargin = t;
+        p.leftMargin = l;
+        p.rightMargin = r;
+        p.bottomMargin = b;
+        return p;
+    }
+
+    private Button createPrimaryButton(LinearLayout card, float density) {
+        Button b = new Button(this);
+        b.setMinHeight(Math.round(72 * density));
+        b.setMinimumHeight(Math.round(72 * density));
+        b.setTextSize(18);
+        b.setTypeface(b.getTypeface(), android.graphics.Typeface.BOLD);
+        b.setTextColor(getResources().getColor(R.color.upd_panel_on_primary));
+        b.setBackgroundResource(R.drawable.upd_btn_primary);
+        b.setPadding(Math.round(20 * density), Math.round(12 * density),
+                Math.round(20 * density), Math.round(12 * density));
+        b.setAllCaps(false);
+        b.setStateListAnimator(null);
+        card.addView(b, lp(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                Math.round(8 * density), 0, 0, Math.round(12 * density)));
+        return b;
+    }
+
+    private Button createSecondaryButton(LinearLayout card, String text, float density) {
+        Button b = new Button(this);
+        b.setText(text);
+        b.setMinHeight(Math.round(56 * density));
+        b.setMinimumHeight(Math.round(56 * density));
+        b.setTextSize(16);
+        b.setTextColor(getResources().getColor(R.color.upd_panel_fg));
+        b.setBackgroundResource(R.drawable.upd_btn_secondary);
+        b.setPadding(Math.round(20 * density), Math.round(8 * density),
+                Math.round(20 * density), Math.round(8 * density));
+        b.setAllCaps(false);
+        b.setStateListAnimator(null);
+        card.addView(b, lp(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 0, 0, 0, Math.round(8 * density)));
+        return b;
+    }
+
+    private void acquireRepository() {
+        repository = UpdateRepositoryProvider.get(getApplicationContext());
+        if (repository == null) {
+            // Cold-start install failed: surface it as the initial
+            // state so a Retry tap can recover without recreation.
+            actionError = firstErrorOr("Update service unavailable");
+            lastFailedKind = "check";
+            render();
+            return;
+        }
+        repository.addObserver(observer);
+        observerRegistered = true;
+        current = repository.snapshot();
+        // Any "service unavailable" notice is stale now that a
+        // repository exists; let the real state render.
+        actionError = null;
+        lastFailedKind = null;
+        render();
+        if (repository.shouldRunByThrottle(false)) triggerCheck(false);
+    }
+
+    private static String firstErrorOr(String fallback) {
+        String err = UpdateRepositoryProvider.initializationErrorForTest();
+        return err != null ? err : fallback;
     }
 
     private void onRepositoryUpdate(UpdateRepository.Snapshot s) {
         current = s;
-        // Marshalling back to the UI thread is required because the
-        // snapshot mutator runs on the repository's executor.
         if (destroyed) return;
         runOnUiThread(() -> {
             if (destroyed || isFinishing() || isDestroyed()) return;
@@ -195,139 +456,814 @@ public final class UpdatesActivity extends Activity {
         });
     }
 
+    /**
+     * The release the primary action would act on right now.
+     *
+     * <p>Newest signed release wins, ranked by versionCode and then by
+     * sequence, so a genuinely newer {@code available} release outranks
+     * an older cached one. The cached APK is attached only when the
+     * cached release IS that target: either the exact same release
+     * (versionCode, digest and package all equal), or the newer cached
+     * release that outranks the advertised one and therefore became
+     * the target itself, so the download is skipped only for the
+     * precise release the bytes were verified against. A cached
+     * release at or below the installed versionCode is stale and is
+     * never offered.
+     */
+    Attempt offeredAttempt() {
+        UpdateRepository.Snapshot snap = current == null
+                ? (repository == null ? null : repository.snapshot()) : current;
+        if (snap == null) return null;
+        long installed = installedVersion();
+
+        UpdateManifest available = snap.hasAvailable() && appliesTo(snap.available, installed)
+                ? snap.available : null;
+        UpdateManifest downloaded = snap.hasDownloaded() && appliesTo(snap.downloaded, installed)
+                ? snap.downloaded : null;
+
+        if (available == null && downloaded == null) return null;
+        boolean preferDownloaded = downloaded != null
+                && (available == null || isNewer(downloaded, available));
+
+        UpdateManifest target = preferDownloaded ? downloaded : available;
+        byte[] manifestBytes = preferDownloaded
+                ? snap.downloadedManifestBytes : snap.availableManifestBytes;
+        byte[] signatureBytes = preferDownloaded
+                ? snap.downloadedSignatureBytes : snap.availableSignatureBytes;
+
+        // The cache serves the target when the cached release IS that
+        // target: an exact identity match, or the newer cached release
+        // that outranks the advertised one and therefore became the
+        // target itself. An older cache never stands in for the target,
+        // and neither does one for a release that is not offered.
+        boolean cacheMatches = downloaded != null
+                && (preferDownloaded || (available != null
+                        && downloaded.versionCode == available.versionCode
+                        && downloaded.packageName.equals(available.packageName)
+                        && downloaded.sha256.equals(available.sha256)));
+        File cached = cacheMatches ? snap.downloadedApk : null;
+        return new Attempt(target, manifestBytes, signatureBytes, cached, 0);
+    }
+
+    private static boolean appliesTo(UpdateManifest m, long installedVersion) {
+        return m != null && m.versionCode > installedVersion;
+    }
+
+    private static boolean isNewer(UpdateManifest candidate, UpdateManifest current0) {
+        if (candidate.versionCode != current0.versionCode)
+            return candidate.versionCode > current0.versionCode;
+        return candidate.sequence > current0.sequence;
+    }
+
+    Attempt offeredAttemptForTest() { return offeredAttempt(); }
+
+    /** Compute the action the primary button is bound to. The same
+     *  enum drives both the visible label and the click dispatch. */
+    PrimaryAction computePrimaryAction() {
+        if (repository == null) {
+            return actionError != null ? PrimaryAction.RETRY : PrimaryAction.NONE;
+        }
+        // The installer's outcome is unknown, not failed: the user
+        // decides whether to ask Android again. Nothing else is offered
+        // while this rests, so metadata published meanwhile cannot pull
+        // the tap away from the pinned release.
+        if (stage == Stage.INSTALLER_UNCONFIRMED) return PrimaryAction.RETRY_UNCONFIRMED;
+        if (stage != Stage.IDLE) return PrimaryAction.NONE;
+        if (isLiveVrRunning()) return PrimaryAction.NONE;
+        if (actionError != null) return PrimaryAction.RETRY;
+        return offeredAttempt() != null ? PrimaryAction.UPDATE : PrimaryAction.CHECK;
+    }
+
     private void render() {
-        UpdateRepository.Snapshot s = current;
-        boolean busy = actionKind != null;
+        PrimaryAction action = computePrimaryAction();
+        boundPrimaryAction = action;
+        Attempt pinned = attempt;
+        String updateLabel = pinned != null
+                ? getString(R.string.upd_action_update, pinned.version())
+                : offeredAttemptLabel();
+
+        String label;
+        boolean enabled;
+        if (action == PrimaryAction.NONE) {
+            // Disabled. Keep naming the pinned release while a stage
+            // runs so the label matches the work in flight.
+            label = pinned != null ? updateLabel : getString(R.string.upd_action_check);
+            enabled = false;
+        } else if (action == PrimaryAction.RETRY) {
+            label = getString(R.string.upd_action_retry);
+            enabled = true;
+        } else if (action == PrimaryAction.RETRY_UNCONFIRMED) {
+            // The status right above names the release whose outcome is
+            // unknown, so the button only has to say Retry: one word,
+            // and no ambiguity about what re-running it means.
+            label = getString(R.string.upd_action_retry_unconfirmed);
+            enabled = true;
+        } else if (action == PrimaryAction.UPDATE) {
+            label = updateLabel;
+            enabled = true;
+        } else {
+            label = getString(R.string.upd_action_check);
+            enabled = true;
+        }
+        primary.setText(label);
+        primary.setEnabled(enabled);
+
+        cancel.setVisibility(isCancelAvailable() ? View.VISIBLE : View.GONE);
+        cancel.setEnabled(isCancelAvailable());
+        back.setVisibility(View.VISIBLE);
+        back.setEnabled(true);
+
+        refreshInstalledVersionView();
+        renderStatus();
+    }
+
+    private String offeredAttemptLabel() {
+        Attempt offered = offeredAttempt();
+        return offered == null ? getString(R.string.upd_action_check)
+                : getString(R.string.upd_action_update, offered.version());
+    }
+
+    private void refreshInstalledVersionView() {
+        if (installedVersionView == null) return;
+        long installed = installedVersion();
+        installedVersionView.setText(installed < 0
+                ? "Installed version: unavailable"
+                : "Installed version: " + installed);
+    }
+
+    private void renderStatus() {
         boolean liveVr = isLiveVrRunning();
-        // Live VR blocks download / install (the worker calls
-        // ensureIdle() which throws), but it does NOT block the
-        // actionKind != null check. We disable download / install
-        // buttons in live VR so the user gets immediate feedback
-        // instead of an "ensureIdle" failure surfaced as a download
-        // error. The action error from a prior download is still
-        // preserved until the user retries.
-        boolean canDownload = !busy && !liveVr && s != null && s.hasAvailable() && !sameReleaseDownloaded(s);
-        boolean canInstall = !busy && !liveVr && s != null && s.hasDownloaded();
-        check.setEnabled(!busy);
-        download.setEnabled(canDownload);
-        install.setEnabled(canInstall);
-        // The cancel button is reserved for the DOWNLOAD action.
-        // Metadata check and OS install confirmation are not
-        // cancellable from this screen: "check" is short and
-        // controlled by the throttle, and "install" is already in
-        // the system installer dialog.
-        cancel.setVisibility(("download".equals(actionKind)) ? View.VISIBLE : View.GONE);
-        // Operation-specific labels win over generic repository
-        // metadata so a download or install never gets overwritten
-        // by "Checking…". The error label MUST be shown even when
-        // actionKind is null: that is the "completed error
-        // operation" state — the operation terminated, buttons
-        // re-enabled, but the user has not yet started a new
-        // operation. We preserve the message across background
-        // metadata checks so an auto-refresh never erases a
-        // still-visible failure. The error label is always keyed
-        // by lastFailedKind — that field is the only reliable
-        // record of WHICH operation produced the visible message
-        // once actionKind has been cleared. When a new action
-        // starts (e.g. an auto-check) the previous failure still
-        // wins on screen until the user starts a real new
-        // operation (Download / Install / a user-pressed Check now).
-        // resultNotice wins over every other branch so a still-visible
-        // install / permission / settings outcome is never erased by
-        // the next background metadata check, "Checking…" copy, or a
-        // "Tap X to retry" overlap. The notice survives across
-        // onResume auto-checks; it is cleared only by
-        // userInitiatedNewOperation. VR guidance is appended when
-        // the install / retry action is currently blocked by live VR.
+        Attempt pinned = attempt;
+        if (stage == Stage.INSTALLER_UNCONFIRMED && pinned != null) {
+            // Never claim the install was cancelled or that the app is
+            // unchanged: Android owns the installer and simply has not
+            // reported back.
+            status.setText(getString(R.string.upd_installer_unconfirmed,
+                    pinned.version()));
+            return;
+        }
         if (resultNotice != null) {
-            status.setText(resultNotice + (liveVr ? " Close your VR session before updating." : ""));
+            status.setText(resultNotice + vrSuffix(liveVr, pinned != null));
+            return;
+        }
+        if (stage != Stage.IDLE) {
+            status.setText(stageText(pinned, liveVr));
             return;
         }
         if (actionError != null) {
-            String failedKind = lastFailedKind != null ? lastFailedKind : actionKind;
-            String base;
-            if (actionKind == null) {
-                base = actionKindLabel(failedKind) + " failed: " + actionError + ". Tap " + actionKindLabel(failedKind) + " to retry.";
-            } else {
-                base = actionKindLabel(failedKind) + " failed: " + actionError + ". Tap " + actionKindLabel(failedKind) + " to retry. " + actionKindLabel(actionKind) + " in progress…";
-            }
-            status.setText(base + vrSuffixFor(liveVr, failedKind));
+            String kind = lastFailedKind != null ? lastFailedKind : "check";
+            String target = pinned != null ? " (" + pinned.version() + ")" : "";
+            status.setText(getString(R.string.upd_error_retry_update,
+                    kind.equals("check") ? "Update check" : "Update" + target, actionError)
+                    + vrSuffix(liveVr, false));
             return;
         }
-        if (actionKind != null) {
-            status.setText(actionInProgressText != null
-                    ? actionInProgressText
-                    : actionKindLabel(actionKind) + " in progress…");
+        UpdateRepository.Snapshot s = current;
+        if (s != null && s.checking) {
+            status.setText("Checking for updates…");
             return;
         }
-        if (metadataChecking || (s != null && s.checking)) {
-            // The shared repository sets snapshot.checking while its
-            // executor actually runs the metadata fetch. The label
-            // is reserved for ACTUAL metadata checks; it never
-            // covers download / install (those use actionKind above).
-            status.setText("Checking signed Quest preview releases...");
-            return;
-        }
+        Attempt offered = offeredAttempt();
         if (s == null) {
-            status.setText("Installed version: " + installedVersion() + ". Not checked yet.");
+            status.setText("Not checked yet.");
             return;
         }
-        if (s.lastError != null && !s.hasAvailable() && !s.hasDownloaded()) {
+        if (s.lastError != null && offered == null) {
             status.setText("Update check unavailable: " + s.lastError + ". Your installed app is unchanged.");
             return;
         }
-        if (s.hasDownloaded()) {
-            UpdateManifest d = s.downloaded;
+        if (offered == null) {
             if (liveVr) {
-                status.setText("Verified update " + d.version + " is ready to install. Close your VR session to continue.");
+                status.setText("Waiting for VR to close before checking.");
                 return;
             }
-            if (s.hasNewerAvailable()) {
-                status.setText("Update " + d.version + " ready to install. Newer update " + s.available.version + " is also available — tap Download to fetch it.");
-            } else {
-                status.setText("Verified update " + d.version + " is ready to install.");
-            }
+            status.setText(s.lastSuccessAtMs > 0 ? "App is up to date." : "Not checked yet.");
             return;
         }
-        if (s.hasAvailable()) {
-            if (liveVr) {
-                status.setText("Update " + s.available.version + " available (" + UpdateRepository.formatBytes(s.available.bytes) + "). Close your VR session to download.");
+        String verb = offered.hasCachedApk() ? "ready to install" : "available";
+        String size = offered.hasCachedApk() ? ""
+                : " (" + UpdateRepository.formatBytes(offered.manifest.bytes) + ")";
+        status.setText("Update " + offered.version() + " " + verb + size + "."
+                + vrSuffix(liveVr, true));
+    }
+
+    private String stageText(Attempt pinned, boolean liveVr) {
+        String version = pinned == null ? "" : pinned.version();
+        switch (stage) {
+            case DOWNLOADING:
+                return getString(R.string.upd_busy_downloading, version) + vrSuffix(liveVr, true);
+            case VERIFYING:
+                return getString(R.string.upd_busy_verifying, version) + vrSuffix(liveVr, true);
+            case INSTALLER:
+                return getString(R.string.upd_busy_installer, version) + vrSuffix(liveVr, true);
+            case AWAITING_SYSTEM:
+                return getString(R.string.upd_busy_awaiting, version);
+            case INSTALLER_UNCONFIRMED:
+                return getString(R.string.upd_installer_unconfirmed, version);
+            case CHECKING:
+                return "Checking for updates…";
+        case IDLE:
+        default:
+            return "Not checked yet.";
+        }
+    }
+
+    private static String vrSuffix(boolean liveVr, boolean actionable) {
+        return liveVr && actionable ? " Close your VR session to continue." : "";
+    }
+
+    // ------------------------------------------------------------------
+    //  Single-action dispatch
+    // ------------------------------------------------------------------
+
+    private void dispatchPrimaryAction(PrimaryAction action, String failedKind) {
+        switch (action) {
+            case CHECK:
+                triggerCheck(true);
+                break;
+            case UPDATE:
+                startUpdate();
+                break;
+            case RETRY_UNCONFIRMED:
+                retryUnconfirmedInstall();
+                break;
+            case RETRY:
+                // Retry re-runs the operation that failed. A failed
+                // update retries the pinned update itself; a failed
+                // (or unavailable) check re-runs the check.
+                if (!"check".equals(failedKind) && offeredAttempt() != null) {
+                    startUpdate();
+                } else if (repository == null) {
+                    acquireRepository();
+                    if (repository != null) triggerCheck(true);
+                } else {
+                    triggerCheck(true);
+                }
+                break;
+            case NONE:
+            default:
+                break;
+        }
+    }
+
+    private void clearTerminalState() {
+        actionError = null;
+        lastFailedKind = null;
+        resultNotice = null;
+    }
+
+    /**
+     * Retry when Android's installer never reported an outcome. The same
+     * pinned release and the same verified bytes are re-offered, never a
+     * newer one a background check may have published meanwhile. The
+     * previous launch identity is retired before any work starts, so a
+     * late result for it cannot settle this attempt, and the re-dispatch
+     * needs a result of its own: nothing installs on a resume.
+     */
+    private void retryUnconfirmedInstall() {
+        Attempt pinned = attempt;
+        if (pinned == null || stage != Stage.INSTALLER_UNCONFIRMED) return;
+        if (installedVersionReached(pinned)) {
+            settleConfirmedInstall(pinned);
+            return;
+        }
+        handoff = null;
+        handedToSystem = false;
+        stage = Stage.VERIFYING;
+        render();
+        launchInstallWorker(pinned);
+    }
+
+    /** The installed version reached the pinned release: report success
+     *  and forget the verified copy. */
+    private void settleConfirmedInstall(Attempt pinned) {
+        if (repository != null) repository.clearDownloadedAfterInstall(pinned.version());
+        handoff = null;
+        handedToSystem = false;
+        awaitingPermission = false;
+        attempt = null;
+        stage = Stage.IDLE;
+        resultNotice = "Update " + pinned.version() + " installed.";
+        render();
+    }
+
+    /**
+     * Invalidate the running attempt: it can no longer authorise an
+     * installer launch, its queued continuation is dropped, the
+     * hand-off record is retired and any permission dialog is
+     * dismissed. The attempt is cancelled as well, so a worker that is
+     * still running reports failure instead of touching the cache.
+     */
+    private void invalidateAttempt() {
+        Attempt pinned = attempt;
+        attempt = null;
+        if (pinned != null) pinned.cancel();
+        queuedContinuation = null;
+        continuationQueued = false;
+        handoff = null;
+        awaitingPermission = false;
+        dismissPermissionDialog();
+        stage = Stage.IDLE;
+    }
+
+    private void dismissPermissionDialog() {
+        AlertDialog dialog = permissionDialog;
+        permissionDialog = null;
+        if (dialog == null) return;
+        try {
+            dialog.setOnCancelListener(null);
+            dialog.setOnDismissListener(null);
+            if (dialog.isShowing()) dialog.dismiss();
+        } catch (Exception ignored) {
+            // A dialog that is already gone is exactly what we want.
+        }
+    }
+
+    private boolean attemptIsActive(Attempt candidate) {
+        return candidate != null
+                && attempt != null
+                && attempt.sameTargetAs(candidate)
+                && !candidate.isCancelled()
+                && !destroyed;
+    }
+
+    // ------------------------------------------------------------------
+    //  Cancel
+    // ------------------------------------------------------------------
+
+    /**
+     * Cancel stays available for the whole pre-handoff window: while
+     * downloading, while verifying, and while the hand-off itself is
+     * being prepared (including the source-permission dialog). Once
+     * the OS owns the screen the attempt is no longer ours to cancel,
+     * so the button retires.
+     */
+    boolean isCancelAvailable() {
+        if (stage == Stage.IDLE || stage == Stage.AWAITING_SYSTEM
+                || stage == Stage.INSTALLER_UNCONFIRMED) return false;
+        return attempt != null;
+    }
+
+    /** True when the real installed version has reached the launch's
+     *  target, which is the only evidence of a completed install. */
+    private boolean installedVersionReached(Attempt pinned) {
+        return pinned != null
+                && installedVersion() >= pinned.manifest.versionCode;
+    }
+
+    private void onCancelClicked() {
+        Attempt pinned = attempt;
+        // Invalidate first: the pinned generation loses its authority
+        // to authorise an installer launch, so a transport that keeps
+        // writing (an uncooperative one) can no longer promote itself.
+        invalidateAttempt();
+        handedToSystem = false;
+        UpdateTransport t = transport;
+        if (t != null) t.cancel();
+        // The verified cache is deliberately preserved so a later
+        // Update does not re-download bytes we already proved good.
+        resultNotice = pinned == null
+                ? "Update cancelled."
+                : "Update " + pinned.version() + " cancelled. The verified download was kept.";
+        render();
+    }
+
+    // ------------------------------------------------------------------
+    //  Check
+    // ------------------------------------------------------------------
+
+    private void triggerCheck(boolean force) {
+        if (stage != Stage.IDLE) return;
+        if (repository == null) {
+            // The provider may have failed during cold-start; a
+            // subsequent get() can succeed, so re-acquire before
+            // giving up on the check.
+            acquireRepository();
+            if (repository == null) {
+                actionError = firstErrorOr("Update service unavailable");
+                lastFailedKind = "check";
+                render();
                 return;
             }
-            status.setText("Update " + s.available.version + " available (" + UpdateRepository.formatBytes(s.available.bytes) + ").");
+        }
+        if (!force && isLiveVrRunning()) {
+            render();
             return;
         }
-        if (liveVr) {
-            status.setText("Installed version: " + installedVersion() + ". Waiting for VR to close before checking.");
+        // A metadata check carries no target and never installs, so it
+        // gets its own stage rather than an Attempt.
+        stage = Stage.CHECKING;
+        render();
+
+        final UpdateRepository.InFlight inflight = repository.requestCheck(force);
+        if (inflight == null) {
+            stage = Stage.IDLE;
+            render();
             return;
         }
-        if (s.lastSuccessAtMs > 0) {
-            status.setText("Installed version: " + installedVersion() + ". App is up to date.");
-            return;
-        }
-        // No successful check has run yet, no available metadata, no
-        // downloaded slot. The screen just opened; the shared
-        // repository will run the check imminently. We never claim
-        // "no newer available" before the first successful check.
-        status.setText("Installed version: " + installedVersion() + ". Not checked yet.");
+        Thread waiter = new Thread(() -> {
+            try { inflight.await(60_000L); } catch (InterruptedException ignored) { return; }
+            if (destroyed) return;
+            publishToUi(() -> {
+                // A metadata check never installs and never retargets
+                // a pinned update: it only ends its own stage.
+                if (stage == Stage.CHECKING) stage = Stage.IDLE;
+                render();
+            });
+        }, "UpdatesActivityCheckWaiter");
+        waiter.setDaemon(true);
+        waiter.start();
     }
 
-    private static String actionKindLabel(String kind) {
-        if ("download".equals(kind)) return "Download";
-        if ("install".equals(kind)) return "Install";
-        if ("check".equals(kind)) return "Update check";
-        return "Update";
+    // ------------------------------------------------------------------
+    //  Update (download -> verify -> installer, automatically)
+    // ------------------------------------------------------------------
+
+    private void startUpdate() {
+        if (stage != Stage.IDLE) return;
+        Attempt offered = offeredAttempt();
+        if (offered == null) {
+            // Nothing is offered yet (first run). Fall back to a
+            // check rather than pretending there is something to
+            // install.
+            triggerCheck(true);
+            return;
+        }
+        clearTerminalState();
+        Attempt pinned = new Attempt(offered.manifest, offered.manifestBytes,
+                offered.signatureBytes, offered.cachedApk, ++generationCounter);
+        attempt = pinned;
+        handedToSystem = false;
+        awaitingPermission = false;
+        handoff = null;
+        stage = pinned.hasCachedApk() ? Stage.VERIFYING : Stage.DOWNLOADING;
+        render();
+
+        if (pinned.hasCachedApk()) {
+            // Verified bytes are already on disk; skip straight to
+            // verification and the installer hand-off.
+            launchInstallWorker(pinned);
+        } else {
+            launchDownloadWorker(pinned);
+        }
     }
 
-    /** VR guidance suffix appended to an error / result message when
-     *  the corresponding button is blocked by live VR. The buttons
-     *  check live VR independently of actionKind; the hint must
-     *  match the action the user is being asked to retry. */
-    private static String vrSuffixFor(boolean liveVr, String kind) {
-        if (!liveVr) return "";
-        if ("download".equals(kind)) return " Close your VR session to download.";
-        if ("install".equals(kind)) return " Close your VR session to install.";
-        return "";
+    /**
+     * Download, bind and hand back the pinned release. The shared
+     * staging file is mutated under the process-wide download
+     * boundary, and the bytes are bound to their immutable per-version
+     * copy while that boundary is still held, so the installer is
+     * later fed a file nothing else can overwrite.
+     */
+    private void launchDownloadWorker(final Attempt pinned) {
+        Thread worker = new Thread(() -> {
+            UpdateTransport local = null;
+            File staged = null;
+            File bound = null;
+            boolean cancelled = false;
+            boolean busy = false;
+            String busyMessage = null;
+            String failure = null;
+            try {
+                local = transportFactory.create(trustKey());
+                local.manifestBytes = pinned.manifestBytes;
+                local.signatureBytes = pinned.signatureBytes;
+                transport = local;
+                if (stale(pinned)) { cancelled = true; return; }
+                synchronized (DOWNLOAD_BOUNDARY) {
+                    // Re-check under the boundary: the wait for it can
+                    // be long enough for this attempt to be cancelled
+                    // or superseded.
+                    if (stale(pinned)) { cancelled = true; return; }
+                    // Busy is not a failure of the file: report it so
+                    // the cached bytes of any earlier attempt survive.
+                    ensureIdle();
+                    staged = local.download(pinned.manifest, cacheRoot());
+                    if (stale(pinned)) { cancelled = true; return; }
+                    if (repository != null) {
+                        bound = repository.recordDownloaded(pinned.manifest,
+                                pinned.manifestBytes, pinned.signatureBytes, staged);
+                    }
+                }
+            } catch (BusySignal busySignal) {
+                if (!stale(pinned)) { busy = true; busyMessage = busySignal.getMessage(); }
+            } catch (Exception e) {
+                if (stale(pinned)) { cancelled = true; return; }
+                failure = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+            } finally {
+                if (transport == local) transport = null;
+                if (local != null && (cancelled || failure != null || busy)) local.cancel();
+            }
+            if (busy) {
+                final String message = busyMessage;
+                publishToUi(() -> onBusy(pinned, message));
+                return;
+            }
+            final boolean downloadCompleted = staged != null;
+            final File immutable = bound;
+            final String error = failure;
+            final boolean wasCancelled = cancelled;
+            publishToUi(() -> {
+                if (downloadCompleted) onDownloadComplete(pinned, immutable);
+                else onDownloadFailed(pinned, wasCancelled, error);
+            });
+        }, "UpdatesActivityDownload");
+        worker.setDaemon(true);
+        worker.start();
+    }
+
+    /** True once the pinned attempt may no longer act: destroyed,
+     *  cancelled, or superseded by a newer generation. */
+    private boolean stale(Attempt pinned) {
+        return destroyed || pinned.isCancelled() || !attemptIsActive(pinned);
+    }
+
+    private void onDownloadComplete(Attempt pinned, File immutable) {
+        if (!attemptIsActive(pinned)) return;
+        if (immutable == null) {
+            // Without the immutable binding there is nothing safe to
+            // verify or hand over. The shared staging file is never a
+            // fallback: another attempt may already own it.
+            invalidateAttempt();
+            actionError = "Could not store the verified download for " + pinned.version();
+            lastFailedKind = "update";
+            render();
+            return;
+        }
+        // Verify and hand over the copy bound to this release. The
+        // shared staging file is only a transfer buffer: once the
+        // download boundary is released another Activity instance may
+        // overwrite it, and verifying that file would fail spuriously
+        // and purge a perfectly good download.
+        Attempt verified = pinned.withApk(immutable);
+        attempt = verified;
+        stage = Stage.VERIFYING;
+        render();
+        launchInstallWorker(verified);
+    }
+
+    private void onDownloadFailed(Attempt pinned, boolean cancelled, String error) {
+        if (!attemptIsActive(pinned)) return;
+        invalidateAttempt();
+        if (!cancelled) {
+            actionError = error;
+            lastFailedKind = "update";
+            resultNotice = null;
+        }
+        render();
+    }
+
+    /**
+     * Verify the pinned bytes. Busy and integrity are distinct
+     * outcomes: only a genuine integrity failure may purge the cache.
+     */
+    private void launchInstallWorker(final Attempt pinned) {
+        Thread worker = new Thread(() -> {
+            try {
+                ensureIdle();
+            } catch (BusySignal busy) {
+                publishToUi(() -> onBusy(pinned, busy.getMessage()));
+                return;
+            }
+            try {
+                verifyApk(pinned.cachedApk, pinned.manifest);
+            } catch (Exception apkError) {
+                final String msg = apkError.getMessage() == null
+                        ? apkError.getClass().getSimpleName() : apkError.getMessage();
+                publishToUi(() -> onVerificationFailed(pinned, msg));
+                return;
+            }
+            publishToUi(() -> onVerified(pinned));
+        }, "UpdatesActivityVerify");
+        worker.setDaemon(true);
+        worker.start();
+    }
+
+    private void onVerificationFailed(Attempt pinned, String message) {
+        if (!attemptIsActive(pinned)) return;
+        // The cached bytes did not verify: purge them so the next
+        // Update downloads fresh ones, then report honestly.
+        if (repository != null) repository.clearDownloadedAfterInstall(pinned.version());
+        invalidateAttempt();
+        actionError = message;
+        lastFailedKind = "update";
+        render();
+    }
+
+    /**
+     * A failure that is not evidence of corruption (a live VR session,
+     * an unwritable cache). The attempt ends so the single button can
+     * be tapped again, but the verified cache is left intact and Retry
+     * re-runs the update.
+     */
+    private void onBusy(Attempt pinned, String message) {
+        if (!attemptIsActive(pinned)) return;
+        invalidateAttempt();
+        actionError = message;
+        lastFailedKind = "update";
+        render();
+    }
+
+    /**
+     * The pinned bytes are verified. Stay in VERIFYING (the hand-off
+     * is still ours) and let the resume deliver the installer: while
+     * paused the continuation is queued exactly once, for this exact
+     * attempt, so a completed download can never be stranded by the
+     * stage the resume looks for.
+     */
+    private void onVerified(Attempt pinned) {
+        if (!attemptIsActive(pinned)) return;
+        stage = Stage.VERIFYING;
+        render();
+        if (!resumed) {
+            queuedContinuation = pinned;
+            continuationQueued = true;
+            return;
+        }
+        dispatchInstaller(pinned);
+    }
+
+    /**
+     * Ask Android to install the pinned APK. This is the whole point
+     * of the single action: the user taps Update once and ends up in
+     * the OS installer without a second in-app tap.
+     */
+    private void dispatchInstaller(Attempt pinned) {
+        if (!attemptIsActive(pinned)) return;
+        try {
+            ensureIdle();
+            if (!getPackageManager().canRequestPackageInstalls()) {
+                showPermissionDialog(pinned);
+                return;
+            }
+            handOffToInstaller(pinned);
+        } catch (BusySignal busy) {
+            onBusy(pinned, busy.getMessage());
+        } catch (Exception e) {
+            handedToSystem = false;
+            invalidateAttempt();
+            actionError = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+            lastFailedKind = "update";
+            render();
+        }
+    }
+
+    /**
+     * The APK is verified and Android has not been asked yet, so the
+     * attempt is still ours and still cancellable. Every dismissal
+     * route (the buttons, Back and an outside tap) is scoped to this
+     * exact generation, so a dialog left over from an earlier attempt
+     * can never invalidate the attempt that is live now.
+     */
+    private void showPermissionDialog(final Attempt pinned) {
+        final int generation = pinned.generation;
+        stage = Stage.INSTALLER;
+        awaitingPermission = true;
+        handoff = new SystemHandoff(SystemHandoff.AWAITING_PERMISSION,
+                SystemHandoff.NO_REQUEST, pinned);
+
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle("Allow app updates")
+                .setMessage("Android needs permission for Vibertemis to open its installer. "
+                        + "Turn on Allow from this source for Vibertemis, then come back here. "
+                        + "The verified download is kept either way.")
+                .setPositiveButton("Open settings", (d, w) -> {
+                    if (!dialogBelongsTo(pinned, generation)) return;
+                    openInstallPermissionSettings(pinned, generation);
+                })
+                .setNegativeButton("Not now", (d, w) -> {
+                    if (!dialogBelongsTo(pinned, generation)) return;
+                    stopAttemptWithNotice(pinned,
+                            "Update paused. The verified download was kept.");
+                })
+                .setOnCancelListener(d -> {
+                    // Back or an outside tap: without this the stage
+                    // would stay stuck on the hand-off forever.
+                    if (!dialogBelongsTo(pinned, generation)) return;
+                    stopAttemptWithNotice(pinned,
+                            "Update paused. The verified download was kept.");
+                })
+                .create();
+        permissionDialog = dialog;
+        dialog.show();
+        render();
+    }
+
+    /** True while this dialog still belongs to the live attempt. */
+    private boolean dialogBelongsTo(Attempt pinned, int generation) {
+        return attemptIsActive(pinned) && pinned.generation == generation;
+    }
+
+    private void stopAttemptWithNotice(Attempt pinned, String notice) {
+        handedToSystem = false;
+        invalidateAttempt();
+        resultNotice = notice;
+        render();
+    }
+
+    /** Open the OS screen where the install permission is granted. The
+     *  result, when one arrives, is matched against the request code
+     *  this launch uses and reconciled on resume. */
+    private void openInstallPermissionSettings(Attempt pinned, int generation) {
+        dismissPermissionDialog();
+        if (!dialogBelongsTo(pinned, generation)) {
+            render();
+            return;
+        }
+        int requestCode = allocateRequestCode();
+        if (requestCode < 0) {
+            stopAttemptWithNotice(pinned, "Update paused. The verified download was kept.");
+            return;
+        }
+        try {
+            ensureIdle();
+            handedToSystem = false;
+            awaitingPermission = true;
+            handoff = new SystemHandoff(SystemHandoff.AWAITING_SETTINGS, requestCode, pinned);
+            stage = Stage.INSTALLER;
+            startActivityForResult(
+                    new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                            Uri.parse("package:" + getPackageName())),
+                    requestCode);
+            render();
+        } catch (BusySignal busy) {
+            onBusy(pinned, busy.getMessage());
+        } catch (ActivityNotFoundException e) {
+            stopAttemptWithNotice(pinned, "Open Android settings and allow installs from "
+                    + "Vibertemis, then tap Update again.");
+        }
+    }
+
+    /** Feed the release-bound verified APK to the OS installer. */
+    private void handOffToInstaller(Attempt pinned) throws IOException {
+        File apk = pinned.cachedApk;
+        if (apk == null || !apk.isFile()) throw new IOException("Verified update file is missing");
+        int requestCode = allocateRequestCode();
+        if (requestCode < 0) {
+            // Fail closed: launching without a trackable request would
+            // make the result impossible to attribute.
+            throw new IOException("No request code available for the installer hand-off");
+        }
+        Uri uri = FileProvider.getUriForFile(this, getPackageName() + ".updates", apk);
+        Intent intent = new Intent(Intent.ACTION_INSTALL_PACKAGE)
+                .setDataAndType(uri, "application/vnd.android.package-archive")
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                .putExtra(Intent.EXTRA_RETURN_RESULT, true);
+        handedToSystem = true;
+        awaitingPermission = false;
+        handoff = new SystemHandoff(SystemHandoff.AWAITING_INSTALLER, requestCode, pinned);
+        stage = Stage.AWAITING_SYSTEM;
+        startActivityForResult(intent, requestCode);
+        render();
+    }
+
+    private void publishToUi(Runnable r) {
+        if (destroyed) return;
+        runOnUiThread(() -> {
+            if (destroyed || isFinishing() || isDestroyed()) return;
+            r.run();
+        });
+    }
+
+    @SuppressWarnings("deprecation") private void verifyApk(File file, UpdateManifest m) throws Exception {
+        if (file == null || !file.isFile()) throw new IOException("Verified update file is missing");
+        UpdateTransport.verifyFile(file, m);
+        PackageInfo own = ownPackage();
+        long installed = installedVersion();
+        if (installed < 0) throw new IOException("Could not read installed version");
+        if (m.sequence <= UpdateRepository.MIN_PUBLISHED_SEQUENCE
+                || m.versionCode <= installed
+                || !m.packageName.equals(getPackageName())) {
+            throw new IOException("APK package/version mismatch or downgrade");
+        }
+        PackageInfo candidate = getPackageManager().getPackageArchiveInfo(file.getAbsolutePath(),
+                Build.VERSION.SDK_INT >= 28
+                        ? PackageManager.GET_SIGNING_CERTIFICATES
+                        : PackageManager.GET_SIGNATURES);
+        if (candidate == null || !candidate.packageName.equals(getPackageName())
+                || version(candidate) != m.versionCode) {
+            throw new IOException("Downloaded APK identity mismatch");
+        }
+        if (Build.VERSION.SDK_INT >= 28
+                && (own.signingInfo == null || candidate.signingInfo == null)) {
+            // Fail closed: a package that reports no signing information
+            // cannot be shown to come from this installation, and the
+            // signer must never be read out of nothing.
+            throw new IOException("APK signing information is missing");
+        }
+        android.content.pm.Signature[] oldSigners = Build.VERSION.SDK_INT >= 28
+                ? own.signingInfo.getApkContentsSigners() : own.signatures;
+        android.content.pm.Signature[] newSigners = Build.VERSION.SDK_INT >= 28
+                ? candidate.signingInfo.getApkContentsSigners() : candidate.signatures;
+        if (oldSigners == null || newSigners == null
+                || oldSigners.length != 1 || newSigners.length != 1) {
+            throw new IOException("Unsupported APK signer set");
+        }
+        String oldHash = UpdateManifest.hex(MessageDigest.getInstance("SHA-256").digest(oldSigners[0].toByteArray()));
+        String newHash = UpdateManifest.hex(MessageDigest.getInstance("SHA-256").digest(newSigners[0].toByteArray()));
+        if (!oldHash.equals(newHash) || !newHash.equals(m.signer)) {
+            throw new IOException("Downloaded APK signer does not match this installation");
+        }
     }
 
     private boolean isLiveVrRunning() {
@@ -344,461 +1280,252 @@ public final class UpdatesActivity extends Activity {
         return false;
     }
 
-    private static boolean sameReleaseDownloaded(UpdateRepository.Snapshot s) {
-        return s.hasDownloaded() && s.hasAvailable()
-                && s.available.version.equals(s.downloaded.version)
-                && s.available.versionCode == s.downloaded.versionCode
-                && s.available.sequence == s.downloaded.sequence;
+    /**
+     * Busy, not broken. A live VR session blocks the hand-off without
+     * saying anything about the integrity of the pinned bytes, so it
+     * must never purge a verified cache.
+     */
+    private static final class BusySignal extends IOException {
+        BusySignal(String message) { super(message); }
     }
 
-    private void ensureIdle() throws IOException {
-        ActivityManager manager=(ActivityManager)getSystemService(ACTIVITY_SERVICE);
-        if (manager == null) throw new IOException("Could not query running processes to verify VR is closed");
-        List<ActivityManager.RunningAppProcessInfo> processes=manager.getRunningAppProcesses();
-        if(processes==null)throw new IOException("Could not confirm VR is closed");
-        for(ActivityManager.RunningAppProcessInfo p:processes)
-            if((getPackageName()+":pcvr").equals(p.processName))throw new IOException("Close your VR session before updating");
+    private void ensureIdle() throws BusySignal {
+        if (isLiveVrRunning()) throw new BusySignal("Close your VR session before updating");
     }
 
     @SuppressWarnings("deprecation") private PackageInfo ownPackage() throws Exception {
-        return getPackageManager().getPackageInfo(getPackageName(),Build.VERSION.SDK_INT>=28?PackageManager.GET_SIGNING_CERTIFICATES:PackageManager.GET_SIGNATURES);
-    }
-    @SuppressWarnings("deprecation") private long version(PackageInfo info) { return Build.VERSION.SDK_INT>=28?info.getLongVersionCode():info.versionCode; }
-    private long installedVersion() { try{return version(ownPackage());}catch(Exception e){return Long.MAX_VALUE;} }
-
-    /** Called from every user-facing button click (Check now,
-     *  Download, Install). Starting a NEW user operation supersedes
-     *  any prior terminal-error message so the new operation's
-     *  progress label is visible immediately. Auto-check paths
-     *  (onCreate / onResume) deliberately do NOT call this: an
-     *  auto-triggered metadata check must not erase a still-visible
-     *  failure from a download / install the user has not yet
-     *  retried. */
-    private void userInitiatedNewOperation() {
-        actionError = null;
-        lastFailedKind = null;
-        resultNotice = null;
+        return getPackageManager().getPackageInfo(getPackageName(),
+                Build.VERSION.SDK_INT >= 28
+                        ? PackageManager.GET_SIGNING_CERTIFICATES
+                        : PackageManager.GET_SIGNATURES);
     }
 
-    private void triggerCheck(boolean force) {
-        if (actionKind != null) return;
-        if (repository == null) {
-            status.setText("Update check unavailable in this session.");
-            return;
+    @SuppressWarnings("deprecation") private long version(PackageInfo info) {
+        return Build.VERSION.SDK_INT >= 28 ? info.getLongVersionCode() : info.versionCode;
+    }
+
+    /** Returns the actually-installed versionCode. {@code -1L} on
+     *  PackageManager failure (rendered as "Installed version:
+     *  unavailable" — never {@link Long#MAX_VALUE}). */
+    private long installedVersion() {
+        try {
+            return version(ownPackage());
+        } catch (Exception e) {
+            return -1L;
         }
-        // Live VR session suppresses the check. The shared
-        // repository will pick it up on the next idle onResume.
-        if (!force && isLiveVrRunning()) {
-            render();
-            return;
-        }
-        // A background metadata check must NEVER erase the
-        // visible failure from a previous download / install. The
-        // user has not started a new operation; the auto-check on
-        // open / onResume is an internal coalesced throttle tick.
-        // Clearing actionError here would let the next repository
-        // snapshot notification overwrite the "Download failed: …"
-        // label with "Checking…" or "App is up to date.". Only the
-        // user pressing Download / Install / Check now clears the
-        // error (because that IS a new operation).
-        actionKind = "check";
-        actionInProgressText = "Checking for updates…";
-        render();
-        final UpdateRepository.InFlight inflight = repository.requestCheck(force);
-        if (inflight == null) {
-            actionKind = null;
-            render();
-            return;
-        }
-        inflightWaiterAlive = true;
-        Thread waiter = new Thread(() -> {
-            try { inflight.await(60_000L); } catch (InterruptedException ignored) { return; }
-            finally { inflightWaiterAlive = false; }
-            if (destroyed) return;
-            runOnUiThread(() -> {
-                if (destroyed || isFinishing() || isDestroyed()) return;
-                if (actionKind != null && "check".equals(actionKind)) {
-                    // The check itself succeeded (or failed via the
-                    // repository, which would have updated the
-                    // snapshot's lastError / lastSuccessAtMs). Clear
-                    // the check actionKind so the buttons re-enable.
-                    // We do NOT clear actionError here: a prior
-                    // terminal download / install failure must
-                    // remain visible until the user starts a new
-                    // operation. The repository's snapshot
-                    // notification will re-render, and render()
-                    // shows actionError above any snapshot copy.
-                    actionKind = null;
-                    actionInProgressText = null;
-                }
-                render();
-            });
-        }, "UpdatesActivityCheckWaiter");
-        waiter.setDaemon(true);
-        waiter.start();
     }
 
-    private void downloadUpdate() {
-        UpdateRepository.Snapshot snap = current == null ? repository == null ? null : repository.snapshot() : current;
-        if (snap == null || !snap.hasAvailable()) return;
-        if (actionKind != null) return;
-        final UpdateManifest selected = snap.available;
-        final byte[] manifest = snap.availableManifestBytes;
-        final byte[] signature = snap.availableSignatureBytes;
-        actionKind = "download";
-        downloadCancelled = false;
-        actionInProgressText = "Downloading update " + selected.version + "…";
-        render();
-        Thread worker = new Thread(() -> {
-            UpdateTransport local = null;
-            boolean cancelled = false;
-            String terminalError = null;
-            try {
-                ensureIdle();
-                // Build the transport LOCALLY first. We publish to
-                // the activity field only after we know destroy()
-                // was not already called. This is the "destroy
-                // before assignment must prevent subsequent
-                // network" guarantee: if the activity is destroyed
-                // between the user pressing Download and this
-                // thread running, onDestroy's transport.cancel()
-                // sees a null field, so the network call must NOT
-                // happen. We then publish (volatile write) and
-                // re-check destroyed AFTER the publish — at that
-                // point onDestroy (UI thread) will see our
-                // published transport via the volatile read and
-                // call cancel() on it; the download's first
-                // check() iteration sees cancelled=true and throws.
-                local = transportFactory.create(trustKey());
-                local.manifestBytes = manifest;
-                local.signatureBytes = signature;
-                if (destroyed) {
-                    // Destroy already fired before we could
-                    // publish; do not publish, do not start the
-                    // network. The activity is gone.
-                    local.cancel();
-                    return;
-                }
-                if (downloadCancelled) {
-                    // Cancel raced with the create step but before
-                    // publish — transport never became reachable
-                    // from onDestroy / cancel-click.
-                    local.cancel();
-                    cancelled = true;
-                    return;
-                }
-                // Atomic publish (volatile write).
-                transport = local;
-                if (destroyed) {
-                    // Race: onDestroy fired between our destroyed
-                    // check and our publish. Either:
-                    //   - onDestroy read transport BEFORE our
-                    //     publish (saw null, no cancel). We must
-                    //     cancel ourselves here.
-                    //   - onDestroy will read transport AFTER our
-                    //     publish (volatile read) and cancel()
-                    //     itself. Redundant but safe.
-                    local.cancel();
-                    throw new InterruptedIOException("Destroyed before download could start");
-                }
-                if (downloadCancelled) {
-                    // Cancel raced with publish.
-                    local.cancel();
-                    cancelled = true;
-                    return;
-                }
-                // transport.download writes the verified APK bytes to
-                // <cacheRoot>/update.apk. We then verify digest +
-                // signer on this file and pass the FILE PATH to the
-                // repository, which streams it into the per-version
-                // download directory with a bounded buffer (no whole
-                // APK in memory).
-                File result = local.download(selected, cacheRoot());
-                verifyApk(result, selected);
-                if (repository != null) {
-                    // recordDownloaded:
-                    //   - stream-copies the APK to per-version dir
-                    //     with a 64 KiB buffer,
-                    //   - verifies the digest during the copy,
-                    //   - evicts the per-version dir on mismatch,
-                    //   - persists manifest + signature only on
-                    //     success,
-                    //   - publishes the snapshot's downloaded slot
-                    //     only when all of the above succeeded.
-                    repository.recordDownloaded(selected, manifest, signature, result);
-                }
-                // Success — terminalError stays null; the unified
-                // finally callback will clear actionKind below.
-            } catch (Exception e) {
-                if (destroyed) return;
-                if (downloadCancelled) {
-                    cancelled = true;
-                    return;
-                }
-                terminalError = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
-            } finally {
-                // ALWAYS drop the transport reference before any
-                // terminal UI callback runs, so a subsequent
-                // download's worker cannot observe a stale
-                // transport. The single runOnUiThread below is the
-                // ONLY place that releases actionKind for this
-                // worker — success / error / cancel are unified
-                // here so the UI state machine transitions exactly
-                // once per worker exit.
-                transport = null;
-                if (destroyed) return;
-                final boolean finalCancelled = cancelled;
-                final String finalTerminalError = terminalError;
-                runOnUiThread(() -> {
-                    if (destroyed || isFinishing() || isDestroyed()) return;
-                    if (finalCancelled) {
-                        if ("download".equals(actionKind)) {
-                            actionKind = null;
-                            actionInProgressText = null;
-                        }
-                    } else if (finalTerminalError != null) {
-                        if ("download".equals(actionKind)) {
-                            // Terminal failure: clear actionKind
-                            // so buttons re-enable, but preserve
-                            // actionError AND remember which
-                            // operation failed so the "Tap X to
-                            // retry" hint stays accurate.
-                            actionError = finalTerminalError;
-                            lastFailedKind = "download";
-                            actionKind = null;
-                            actionInProgressText = null;
-                        }
-                    } else {
-                        // Terminal success: clear actionKind so
-                        // buttons re-enable. actionError was
-                        // already null from the click above.
-                        actionKind = null;
-                        actionInProgressText = null;
-                    }
-                    render();
-                });
-            }
-        }, "UpdatesActivityDownload");
-        worker.setDaemon(true);
-        worker.start();
-    }
-
-    @SuppressWarnings("deprecation") private void verifyApk(File file,UpdateManifest m) throws Exception {
-        UpdateTransport.verifyFile(file,m);
-        PackageInfo own=ownPackage();
-        if(m.sequence<= UpdateRepository.MIN_PUBLISHED_SEQUENCE || m.versionCode<=version(own) || !m.packageName.equals(getPackageName()))throw new IOException("APK package/version mismatch or downgrade");
-        PackageInfo candidate=getPackageManager().getPackageArchiveInfo(file.getAbsolutePath(),Build.VERSION.SDK_INT>=28?PackageManager.GET_SIGNING_CERTIFICATES:PackageManager.GET_SIGNATURES);
-        if(candidate==null || !candidate.packageName.equals(getPackageName()) || version(candidate)!=m.versionCode)throw new IOException("Downloaded APK identity mismatch");
-        android.content.pm.Signature[] oldSigners=Build.VERSION.SDK_INT>=28?own.signingInfo.getApkContentsSigners():own.signatures;
-        android.content.pm.Signature[] newSigners=Build.VERSION.SDK_INT>=28?candidate.signingInfo.getApkContentsSigners():candidate.signatures;
-        if(oldSigners==null || newSigners==null || oldSigners.length!=1 || newSigners.length!=1)throw new IOException("Unsupported APK signer set");
-        String oldHash=UpdateManifest.hex(MessageDigest.getInstance("SHA-256").digest(oldSigners[0].toByteArray()));
-        String newHash=UpdateManifest.hex(MessageDigest.getInstance("SHA-256").digest(newSigners[0].toByteArray()));
-        if(!oldHash.equals(newHash) || !newHash.equals(m.signer))throw new IOException("Downloaded APK signer does not match this installation");
-    }
-
-    private void installUpdate() {
-        UpdateRepository.Snapshot snap = current == null ? repository == null ? null : repository.snapshot() : current;
-        final File file = snap == null ? null : snap.downloadedApk;
-        final UpdateManifest m = snap == null ? null : snap.downloaded;
-        if(file==null||m==null)return;
-        if (actionKind != null) return;
-        actionKind = "install";
-        actionInProgressText = "Opening installer for " + m.version + "…";
-        render();
-        Thread worker = new Thread(() -> {
-            try {
-                ensureIdle();
-                try {
-                    verifyApk(file, m);
-                } catch (Exception apkError) {
-                    // ONLY on verifyApk failure do we evict the
-                    // downloaded slot. The on-disk APK no longer
-                    // matches the manifest / signer / version, so
-                    // the user CANNOT install this file. We evict
-                    // it via the existing exact-version API so the
-                    // available metadata is preserved verbatim and
-                    // Download is re-enabled for a fresh fetch.
-                    // Live VR (ensureIdle throws), source-permission
-                    // denial, and system-installer errors do NOT
-                    // take this branch; the downloaded slot is
-                    // preserved for retry.
-                    final String msg = apkError.getMessage() == null ? apkError.getClass().getSimpleName() : apkError.getMessage();
-                    if (destroyed) return;
-                    runOnUiThread(() -> {
-                        if (destroyed || isFinishing() || isDestroyed()) return;
-                        if (repository != null) {
-                            repository.clearDownloadedAfterInstall(m.version);
-                        }
-                        // The retry action here is DOWNLOAD, not
-                        // INSTALL — Install is now disabled because
-                        // the downloaded slot is gone. Set a
-                        // resultNotice with the prescribed text so
-                        // the render never falls through to a
-                        // "Tap Install to retry" hint. The
-                        // underlying reason is preserved on
-                        // actionError for diagnostics / tests.
-                        resultNotice = "Downloaded update failed verification. Tap Download update to download again.";
-                        actionError = msg;
-                        lastFailedKind = null;
-                        actionKind = null;
-                        actionInProgressText = null;
-                        render();
-                    });
-                    return;
-                }
-                if (destroyed) return;
-                runOnUiThread(() -> {
-                    if (destroyed || isFinishing() || isDestroyed()) return;
-                    try {
-                        ensureIdle();
-                        if(!getPackageManager().canRequestPackageInstalls()) {
-                            actionKind = null;
-                            actionError = null;
-                            actionInProgressText = null;
-                            new AlertDialog.Builder(this).setTitle("Allow app updates")
-                                .setMessage("Android requires permission for Vibertemis to open its update installer. Enable Allow from this source, then return here.")
-                                .setPositiveButton("Open settings",(d,w)->{
-                                    try {startActivityForResult(new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,Uri.parse("package:"+getPackageName())),SOURCE_PERMISSION);}
-                                    catch(ActivityNotFoundException e){
-                                        // Settings app is missing
-                                        // entirely — there is no
-                                        // "denied permission" state to
-                                        // return to. Surface as a
-                                        // result notice so it survives
-                                        // the next auto-check render.
-                                        resultNotice = "Open Android settings and allow installs from Vibertemis, then retry.";
-                                        render();
-                                    }
-                                }).setNegativeButton("Cancel",null).show();
-                            render();
-                            return;
-                        }
-                        Uri uri=FileProvider.getUriForFile(this,getPackageName()+".updates",file);
-                        Intent intent=new Intent(Intent.ACTION_INSTALL_PACKAGE).setData(uri)
-                            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION).putExtra(Intent.EXTRA_RETURN_RESULT,true);
-                        startActivityForResult(intent,INSTALL);
-                        // Keep actionKind so the in-progress text
-                        // remains visible until the system installer
-                        // returns.
-                    } catch(Exception e){
-                        actionError = e.getMessage();
-                        lastFailedKind = "install";
-                        actionKind = null;
-                        actionInProgressText = null;
-                        render();
-                    }
-                });
-            } catch (Exception e) {
-                final String msg = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
-                if (destroyed) return;
-                runOnUiThread(() -> {
-                    if (destroyed || isFinishing() || isDestroyed()) return;
-                    if ("install".equals(actionKind)) {
-                        // Terminal failure: clear actionKind so
-                        // buttons re-enable, preserve actionError so
-                        // the user can see why install did not start.
-                        actionError = msg;
-                        lastFailedKind = "install";
-                        actionKind = null;
-                        actionInProgressText = null;
-                    }
-                    render();
-                });
-            }
-        }, "UpdatesActivityInstall");
-        worker.setDaemon(true);
-        worker.start();
-    }
+    // ------------------------------------------------------------------
+    //  Lifecycle
+    // ------------------------------------------------------------------
 
     @Override protected void onResume() {
         super.onResume();
-        // Resume-driven idle auto-trigger: the shared repository
-        // already coalesces concurrent triggers onto the in-flight
-        // handle, so re-entering the screen after a pause (e.g.
-        // closing the source-permission dialog or the system
-        // installer) does NOT start a second parallel check.
-        // Live VR still suppresses the trigger via triggerCheck's
-        // gate; the same throttle and the live-VR deferral that
-        // protect onCreate protect this path. We never trigger
-        // while a local action (download / install) is running.
-        if (actionKind == null) {
-            triggerCheck(false);
+        resumed = true;
+        SystemHandoff pending = handoff;
+        if (pending != null) {
+            // Returning from the OS. A result that arrived while we were
+            // away settles now; a Settings return settles on the real
+            // permission even with no callback at all. Each is consumed
+            // as it is settled, so repeated resumes cannot act twice.
+            if (pending.phase == SystemHandoff.AWAITING_SETTINGS) {
+                reconcilePermissionReturn(pending);
+            } else if (pending.phase == SystemHandoff.AWAITING_INSTALLER) {
+                // Every real return from the installer is reconciled,
+                // including the return with no callback at all: only
+                // reconciliation can tell the three cases apart. An
+                // unreported outcome is unknown, so it must rest in
+                // INSTALLER_UNCONFIRMED rather than keep pretending the
+                // OS installer still owns the hand-off, and gating that
+                // call on a result that may never arrive would make the
+                // unknown case unreachable.
+                reconcileInstallerReturn(pending);
+            }
+            render();
+            return;
+        }
+        if (stage == Stage.INSTALLER_UNCONFIRMED) {
+            // Still unknown: give the user the choice rather than
+            // deciding for them, and check for a late arrival.
+            render();
+            return;
+        }
+        // A verification that completed while paused continues exactly
+        // once, from the very stage it left, and only for the still
+        // active attempt.
+        if (continuationQueued && queuedContinuation != null) {
+            Attempt queued = queuedContinuation;
+            queuedContinuation = null;
+            continuationQueued = false;
+            if (attemptIsActive(queued) && stage == Stage.VERIFYING) {
+                dispatchInstaller(queued);
+            }
+        }
+        if (stage == Stage.IDLE) {
+            if (repository == null) acquireRepository();
+            if (repository != null) triggerCheck(false);
             render();
         }
     }
 
-    @Override protected void onActivityResult(int request,int result,Intent data) {
-        super.onActivityResult(request,result,data);
-        if(request==SOURCE_PERMISSION) {
-            if(getPackageManager().canRequestPackageInstalls()) installUpdate();
-            else {
-                // Persist as resultNotice so the next onResume
-                // auto-check render does not erase the "permission
-                // was not granted" outcome.
-                resultNotice = "Install permission was not granted. Download kept; retry when ready.";
-                render();
-            }
-        } else if(request==INSTALL) {
-            actionKind = null;
-            actionError = null;
-            actionInProgressText = null;
-            if (result == RESULT_OK) {
-                UpdateRepository.Snapshot s = current;
-                if (s != null && s.hasDownloaded()) {
-                    repository.clearDownloadedAfterInstall(s.downloaded.version);
-                }
-                resultNotice = "Installation completed.";
-            } else {
-                // Persist as resultNotice so the cancelled / failed
-                // installer outcome survives the next onResume
-                // auto-check render.
-                resultNotice = "Installation cancelled or unsuccessful. Verified download kept for retry.";
-            }
-            render();
+    /**
+     * Coming back from the install-permission screen. The OS answer
+     * is the live permission state, so a return with no callback and a
+     * return with a denial are handled the same way: the verified
+     * download is kept and the installer resumes only for a grant on
+     * the still-active attempt.
+     */
+    private void reconcilePermissionReturn(SystemHandoff pending) {
+        handoff = null;
+        awaitingPermission = false;
+        Attempt pinned = attempt;
+        if (!pending.describes(pinned)) {
+            // A stale answer for an attempt that is gone: nothing of
+            // the live state may be touched.
+            return;
         }
+        if (!getPackageManager().canRequestPackageInstalls()) {
+            invalidateAttempt();
+            resultNotice = "Install permission was not granted. The verified download was kept.";
+            return;
+        }
+        stage = Stage.VERIFYING;
+        dispatchInstaller(pinned);
+    }
+
+    /**
+     * Reconcile the return from the OS installer.
+     *
+     * <p>Only the real installed version proves anything. When Android
+     * sent a matching result and the version still has not advanced, the
+     * install did not complete and the verified download is kept for an
+     * ordinary retry. When Android sent no result at all, the outcome is
+     * genuinely unknown — a multiwindow installer may simply still be up
+     * — so the attempt rests in {@link Stage#INSTALLER_UNCONFIRMED} with
+     * its request identity intact, so a late result can still settle it.
+     */
+    private void reconcileInstallerReturn(SystemHandoff pending) {
+        handedToSystem = false;
+        awaitingPermission = false;
+        Attempt pinned = attempt;
+        if (!pending.describes(pinned)) {
+            handoff = null;
+            return;
+        }
+        if (installedVersionReached(pinned)) {
+            settleConfirmedInstall(pinned);
+            return;
+        }
+        if (pending.resultReceived) {
+            handoff = null;
+            invalidateAttempt();
+            resultNotice = "Update " + pinned.version() + " was not installed. The verified download "
+                    + "was kept — tap Update to try again.";
+            return;
+        }
+        // No answer from Android: unknown, not failed.
+        stage = Stage.INSTALLER_UNCONFIRMED;
+        render();
+    }
+
+    @Override protected void onPause() {
+        super.onPause();
+        resumed = false;
+    }
+
+    /**
+     * A result is only ever a fact about the launch that produced it.
+     * The live hand-off records that launch's request code, so a result
+     * carrying any other code — a superseded attempt's, or a plain
+     * duplicate — is dropped. Nothing is accepted while only the
+     * permission dialog is up, because nothing has been launched yet.
+     *
+     * <p>A matching result is recorded against that hand-off and nothing
+     * more happens here: while paused the settlement belongs to
+     * {@link #onResume}, so a result can never launch a hand-off and
+     * then be mistaken for its return. While already resumed it settles
+     * immediately, so it never waits for a resume that may not come.
+     */
+    @Override protected void onActivityResult(int request, int result, Intent data) {
+        super.onActivityResult(request, result, data);
+        SystemHandoff pending = handoff;
+        if (pending == null) return;
+        if (pending.requestCode == SystemHandoff.NO_REQUEST) return;
+        if (request != pending.requestCode) return;
+        if (!pending.describes(attempt)) return;
+        pending.recordResult(result);
+        if (!resumed) return;
+        settleHandoff(pending);
+    }
+
+    /** Settle a hand-off whose result has arrived and whose activity is
+     *  in the foreground. */
+    private void settleHandoff(SystemHandoff pending) {
+        if (pending.phase == SystemHandoff.AWAITING_SETTINGS) {
+            dismissPermissionDialog();
+            reconcilePermissionReturn(pending);
+        } else if (pending.phase == SystemHandoff.AWAITING_INSTALLER) {
+            reconcileInstallerReturn(pending);
+        } else {
+            return;
+        }
+        render();
     }
 
     @Override protected void onDestroy() {
-        // Mark destroyed FIRST so any late executor callbacks short
-        // circuit before they try to touch the UI or the repository
-        // observer set. The retained observer field is the exact
-        // same instance addObserver saw, so removeObserver matches.
         destroyed = true;
-        // Set the per-download cancel flag BEFORE cancelling the
-        // transport so a worker that reads the flag after
-        // transport.cancel() still sees a cancelled state — without
-        // this, a worker racing the onDestroy path could observe
-        // destroyed but not downloadCancelled and take a branch
-        // reserved for an in-flight cancel click.
-        downloadCancelled = true;
+        resumed = false;
+        invalidateAttempt();
+        handedToSystem = false;
         if (observerRegistered && repository != null) repository.removeObserver(observer);
-        if(transport!=null)transport.cancel();
+        UpdateTransport t = transport;
+        if (t != null) t.cancel();
         super.onDestroy();
     }
 
-    /** Visible for tests: returns the most recent text rendered on
-     *  the inline status line. Package-private so lifecycle tests
-     *  can assert the visibility ladder without spelunking the
-     *  private TextView field. */
+    // ------------------------------------------------------------------
+    //  Test accessors
+    // ------------------------------------------------------------------
+
     String windowStatusText() { return status == null ? null : status.getText().toString(); }
 
-    /** Visible for tests: package-private read-only views of the
-     *  action state machine. Tests assert that download / install
-     *  failures correctly transition to the terminal-error state
-     *  (actionKind == null, actionError != null) so the buttons
-     *  re-enable while the message stays visible. */
-    String currentActionKindForTest() { return actionKind; }
     String currentActionErrorForTest() { return actionError; }
     String currentLastFailedKindForTest() { return lastFailedKind; }
     String currentResultNoticeForTest() { return resultNotice; }
-    boolean isDownloadButtonEnabledForTest() { return download != null && download.isEnabled(); }
-    boolean isInstallButtonEnabledForTest() { return install != null && install.isEnabled(); }
-    boolean isCheckButtonEnabledForTest() { return check != null && check.isEnabled(); }
+
+    /** The action the primary button is currently bound to. */
+    PrimaryAction primaryActionForTest() { return boundPrimaryAction; }
+
+    /** The visible primary label. */
+    String primaryLabelForTest() { return primary == null ? null : primary.getText().toString(); }
+
+    /** The version the running attempt is pinned to, or null. */
+    String pinnedVersionForTest() { return attempt == null ? null : attempt.version(); }
+
+    String runningStageForTest() { return stage.name(); }
+
+    /** True while Android owns the installer and has not reported an
+     *  outcome. */
+    boolean installerUnconfirmedForTest() { return stage == Stage.INSTALLER_UNCONFIRMED; }
+
+    /** The single primary button. Tests click this one view. */
+    Button primaryButtonForTest() { return primary; }
+
+    Button cancelButtonForTest() { return cancel; }
+
+    boolean isPrimaryEnabledForTest() { return primary != null && primary.isEnabled(); }
+
     int cancelVisibilityForTest() { return cancel == null ? View.GONE : cancel.getVisibility(); }
-    /** Visible for tests: returns the volatile transport field
-     *  without exposing the field itself. Lets a destroy-before-
-     *  publication test assert that the activity never publishes
-     *  a transport after destroy. */
+    boolean isCancelVisibleForTest() { return cancel != null && cancel.getVisibility() == View.VISIBLE; }
+    boolean isBackVisibleForTest() { return back != null && back.getVisibility() == View.VISIBLE; }
+
+    /** True once the OS installer has taken the APK. */
+    boolean handedToSystemForTest() { return handedToSystem; }
+
+    boolean awaitingPermissionForTest() { return awaitingPermission; }
+
+    /** True while the OS installer owns the screen. */
+    boolean awaitingSystemForTest() { return stage == Stage.AWAITING_SYSTEM; }
+
     UpdateTransport publishedTransportForTest() { return transport; }
 }

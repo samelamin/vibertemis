@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Primary action drawable for the Updates screen (Check / Download /
+  Install / Retry). Teal #14616E with darker pressed state and a teal
+  focus ring. The teal ring is the standard "selected focus" indicator
+  for the headset ray-cast cursor; it MUST be visible against the dark
+  ink panel and the raised card.
+-->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_focused="true">
+        <layer-list>
+            <item>
+                <shape android:shape="rectangle">
+                    <solid android:color="@color/upd_panel_focus_ring" />
+                    <corners android:radius="10dp" />
+                </shape>
+            </item>
+            <item android:bottom="3dp" android:left="3dp" android:right="3dp" android:top="3dp">
+                <shape android:shape="rectangle">
+                    <solid android:color="@color/upd_panel_primary" />
+                    <corners android:radius="8dp" />
+                </shape>
+            </item>
+        </layer-list>
+    </item>
+    <item android:state_pressed="true">
+        <shape android:shape="rectangle">
+            <solid android:color="@color/upd_panel_primary_pressed" />
+            <corners android:radius="10dp" />
+        </shape>
+    </item>
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="@color/upd_panel_primary" />
+            <corners android:radius="10dp" />
+        </shape>
+    </item>
+</selector>

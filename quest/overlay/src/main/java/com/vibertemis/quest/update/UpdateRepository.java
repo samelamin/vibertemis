@@ -366,8 +366,14 @@ public final class UpdateRepository {
      * verified download continues to be ready to install.
      *
      * <p>The available slot is preserved.
+     *
+     * @return the immutable per-version copy the download was bound to.
+     *         That path, not the caller's source file, is what the
+     *         installer must be handed: a shared staging file can be
+     *         overwritten by another attempt while Android holds the
+     *         bytes.
      */
-    public synchronized void recordDownloaded(UpdateManifest m, byte[] manifestBytes, byte[] signatureBytes, File sourceFile) {
+    public synchronized File recordDownloaded(UpdateManifest m, byte[] manifestBytes, byte[] signatureBytes, File sourceFile) {
         if (m == null || manifestBytes == null || signatureBytes == null || sourceFile == null) {
             throw new IllegalArgumentException("Downloaded record must carry manifest bytes and a source file");
         }
@@ -410,6 +416,7 @@ public final class UpdateRepository {
                 now, prev.lastFailureAtMs, null, false);
         snapshot.set(next);
         notifyObservers();
+        return apkFile;
     }
 
     /**

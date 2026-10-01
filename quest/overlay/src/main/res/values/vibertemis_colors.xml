@@ -1,11 +1,27 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Overlay colours used by the hub UI. Only includes the colours that are
-  strictly new — the existing ic_launcher_background lives upstream.
+  Overlay colours used by the hub + updates UI. Only includes the colours
+  that are strictly new — the existing ic_launcher_background lives upstream.
 -->
 <resources>
     <color name="hub_panel_bg">#0E1116</color>
     <color name="hub_panel_fg">#E6EAF0</color>
     <color name="hub_panel_subtle">#7A8392</color>
     <color name="hub_panel_warn">#F2A65A</color>
+
+    <!-- Updates panel: Claude official frontend-design palette.
+         Quiet dark ink panel; teal primary; readable text + secondary
+         secondary; teal focus ring on the primary action. -->
+    <color name="upd_panel_bg">#0D1216</color>
+    <color name="upd_panel_card">#141B21</color>
+    <color name="upd_panel_fg">#ECF2F5</color>
+    <color name="upd_panel_subtle">#9BA8B2</color>
+    <color name="upd_panel_primary">#14616E</color>
+    <color name="upd_panel_primary_pressed">#0F4A55</color>
+    <color name="upd_panel_on_primary">#FFFFFF</color>
+    <color name="upd_panel_focus_ring">#7FE0D2</color>
+    <color name="upd_panel_warn">#F2A65A</color>
+    <color name="upd_panel_error">#E07F7F</color>
+    <color name="upd_panel_secondary_bg">#1A2229</color>
+    <color name="upd_panel_secondary_border">#2A323A</color>
 </resources>

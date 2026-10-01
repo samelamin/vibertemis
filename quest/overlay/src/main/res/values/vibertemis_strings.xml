@@ -188,6 +188,30 @@
     <string name="vq_depth_source_title">Synthetic 3D</string>
     <string name="vq_depth_source_summary">Optional depth effect for screen gaming.</string>
 
+    <!-- Updates screen. There is exactly ONE update action: tapping it
+         downloads (when the verified APK is not already cached), verifies,
+         and opens the Android installer automatically. There is no
+         separate in-app Install tap. "Check for updates" is the idle
+         secondary action; "Retry" re-runs whichever operation failed. -->
+    <string name="upd_action_check">Check for updates</string>
+    <string name="upd_action_update">Update to %1$s</string>
+    <string name="upd_action_retry">Retry</string>
+    <string name="upd_action_cancel">Cancel</string>
+    <string name="upd_action_back">Back</string>
+    <string name="upd_title">App updates</string>
+    <string name="upd_intro">One button updates the headset app. Close your VR session first; Android asks you to confirm the install. Update your Windows host separately from its manager.</string>
+    <string name="upd_busy_downloading">Downloading update %1$s…</string>
+    <string name="upd_busy_verifying">Verifying update %1$s…</string>
+    <string name="upd_busy_installer">Opening the installer for %1$s…</string>
+    <string name="upd_busy_awaiting">Waiting for Android to finish installing %1$s…</string>
+    <string name="upd_error_retry_update">%1$s failed: %2$s. Tap Retry to try again.</string>
+    <!-- Android owns the installer and has not reported an outcome. Never
+         claim the install was cancelled or that the app is unchanged. The
+         release is named here, so the button beside it only has to say
+         Retry, and no raw versionCode is shown as if it were a fact. -->
+    <string name="upd_action_retry_unconfirmed">Retry</string>
+    <string name="upd_installer_unconfirmed">Installation of %1$s is not confirmed. Finish the Android installer, or tap Retry.</string>
+
     <!-- Top config status row. -->
     <string name="top_config_status_label">Current screen settings</string>
     <string name="top_config_status_value">%1$s @ %2$s fps · %3$s Mbps · codec %4$s</string>
