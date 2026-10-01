@@ -98,16 +98,15 @@ Flickable {
     }
 
     Column {
-        padding: 10
+        padding: 20
         id: settingsColumn1
         width: settingsPage.width / 2
-        spacing: 15
+        spacing: 20
 
-        GroupBox {
+        SettingsCard {
             id: basicSettingsGroupBox
             width: (parent.width - (parent.leftPadding + parent.rightPadding))
-            padding: 12
-            title: "<font color=\"skyblue\">" + qsTr("Basic Settings") + "</font>"
+            title: qsTr("Basic Settings")
             font.pointSize: 12
 
             Column {
@@ -927,11 +926,10 @@ Flickable {
             }
         }
 
-        GroupBox {
+        SettingsCard {
             id: artemisStreamingGroupBox
             width: (parent.width - (parent.leftPadding + parent.rightPadding))
-            padding: 12
-            title: "<font color=\"skyblue\">" + qsTr("Vibertemis Streaming Enhancements") + "</font>"
+            title: qsTr("Vibertemis Streaming Enhancements")
             font.pointSize: 12
 
             Column {
@@ -1041,12 +1039,11 @@ Flickable {
             }
         }
 
-        GroupBox {
+        SettingsCard {
 
             id: audioSettingsGroupBox
             width: (parent.width - (parent.leftPadding + parent.rightPadding))
-            padding: 12
-            title: "<font color=\"skyblue\">" + qsTr("Audio Settings") + "</font>"
+            title: qsTr("Audio Settings")
             font.pointSize: 12
 
             Column {
@@ -1135,11 +1132,10 @@ Flickable {
             }
         }
 
-        GroupBox {
+        SettingsCard {
             id: hostSettingsGroupBox
             width: (parent.width - (parent.leftPadding + parent.rightPadding))
-            padding: 12
-            title: "<font color=\"skyblue\">" + qsTr("Host Settings") + "</font>"
+            title: qsTr("Host Settings")
             font.pointSize: 12
 
             Column {
@@ -1175,11 +1171,10 @@ Flickable {
             }
         }
 
-        GroupBox {
+        SettingsCard {
             id: uiSettingsGroupBox
             width: (parent.width - (parent.leftPadding + parent.rightPadding))
-            padding: 12
-            title: "<font color=\"skyblue\">" + qsTr("UI Settings") + "</font>"
+            title: qsTr("UI Settings")
             font.pointSize: 12
 
             Column {
@@ -1477,19 +1472,18 @@ Flickable {
     }
 
     Column {
-        padding: 10
+        padding: 20
         rightPadding: 20
         bottomPadding: 30
         anchors.left: settingsColumn1.right
         id: settingsColumn2
         width: settingsPage.width / 2
-        spacing: 15
+        spacing: 20
 
-        GroupBox {
+        SettingsCard {
             id: inputSettingsGroupBox
             width: (parent.width - (parent.leftPadding + parent.rightPadding))
-            padding: 12
-            title: "<font color=\"skyblue\">" + qsTr("Input Settings") + "</font>"
+            title: qsTr("Input Settings")
             font.pointSize: 12
 
             Column {
@@ -1633,11 +1627,10 @@ Flickable {
             }
         }
 
-        GroupBox {
+        SettingsCard {
             id: gamepadSettingsGroupBox
             width: (parent.width - (parent.leftPadding + parent.rightPadding))
-            padding: 12
-            title: "<font color=\"skyblue\">" + qsTr("Gamepad Settings") + "</font>"
+            title: qsTr("Gamepad Settings")
             font.pointSize: 12
 
             Column {
@@ -1708,11 +1701,10 @@ Flickable {
             }
         }
 
-        GroupBox {
+        SettingsCard {
             id: advancedSettingsGroupBox
             width: (parent.width - (parent.leftPadding + parent.rightPadding))
-            padding: 12
-            title: "<font color=\"skyblue\">" + qsTr("Advanced Settings") + "</font>"
+            title: qsTr("Advanced Settings")
             font.pointSize: 12
 
             Column {
@@ -1993,11 +1985,10 @@ Flickable {
             }
         }
 
-        GroupBox {
+        SettingsCard {
             id: artemisSettingsGroupBox
             width: (parent.width - (parent.leftPadding + parent.rightPadding))
-            padding: 12
-            title: "<font color=\"skyblue\">" + qsTr("Vibertemis Features") + "</font>"
+            title: qsTr("Vibertemis Features")
             font.pointSize: 12
 
             Column {
@@ -2034,11 +2025,10 @@ Flickable {
             }
         }
 
-        GroupBox {
+        SettingsCard {
             id: diagnosticsGroupBox
             width: (parent.width - (parent.leftPadding + parent.rightPadding))
-            padding: 12
-            title: "<font color=\"skyblue\">" + qsTr("Diagnostics") + "</font>"
+            title: qsTr("Diagnostics")
             font.pointSize: 12
 
             Column {

@@ -17,7 +17,7 @@ CenteredGridView {
     activeFocusOnTab: true
     topMargin: 20
     bottomMargin: 5
-    cellWidth: 310; cellHeight: 330;
+    cellWidth: 316; cellHeight: 282;
     objectName: qsTr("Computers")
 
     Component.onCompleted: {
@@ -135,56 +135,104 @@ CenteredGridView {
     model: computerModel
 
     delegate: NavigableItemDelegate {
-        width: 300; height: 320;
+        id: pcCard
+        width: 296; height: 262;
         grid: pcGrid
+        padding: 18
 
         property alias pcContextMenu : pcContextMenuLoader.item
+        readonly property bool isReady: model.online && model.paired
 
-        Image {
-            id: pcIcon
-            anchors.horizontalCenter: parent.horizontalCenter
-            source: "qrc:/res/desktop_windows-48px.svg"
-            sourceSize {
-                width: 200
-                height: 200
-            }
+        // Card surface from the Vibertemis palette: mint ring for the
+        // controller/keyboard selection, a lighter fill on hover.
+        background: Rectangle {
+            radius: 22
+            color: pcCard.hovered || pcCard.down ? window.ui.raised : window.ui.surface
+            border.width: pcCard.highlighted || pcCard.visualFocus ? 3 : 1
+            border.color: pcCard.highlighted || pcCard.visualFocus ? window.ui.accent : window.ui.line
         }
 
-        Image {
-            // TODO: Tooltip
-            id: stateIcon
-            anchors.horizontalCenter: pcIcon.horizontalCenter
-            anchors.verticalCenter: pcIcon.verticalCenter
-            anchors.verticalCenterOffset: !model.online ? -18 : -16
-            visible: !model.statusUnknown && (!model.online || !model.paired)
-            source: !model.online ? "qrc:/res/warning_FILL1_wght300_GRAD200_opsz24.svg" : "qrc:/res/baseline-lock-24px.svg"
-            sourceSize {
-                width: !model.online ? 75 : 70
-                height: !model.online ? 75 : 70
-            }
-        }
+        Rectangle {
+            id: pcArt
+            anchors.top: parent.top
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.margins: 18
+            height: 140
+            radius: 14
+            color: pcCard.isReady ? "#0D1520" : "#10141A"
 
-        BusyIndicator {
-            id: statusUnknownSpinner
-            anchors.horizontalCenter: pcIcon.horizontalCenter
-            anchors.verticalCenter: pcIcon.verticalCenter
-            anchors.verticalCenterOffset: -15
-            width: 75
-            height: 75
-            visible: model.statusUnknown
+            Image {
+                id: pcIcon
+                anchors.centerIn: parent
+                opacity: pcCard.isReady ? 1.0 : 0.45
+                source: "qrc:/res/desktop_windows-48px.svg"
+                sourceSize {
+                    width: 120
+                    height: 120
+                }
+            }
+
+            Image {
+                id: stateIcon
+                anchors.horizontalCenter: pcIcon.horizontalCenter
+                anchors.verticalCenter: pcIcon.verticalCenter
+                anchors.verticalCenterOffset: !model.online ? -11 : -10
+                visible: !model.statusUnknown && (!model.online || !model.paired)
+                source: !model.online ? "qrc:/res/warning_FILL1_wght300_GRAD200_opsz24.svg" : "qrc:/res/baseline-lock-24px.svg"
+                sourceSize {
+                    width: 44
+                    height: 44
+                }
+            }
+
+            BusyIndicator {
+                id: statusUnknownSpinner
+                anchors.centerIn: pcIcon
+                width: 56
+                height: 56
+                visible: model.statusUnknown
+            }
         }
 
         Label {
             id: pcNameText
             text: model.name
 
-            width: parent.width
-            anchors.top: pcIcon.bottom
-            anchors.bottom: parent.bottom
-            font.pointSize: 36
-            horizontalAlignment: Text.AlignHCenter
-            wrapMode: Text.Wrap
+            anchors.top: pcArt.bottom
+            anchors.topMargin: 16
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.leftMargin: 20
+            anchors.rightMargin: 20
+            font.pointSize: 18
+            font.bold: true
+            color: window.ui.text
             elide: Text.ElideRight
+        }
+
+        Row {
+            anchors.top: pcNameText.bottom
+            anchors.topMargin: 8
+            anchors.left: pcNameText.left
+            spacing: 8
+
+            Rectangle {
+                width: 8; height: 8; radius: 4
+                anchors.verticalCenter: parent.verticalCenter
+                color: model.statusUnknown ? window.ui.faint
+                     : pcCard.isReady ? window.ui.ok
+                     : model.online ? window.ui.warn : window.ui.faint
+            }
+
+            Label {
+                font.pointSize: 11
+                color: window.ui.muted
+                text: model.statusUnknown ? qsTr("Checking…")
+                    : !model.online ? (model.wakeable ? qsTr("Offline · Wake on LAN available") : qsTr("Offline"))
+                    : model.paired ? qsTr("Online · Paired")
+                    : qsTr("Online · Not paired")
+            }
         }
 
         Loader {

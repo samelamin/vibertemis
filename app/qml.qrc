@@ -24,5 +24,6 @@
         <file>gui/ServerCommands.qml</file>
         <file>gui/QuickMenu.qml</file>
         <file>gui/Toast.qml</file>
+        <file>gui/SettingsCard.qml</file>
     </qresource>
 </RCC>

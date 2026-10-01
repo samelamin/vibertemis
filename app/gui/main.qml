@@ -22,14 +22,37 @@ ApplicationWindow {
     width: 1280
     height: 600
 
+    // Design tokens from the Vibertemis Redesign canvas. Pages reach them
+    // through the window id, e.g. window.ui.surface.
+    readonly property QtObject ui: QtObject {
+        readonly property color ground: "#0A0D11"
+        readonly property color surface: "#11161C"
+        readonly property color raised: "#171E26"
+        readonly property color line: "#232C36"
+        readonly property color text: "#EEF3F6"
+        readonly property color muted: "#9AA7B3"
+        readonly property color faint: "#7D8A97"
+        readonly property color accent: "#5EE6CF"
+        readonly property color accentInk: "#052520"
+        readonly property color ok: "#5EE6A0"
+        readonly property color warn: "#F5C451"
+        readonly property color bannerFill: "#0F2622"
+        readonly property color bannerLine: "#1F5A50"
+        readonly property color bannerMuted: "#A9C9C3"
+        readonly property color screenTint: "#7CB8FF"
+    }
+
+    // Update banner state. The banner is dismissed per build; a newer
+    // build shows it again.
+    property string dismissedUpdateBuild: ""
+    property double lastUpdateCheckMs: Date.now()
+    readonly property int updateRecheckIntervalMs: 30 * 60000
+
     // This function runs prior to creation of the initial StackView item
     function doEarlyInit() {
-        // Override the background color to Material 2 colors for Qt 6.5+
-        // in order to improve contrast between GFE's placeholder box art
-        // and the background of the app grid.
-        if (SystemProperties.usesMaterial3Theme) {
-            Material.background = "#303030"
-        }
+        // Vibertemis ink ground (shared with the Quest app). Set on every
+        // Qt version so Material 2 and Material 3 builds look the same.
+        Material.background = window.ui.ground
 
         SdlGamepadKeyNavigation.enable()
     }
@@ -123,9 +146,170 @@ ApplicationWindow {
                AutoUpdateChecker.state === AutoUpdateChecker.HandOffError
     }
 
+    function updateBannerVisible() {
+        if (AutoUpdateChecker.availableBuild === ""
+                || AutoUpdateChecker.availableBuild === dismissedUpdateBuild) {
+            return false
+        }
+        if (!AutoUpdateChecker.rollingInstallSupported) {
+            return AutoUpdateChecker.state === AutoUpdateChecker.Available
+        }
+        return AutoUpdateChecker.state === AutoUpdateChecker.Available ||
+               AutoUpdateChecker.state === AutoUpdateChecker.ReadyForDesktop ||
+               AutoUpdateChecker.state === AutoUpdateChecker.ReadyToHandOff ||
+               AutoUpdateChecker.state === AutoUpdateChecker.DownloadError ||
+               AutoUpdateChecker.state === AutoUpdateChecker.VerificationError ||
+               AutoUpdateChecker.state === AutoUpdateChecker.HandOffError
+    }
+
+    function openUpdateFromBanner() {
+        if (AutoUpdateChecker.rollingInstallSupported) {
+            updateDialog.openForUserAction()
+        } else {
+            AutoUpdateChecker.openReleasePage()
+        }
+    }
+
+    // Re-check for updates while the app stays open (Game Mode sessions
+    // can run for days). Only from a settled "nothing to do" state, so a
+    // download, verification, hand-off or a user's Cancel is never
+    // interrupted or undone.
+    function maybeRecheckForUpdates() {
+        var state = AutoUpdateChecker.state
+        if (state !== AutoUpdateChecker.NoUpdate && state !== AutoUpdateChecker.CheckError) {
+            return
+        }
+        if (Date.now() - lastUpdateCheckMs < updateRecheckIntervalMs) {
+            return
+        }
+        lastUpdateCheckMs = Date.now()
+        AutoUpdateChecker.checkNow()
+    }
+
+    Timer {
+        id: updateRecheckTimer
+        interval: 5 * 60000
+        repeat: true
+        running: true
+        onTriggered: window.maybeRecheckForUpdates()
+    }
+
+    Rectangle {
+        id: updateBanner
+        anchors.top: parent.top
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.margins: visible ? 16 : 0
+        height: visible ? bannerRow.implicitHeight + 24 : 0
+        visible: window.updateBannerVisible()
+        radius: 16
+        color: window.ui.bannerFill
+        border.color: window.ui.bannerLine
+        border.width: 1
+
+        RowLayout {
+            id: bannerRow
+            anchors.fill: parent
+            anchors.leftMargin: 20
+            anchors.rightMargin: 12
+            spacing: 14
+
+            Rectangle {
+                width: 40; height: 40; radius: 12
+                color: "#14332D"
+                Layout.alignment: Qt.AlignVCenter
+
+                Label {
+                    anchors.centerIn: parent
+                    text: "\u2193"
+                    font.pointSize: 18
+                    font.bold: true
+                    color: window.ui.accent
+                }
+            }
+
+            ColumnLayout {
+                spacing: 2
+                Layout.fillWidth: true
+
+                Label {
+                    Layout.fillWidth: true
+                    font.pointSize: 13
+                    font.bold: true
+                    color: window.ui.text
+                    elide: Label.ElideRight
+                    text: {
+                        switch (AutoUpdateChecker.state) {
+                        case AutoUpdateChecker.ReadyForDesktop:
+                        case AutoUpdateChecker.ReadyToHandOff:
+                            return qsTr("A new build is ready to install")
+                        case AutoUpdateChecker.DownloadError:
+                        case AutoUpdateChecker.VerificationError:
+                        case AutoUpdateChecker.HandOffError:
+                            return qsTr("The update needs your attention")
+                        default:
+                            return qsTr("A new version is available")
+                        }
+                    }
+                }
+
+                Label {
+                    Layout.fillWidth: true
+                    font.pointSize: 10
+                    color: window.ui.bannerMuted
+                    elide: Label.ElideRight
+                    text: AutoUpdateChecker.rollingInstallSupported
+                          ? qsTr("Downloaded and verified before it installs. The app restarts to finish.")
+                          : qsTr("Version %1 is on the releases page.").arg(AutoUpdateChecker.availableBuild)
+                }
+            }
+
+            Button {
+                id: bannerLaterButton
+                flat: true
+                text: qsTr("Later")
+                activeFocusOnTab: true
+                Keys.onReturnPressed: clicked()
+                Keys.onEnterPressed: clicked()
+                KeyNavigation.right: bannerUpdateButton
+                Keys.onDownPressed: stackView.currentItem.forceActiveFocus(Qt.TabFocus)
+                onClicked: window.dismissedUpdateBuild = AutoUpdateChecker.availableBuild
+            }
+
+            Button {
+                id: bannerUpdateButton
+                text: qsTr("Update now")
+                activeFocusOnTab: true
+                leftPadding: 20
+                rightPadding: 20
+                background: Rectangle {
+                    implicitHeight: 44
+                    radius: 12
+                    color: bannerUpdateButton.down ? Qt.darker(window.ui.accent, 1.15) : window.ui.accent
+                    border.width: bannerUpdateButton.visualFocus ? 3 : 0
+                    border.color: window.ui.text
+                }
+                contentItem: Label {
+                    text: bannerUpdateButton.text
+                    font.bold: true
+                    color: window.ui.accentInk
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                }
+                Keys.onReturnPressed: clicked()
+                Keys.onEnterPressed: clicked()
+                Keys.onDownPressed: stackView.currentItem.forceActiveFocus(Qt.TabFocus)
+                onClicked: window.openUpdateFromBanner()
+            }
+        }
+    }
+
     StackView {
         id: stackView
-        anchors.fill: parent
+        anchors.top: updateBanner.bottom
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
         focus: true
 
         Component.onCompleted: {
@@ -218,6 +402,9 @@ ApplicationWindow {
             // Stop the inactivity timer
             inactivityTimer.stop()
 
+            // Coming back to the app is a natural moment to look again
+            maybeRecheckForUpdates()
+
             // Restart polling if it was stopped
             if (!pollingActive) {
                 ComputerManager.startPolling()
@@ -262,9 +449,21 @@ ApplicationWindow {
 
     header: ToolBar {
         id: toolBar
-        height: 60
+        height: 64
         anchors.topMargin: 5
         anchors.bottomMargin: 5
+
+        background: Rectangle {
+            color: window.ui.ground
+
+            Rectangle {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                height: 1
+                color: window.ui.line
+            }
+        }
 
         Label {
             id: titleLabel

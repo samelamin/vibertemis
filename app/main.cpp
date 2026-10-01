@@ -863,15 +863,16 @@ int main(int argc, char *argv[])
 
     // These are defaults that we allow the user to override
     if (!qEnvironmentVariableIsSet("QT_QUICK_CONTROLS_MATERIAL_ACCENT")) {
-        qputenv("QT_QUICK_CONTROLS_MATERIAL_ACCENT", "Purple");
+        // Vibertemis mint, shared with the Quest app's palette.
+        qputenv("QT_QUICK_CONTROLS_MATERIAL_ACCENT", "#5EE6CF");
     }
     if (!qEnvironmentVariableIsSet("QT_QUICK_CONTROLS_MATERIAL_VARIANT")) {
         qputenv("QT_QUICK_CONTROLS_MATERIAL_VARIANT", "Dense");
     }
     if (!qEnvironmentVariableIsSet("QT_QUICK_CONTROLS_MATERIAL_PRIMARY")) {
-        // Qt 6.9 changed the dark-theme Material.Indigo shade. Preserve the
-        // established toolbar color unless the user has explicitly set one.
-        qputenv("QT_QUICK_CONTROLS_MATERIAL_PRIMARY", "#3F51B5");
+        // Toolbar surface from the Vibertemis palette (an explicit hex also
+        // keeps Qt 6.9's changed dark-theme shades from moving it).
+        qputenv("QT_QUICK_CONTROLS_MATERIAL_PRIMARY", "#11161C");
     }
 
     QQmlApplicationEngine engine;
