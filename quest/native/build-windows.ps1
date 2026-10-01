@@ -143,20 +143,26 @@ foreach ($notice in $headerNotices) {
 
 # Pin the license generator so the dependency notice list stays reproducible.
 $about = Get-CargoAboutVersion
-if ($about -notmatch '0\.8\.4\b') {
+if ($about -notmatch '0\.9\.2\b') {
     Push-Location $alvr
     try {
-        Invoke-Checked cargo @('install', '--locked', 'cargo-about', '--version', '0.8.4')
+        # The CI cache restores the cargo-about binary but not its registry
+        # metadata, so an old cached binary is untracked and --force replaces it.
+        Invoke-Checked cargo @('install', '--force', '--locked', 'cargo-about', '--features', 'cli', '--version', '0.9.2')
     } finally { Pop-Location }
     $about = Get-CargoAboutVersion
 }
-if ($about -notmatch '0\.8\.4\b') { throw "cargo-about 0.8.4 is required (found: $about)" }
+if ($about -notmatch '0\.9\.2\b') { throw "cargo-about 0.9.2 is required (found: $about)" }
 $template = 'alvr/xtask/licenses_template.hbs'
 if (-not (Test-Path -LiteralPath (Join-Path $alvr $template) -PathType Leaf)) { throw "ALVR license template missing: $template" }
+# An explicit absolute config keeps the accepted licenses and targets scoped to
+# this packaging step instead of whatever about.toml the crate workspace holds.
+$aboutConfig = Join-Path $PSScriptRoot 'about-windows.toml'
+if (-not (Test-Path -LiteralPath $aboutConfig -PathType Leaf)) { throw "cargo-about config missing: $aboutConfig" }
 $dependencies = Join-Path $licenseDir 'dependencies.html'
 Push-Location $alvr
 try {
-    Invoke-Checked cargo @('about', 'generate', $template, '-o', $dependencies)
+    Invoke-Checked cargo @('about', 'generate', $template, '-o', $dependencies, '--config', $aboutConfig)
 } finally { Pop-Location }
 if (-not (Test-Path -LiteralPath $dependencies -PathType Leaf)) { throw 'cargo about did not produce dependencies.html' }
 Write-Utf8NoBom $dependencies ([IO.File]::ReadAllText($dependencies))
