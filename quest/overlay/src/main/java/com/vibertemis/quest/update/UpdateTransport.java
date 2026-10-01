@@ -8,15 +8,58 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
 import java.security.MessageDigest;
+import java.util.*;
 
 /** Public HTTPS only; bounded redirects, bodies, deadlines, and cancellation. */
 final class UpdateTransport {
+    /**
+     * Opens the connection for an address that already passed the HTTPS
+     * allowlist. Production goes through the JDK's ordinary
+     * {@link URL#openConnection()}; tests inject an offline fake.
+     */
+    interface ConnectionFactory {
+        HttpURLConnection open(URL url) throws Exception;
+    }
+
+    private static final ConnectionFactory ORDINARY_CONNECTIONS = new ConnectionFactory() {
+        @Override public HttpURLConnection open(URL url) throws Exception {
+            return (HttpURLConnection) url.openConnection();
+        }
+    };
+
+    private static final String RELEASES_URL =
+            "https://api.github.com/repos/samelamin/vibertemis/releases?per_page=100";
+    private static final String TAG_PREFIX = "quest-preview-v";
+    private static final String NUMERIC_VERSION = "[0-9]{1,5}\\.[0-9]{1,5}\\.[0-9]{1,5}\\.[0-9]{1,5}";
+    private static final String CHANNEL_SUFFIX = "-quest-preview.";
+    private static final String MANIFEST_ASSET = "quest-update.json";
+    private static final String SIGNATURE_ASSET = "quest-update.json.sig";
+
     volatile boolean cancelled;
     private volatile HttpURLConnection active;
     private long deadline;
     final String trustedKey;
+    private final ConnectionFactory connections;
+    /**
+     * The release version this build already carries, as four numbers,
+     * or null when the build's version name does not name a release
+     * version at all. Only used to drop candidates that cannot be newer
+     * than what is installed: the last component is a release ordinal,
+     * never an Android versionCode.
+     */
+    private final int[] installedVersion;
     byte[] manifestBytes, signatureBytes;
-    UpdateTransport(String key) { trustedKey = key; }
+
+    UpdateTransport(String key) {
+        this(key, com.limelight.BuildConfig.VERSION_NAME, ORDINARY_CONNECTIONS);
+    }
+
+    /** Injected version name and connection factory, for tests. */
+    UpdateTransport(String key, String currentVersionName, ConnectionFactory connections) {
+        trustedKey = key;
+        this.connections = connections;
+        installedVersion = releaseVersion(currentVersionName);
+    }
     void cancel() { cancelled = true; HttpURLConnection c = active; if (c != null) c.disconnect(); }
     private void check() throws IOException {
         if (cancelled || Thread.currentThread().isInterrupted() || System.nanoTime() > deadline) throw new InterruptedIOException("Update cancelled or timed out");
@@ -29,7 +72,7 @@ final class UpdateTransport {
                     || url.getUserInfo() != null || url.getRef() != null
                     || !(host.equals("github.com") || host.equals("api.github.com") || host.equals("release-assets.githubusercontent.com") || host.equals("objects.githubusercontent.com")))
                 throw new IOException("Untrusted update redirect");
-            HttpURLConnection c = (HttpURLConnection) url.openConnection(); active = c;
+            HttpURLConnection c = connections.open(url); active = c;
             c.setInstanceFollowRedirects(false); c.setConnectTimeout(10000); c.setReadTimeout(15000);
             c.setRequestProperty("User-Agent", "VibertemisQuest/0.1.0.10");
             int code = c.getResponseCode();
@@ -55,28 +98,119 @@ final class UpdateTransport {
             return out.toByteArray();
         } finally { c.disconnect(); }
     }
+
+    /**
+     * Newest first. Ordering is numeric per component, so
+     * {@code quest-preview-v0.1.0.10} sorts above
+     * {@code quest-preview-v0.1.0.9} even though it sorts below it as
+     * text.
+     */
+    private static final Comparator<Candidate> NEWEST_FIRST = new Comparator<Candidate>() {
+        @Override public int compare(Candidate a, Candidate b) { return compareVersions(b.version, a.version); }
+    };
+
+    private static int compareVersions(int[] a, int[] b) {
+        for (int i = 0; i < 4; i++) { if (a[i] != b[i]) return a[i] < b[i] ? -1 : 1; }
+        return 0;
+    }
+
+    /** A published release that could still carry a signed manifest. */
+    private static final class Candidate {
+        final String tag; final int[] version;
+        Candidate(String tag, int[] version) { this.tag = tag; this.version = version; }
+    }
+
+    /**
+     * Every published Quest release that has both signed-metadata
+     * assets. A malformed entry is skipped rather than failing the
+     * whole check: a release the updater could not read must not hide
+     * the ones it can.
+     */
+    private static List<Candidate> candidates(JSONArray releases) {
+        List<Candidate> found = new ArrayList<>();
+        for (int i = 0; i < releases.length(); i++) {
+            JSONObject r = releases.optJSONObject(i);
+            if (r == null || r.optBoolean("draft")) continue;
+            String tag = r.optString("tag_name", null);
+            int[] version = tagVersion(tag);
+            if (version == null) continue;
+            JSONArray assets = r.optJSONArray("assets");
+            if (assets == null) continue;
+            boolean hasManifest = false, hasSignature = false;
+            for (int j = 0; j < assets.length(); j++) {
+                JSONObject a = assets.optJSONObject(j);
+                if (a == null) continue;
+                String name = a.optString("name", null);
+                if (MANIFEST_ASSET.equals(name)) hasManifest = true;
+                else if (SIGNATURE_ASSET.equals(name)) hasSignature = true;
+            }
+            if (hasManifest && hasSignature) found.add(new Candidate(tag, version));
+        }
+        return found;
+    }
+
+    /** The four numbers a Quest tag names, or null for anything else. */
+    private static int[] tagVersion(String tag) {
+        if (tag == null || !tag.startsWith(TAG_PREFIX)) return null;
+        return numericVersion(tag.substring(TAG_PREFIX.length()));
+    }
+
+    /**
+     * The release version a build's version name refers to, or null
+     * when the name is not a known release version. Accepts both the
+     * four-component normal version and the
+     * {@code 0.1.0-quest-preview.10} channel suffix form.
+     */
+    static int[] releaseVersion(String versionName) {
+        if (versionName == null) return null;
+        String name = versionName.trim();
+        int marker = name.indexOf(CHANNEL_SUFFIX);
+        if (marker >= 0) name = name.substring(0, marker) + "." + name.substring(marker + CHANNEL_SUFFIX.length());
+        return numericVersion(name);
+    }
+
+    private static int[] numericVersion(String value) {
+        if (value == null || !value.matches(NUMERIC_VERSION)) return null;
+        String[] parts = value.split("\\.");
+        int[] version = new int[4];
+        for (int i = 0; i < 4; i++) version[i] = Integer.parseInt(parts[i]);
+        return version;
+    }
+
+    /**
+     * Fetches the newest signed release that applies to this build and
+     * returns it, or null when there is none.
+     *
+     * <p>Candidates are ordered newest first and the first verified
+     * candidate that applies wins: once an applicable verified manifest
+     * is found, no older candidate is visited, so a broken old release
+     * can no longer consume the deadline or invalidate a good new
+     * candidate. A newest candidate that
+     * fails verification, or whose tag disagrees with its signed
+     * version, still fails the check: that is a real integrity
+     * problem, not a reason to fall back to older history.
+     */
     UpdateManifest checkForUpdate(long currentVersion) throws Exception {
         deadline = System.nanoTime() + 45_000_000_000L;
-        JSONArray releases = new JSONArray(new String(read("https://api.github.com/repos/samelamin/vibertemis/releases?per_page=100", 2*1024*1024), StandardCharsets.UTF_8));
-        UpdateManifest newest = null;
-        for (int i=0; i<releases.length(); i++) {
-            JSONObject r = releases.getJSONObject(i); String tag = r.getString("tag_name");
-            if (r.optBoolean("draft") || !tag.matches("quest-preview-v[0-9]{1,5}\\.[0-9]{1,5}\\.[0-9]{1,5}\\.[0-9]{1,5}")) continue;
-            JSONArray assets = r.getJSONArray("assets"); boolean hasManifest=false, hasSignature=false;
-            for (int j=0;j<assets.length();j++) {
-                String name = assets.getJSONObject(j).getString("name");
-                hasManifest |= name.equals("quest-update.json"); hasSignature |= name.equals("quest-update.json.sig");
-            }
-            if (!hasManifest || !hasSignature) continue;
-            byte[] body=read(UpdateManifest.PREFIX+tag+"/quest-update.json",65536);
-            byte[] sig=read(UpdateManifest.PREFIX+tag+"/quest-update.json.sig",384);
-            UpdateManifest m=UpdateManifest.verify(body,sig,trustedKey);
-            if (!tag.equals("quest-preview-v"+m.version)) throw new IOException("Signed release tag mismatch");
-            if (m.sequence > 6 && m.versionCode > currentVersion && (newest == null || m.sequence > newest.sequence)) {
-                newest=m; manifestBytes=body; signatureBytes=sig;
-            }
+        // Stale bytes from a previous run must never be readable as
+        // this run's result, whether this run succeeds, finds nothing,
+        // or throws.
+        manifestBytes = null;
+        signatureBytes = null;
+        JSONArray releases = new JSONArray(new String(read(RELEASES_URL, 2*1024*1024), StandardCharsets.UTF_8));
+        List<Candidate> ordered = candidates(releases);
+        Collections.sort(ordered, NEWEST_FIRST);
+        for (Candidate candidate : ordered) {
+            if (installedVersion != null && compareVersions(candidate.version, installedVersion) <= 0) continue;
+            byte[] body = read(UpdateManifest.PREFIX+candidate.tag+"/"+MANIFEST_ASSET, 65536);
+            byte[] sig = read(UpdateManifest.PREFIX+candidate.tag+"/"+SIGNATURE_ASSET, 384);
+            UpdateManifest m = UpdateManifest.verify(body, sig, trustedKey);
+            if (!candidate.tag.equals(TAG_PREFIX + m.version)) throw new IOException("Signed release tag mismatch");
+            if (m.sequence <= UpdateRepository.MIN_PUBLISHED_SEQUENCE || m.versionCode <= currentVersion) continue;
+            manifestBytes = body; signatureBytes = sig;
+            return m;
         }
-        return newest;
+        return null;
     }
     File download(UpdateManifest m, File directory) throws Exception {
         deadline=System.nanoTime()+600_000_000_000L;

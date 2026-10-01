@@ -47,7 +47,7 @@ import static org.junit.Assert.assertTrue;
  * <p>Covered here:
  * <ul>
  *   <li>a verification that completes while the activity is paused still
- *       reaches the OS installer exactly once on resume;</li>
+ *       reaches the private session installer exactly once on resume;</li>
  *   <li>an install-permission result that arrives while paused is applied
  *       on resume, and never dispatches the installer from inside the
  *       result callback;</li>
@@ -60,6 +60,12 @@ import static org.junit.Assert.assertTrue;
  *   <li>the Retry button re-runs the failed update rather than slipping
  *       a metadata check in first.</li>
  * </ul>
+ *
+ * <p>The hand-off boundary asserted here is parent screen to private
+ * installer: an explicit {@link SessionInstallActivity} launch carrying
+ * the pinned release's own cached copy. What that private installer then
+ * commits through {@code PackageInstaller} is a second boundary, covered
+ * independently by {@code SessionInstallActivityTest}.
  *
  * <p>Everything is driven through the real screen: the one primary
  * button, the real cancel button and the real dialog. Only the network
@@ -402,9 +408,9 @@ public class UpdatesActivityAttemptOwnershipTest {
 
     /**
      * A resume that is not the installer returning must not decide
-     * anything. Android still owns the installer, so the screen rests in
-     * the unknown state and keeps its request identity so a late result
-     * can still settle it.
+     * anything. The private session installer still owns the screen, so
+     * the screen rests in the unknown state and keeps its request
+     * identity so a late result can still settle it.
      */
     @Test public void unrelatedResumeLeavesTheInstallerUnconfirmed() throws Exception {
         publishAvailable("0.1.0.7", installed + 1, 7);
@@ -643,19 +649,28 @@ public class UpdatesActivityAttemptOwnershipTest {
         return UpdateTestFixture.launchedIntents(a);
     }
 
+    /** The hand-off is an explicit, in-app launch of the private session
+     *  installer, so it is identified by its component rather than by an
+     *  action some other caller could also use. */
+    private static boolean isSessionInstall(Intent launch) {
+        return launch.getComponent() != null
+                && SessionInstallActivity.class.getName()
+                        .equals(launch.getComponent().getClassName());
+    }
+
     private static ShadowActivity.IntentForResult installerIntent(UpdatesActivity a) {
         for (ShadowActivity.IntentForResult i : allIntents(a)) {
-            if (Intent.ACTION_INSTALL_PACKAGE.equals(i.intent.getAction())) return i;
+            if (isSessionInstall(i.intent)) return i;
         }
         return null;
     }
 
-    /** The newest ACTION_INSTALL_PACKAGE launch, if any: the launch a
+    /** The newest private-installer launch, if any: the launch a
      *  retry supersedes is the last one, not the first recorded. */
     private static ShadowActivity.IntentForResult latestInstallerIntent(UpdatesActivity a) {
         ShadowActivity.IntentForResult newest = null;
         for (ShadowActivity.IntentForResult i : allIntents(a)) {
-            if (Intent.ACTION_INSTALL_PACKAGE.equals(i.intent.getAction())) newest = i;
+            if (isSessionInstall(i.intent)) newest = i;
         }
         return newest;
     }
@@ -679,7 +694,7 @@ public class UpdatesActivityAttemptOwnershipTest {
     private static int countInstallerLaunches(UpdatesActivity a) {
         int count = 0;
         for (ShadowActivity.IntentForResult i : allIntents(a)) {
-            if (Intent.ACTION_INSTALL_PACKAGE.equals(i.intent.getAction())) count++;
+            if (isSessionInstall(i.intent)) count++;
         }
         return count;
     }

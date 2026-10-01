@@ -541,7 +541,8 @@ public class MainHubActivity extends Activity {
             if (launchPending || requestPending || connectPending) return;
             try {
                 launchPending = true;
-                startActivity(new Intent(this, com.vibertemis.quest.update.UpdatesActivity.class));
+                startActivity(new Intent(this, com.vibertemis.quest.update.UpdatesActivity.class)
+                        .putExtra(com.vibertemis.quest.update.UpdatesActivity.EXTRA_REQUEST_UPDATE, true));
             } catch (ActivityNotFoundException | SecurityException e) {
                 launchPending = false;
                 Toast.makeText(this, "Updates screen unavailable", Toast.LENGTH_LONG).show();

@@ -44,8 +44,8 @@ import static org.junit.Assert.assertTrue;
 
 /**
  * Regression tests for the bytes: which copy is verified, which copy is
- * handed to Android, and which failures may throw a verified download
- * away.
+ * handed to the private session installer, and which failures may throw
+ * a verified download away.
  *
  * <ul>
  *   <li>a live VR session is a busy state, not evidence of corruption:
@@ -54,10 +54,17 @@ import static org.junit.Assert.assertTrue;
  *       target it is an exact match for;</li>
  *   <li>a destroyed instance whose transport finishes anyway cannot
  *       record, purge or dispatch anything;</li>
- *   <li>a paused instance cannot hand Android the bytes a newer attempt
- *       overwrote: the hand-off is always the immutable per-version
- *       copy.</li>
+ *   <li>a paused instance cannot hand the private installer the bytes a
+ *       newer attempt overwrote: the hand-off is always the immutable
+ *       per-version copy.</li>
  * </ul>
+ *
+ * <p>The hand-off boundary asserted here is parent screen to private
+ * installer, so the bytes are read back from the explicit
+ * {@code com.vibertemis.quest.update.extra.APK_PATH} extra instead of
+ * from a {@code FileProvider} content URI. What the private installer
+ * then commits through {@code PackageInstaller} is a second boundary,
+ * covered independently by {@code SessionInstallActivityTest}.
  *
  * <p>The network is the only fake; the digest, archive, package and
  * signer checks are the production ones.
@@ -65,6 +72,11 @@ import static org.junit.Assert.assertTrue;
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 28)
 public class UpdatesActivityDownloadBoundaryTest {
+
+    /** Where the private session installer is told to read the pinned
+     *  release's own copy from. */
+    private static final String EXTRA_APK_PATH =
+            "com.vibertemis.quest.update.extra.APK_PATH";
 
     private KeyPair keyPair;
     private String keyPem;
@@ -204,9 +216,9 @@ public class UpdatesActivityDownloadBoundaryTest {
             assertTrue("the older cache must survive", cachedApk.isFile());
             assertNotNull("the installer must be launched", installerIntent(a));
             assertEquals(1, countInstallerLaunches(a));
-            assertTrue("the newer per-version copy must be handed over: "
-                            + installerIntent(a).intent.getData(),
-                    installerIntent(a).intent.getData().toString().contains("0.1.0.8"));
+            String handed = apkPath(installerIntent(a));
+            assertTrue("the newer per-version copy must be handed over: " + handed,
+                    handed.contains("0.1.0.8"));
         } finally {
             if (!ctl.get().isDestroyed()) ctl.pause().stop().destroy();
         }
@@ -248,9 +260,9 @@ public class UpdatesActivityDownloadBoundaryTest {
                     repo.snapshot().hasDownloaded());
             assertNotNull("the installer must be launched", installerIntent(a));
             assertEquals(1, countInstallerLaunches(a));
-            assertTrue("the cached release's own copy must be handed over: "
-                            + installerIntent(a).intent.getData(),
-                    installerIntent(a).intent.getData().toString().contains("0.1.0.9"));
+            String handed = apkPath(installerIntent(a));
+            assertTrue("the cached release's own copy must be handed over: " + handed,
+                    handed.contains("0.1.0.9"));
         } finally {
             if (!ctl.get().isDestroyed()) ctl.pause().stop().destroy();
         }
@@ -299,9 +311,9 @@ public class UpdatesActivityDownloadBoundaryTest {
             assertFalse("the abandoned release must have no cached copy",
                     versionDir("0.1.0.7").exists());
             assertNotNull("the live attempt must reach the installer", installerIntent(b));
-            assertTrue("the live release's own copy must be handed over: "
-                            + installerIntent(b).intent.getData(),
-                    installerIntent(b).intent.getData().toString().contains("0.1.0.9"));
+            String handed = apkPath(installerIntent(b));
+            assertTrue("the live release's own copy must be handed over: " + handed,
+                    handed.contains("0.1.0.9"));
         } finally {
             if (!second.get().isDestroyed()) second.pause().stop().destroy();
         }
@@ -342,7 +354,7 @@ public class UpdatesActivityDownloadBoundaryTest {
             assertEquals("the paused attempt must still be pinned to its own release",
                     "0.1.0.7", a.pinnedVersionForTest());
             assertNotNull("the paused attempt must reach the installer", installerIntent(a));
-            String handed = installerIntent(a).intent.getData().toString();
+            String handed = apkPath(installerIntent(a));
             assertTrue("it must be handed its own release: " + handed, handed.contains("0.1.0.7"));
             assertFalse("it must never be handed the newer release: " + handed,
                     handed.contains("0.1.0.9"));
@@ -372,10 +384,11 @@ public class UpdatesActivityDownloadBoundaryTest {
      * <p>The second screen is paused only once its download has taken
      * the staging file, so the race is already a fact when its lifecycle
      * defers the hand-off: its verification still runs, but a paused
-     * Activity does not hand anything to Android. That is also what
-     * keeps the hand-off attributable, because Robolectric records
-     * every {@code startActivityForResult} of every instance in one
-     * queue — a second launch would be read back as the first screen's.
+     * Activity does not hand anything to the private installer. That is
+     * also what keeps the hand-off attributable, because Robolectric
+     * records every {@code startActivityForResult} of every instance in
+     * one queue — a second launch would be read back as the first
+     * screen's.
      */
     @Test public void verificationIgnoresAnotherAttemptsOverwrittenStagingFile() throws Exception {
         // Not attached to a window: attaching would drain the main
@@ -450,7 +463,7 @@ public class UpdatesActivityDownloadBoundaryTest {
             // screen first, so the shared queue is not attributed to
             // the wrong instance.
             assertNotNull("the first attempt must reach the installer", installerIntent(a));
-            String handed = installerIntent(a).intent.getData().toString();
+            String handed = apkPath(installerIntent(a));
             assertTrue("it must be handed its own release: " + handed, handed.contains("0.1.0.7"));
             assertFalse("it must never be handed the newer release: " + handed,
                     handed.contains("0.1.0.9"));
@@ -626,11 +639,30 @@ public class UpdatesActivityDownloadBoundaryTest {
         return UpdateTestFixture.launchedIntents(a);
     }
 
+    /** The hand-off is an explicit, in-app launch of the private session
+     *  installer, so it is identified by its component rather than by an
+     *  action some other caller could also use. */
+    private static boolean isSessionInstall(Intent launch) {
+        return launch.getComponent() != null
+                && SessionInstallActivity.class.getName()
+                        .equals(launch.getComponent().getClassName());
+    }
+
     private static ShadowActivity.IntentForResult installerIntent(UpdatesActivity a) {
         for (ShadowActivity.IntentForResult i : allIntents(a)) {
-            if (Intent.ACTION_INSTALL_PACKAGE.equals(i.intent.getAction())) return i;
+            if (isSessionInstall(i.intent)) return i;
         }
         return null;
+    }
+
+    /** The path the private installer was handed for {@code launch},
+     *  read from the explicit extra rather than from an intent data URI. */
+    private static String apkPath(ShadowActivity.IntentForResult launch) {
+        assertNotNull("the private session installer must have been launched", launch);
+        Object value = launch.intent.getExtras() == null
+                ? null : launch.intent.getExtras().get(EXTRA_APK_PATH);
+        assertNotNull("the hand-off must carry " + EXTRA_APK_PATH, value);
+        return String.valueOf(value);
     }
 
     private static ShadowActivity.IntentForResult settingsIntent(UpdatesActivity a) {
@@ -643,7 +675,7 @@ public class UpdatesActivityDownloadBoundaryTest {
     private static int countInstallerLaunches(UpdatesActivity a) {
         int count = 0;
         for (ShadowActivity.IntentForResult i : allIntents(a)) {
-            if (Intent.ACTION_INSTALL_PACKAGE.equals(i.intent.getAction())) count++;
+            if (isSessionInstall(i.intent)) count++;
         }
         return count;
     }

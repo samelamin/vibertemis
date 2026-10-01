@@ -8,15 +8,17 @@
      <uses-permission android:name="com.android.providers.tv.permission.READ_EPG_DATA"/>
      <uses-permission android:name="com.android.providers.tv.permission.WRITE_EPG_DATA"/>
  
-@@ -332,6 +333,11 @@
+@@ -332,6 +333,13 @@
              <meta-data android:name="WindowManagerPreference:FreeformWindowOrientation" android:value="landscape" />
              <meta-data android:name="pvr.app.type" android:value="2d" />
          </activity>
 +        <activity android:name="com.vibertemis.quest.update.UpdatesActivity" android:configChanges="orientation|screenSize|screenLayout|keyboardHidden" android:exported="false" android:theme="@android:style/Theme.Material.NoActionBar" />
++        <activity android:name="com.vibertemis.quest.update.SessionInstallActivity" android:configChanges="orientation|screenSize|screenLayout|keyboardHidden" android:exported="false" android:theme="@android:style/Theme.Material.NoActionBar" />
 +        <provider android:name="com.vibertemis.quest.update.UpdateFileProvider"
 +            android:authorities="${applicationId}.updates" android:exported="false" android:grantUriPermissions="true">
 +            <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/quest_update_paths" />
 +        </provider>
++        <receiver android:name="com.vibertemis.quest.update.SessionInstallReceiver" android:exported="false" />
      </application>
  
  </manifest>

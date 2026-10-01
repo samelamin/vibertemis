@@ -46,8 +46,9 @@ import static org.junit.Assert.assertTrue;
  *   <li><b>one click end to end</b> — the bytes arrive through the real
  *       {@link UpdateTransport} (which serves a digest-verified cached
  *       {@code update.apk} instead of reaching GitHub), the activity
- *       verifies package / versionCode / signer and launches
- *       {@code ACTION_INSTALL_PACKAGE} with no second tap;</li>
+ *       verifies package / versionCode / signer and hands the pinned
+ *       release to the private {@link SessionInstallActivity} with no
+ *       second tap;</li>
  *   <li><b>pinned target vs new metadata</b> — a background check that
  *       publishes a newer release mid-download must not retarget the
  *       running attempt;</li>
@@ -61,16 +62,46 @@ import static org.junit.Assert.assertTrue;
  *   <li><b>installer return unknown</b> — a return with no callback, or
  *       with the old version still installed, is never reported as
  *       completed.</li>
+ *   <li><b>the tap that joins a running check</b> — against an empty
+ *       repository the automatic background check is the only way any
+ *       metadata can appear, so one Update tap made while that check is
+ *       still in flight must join it rather than start a second one, and
+ *       a tap cancelled in the same window stays cancelled even when a
+ *       valid, correctly signed release does arrive.</li>
  * </ul>
  *
  * <p>Only the remote is faked: a gated {@link
  * UpdatesActivity.TransportFactory} stands in for the network so a
- * test can pause an attempt mid-flight. Every verification step and
- * the installer hand-off are the production code.
+ * test can pause an attempt mid-flight. Every verification step and the
+ * hand-off itself are the production code.
+ *
+ * <p>The hand-off boundary asserted here is parent screen to private
+ * installer: the APK leaves this screen as an explicit
+ * {@link SessionInstallActivity} component plus the pinned release's own
+ * cached path in {@code com.vibertemis.quest.update.extra.APK_PATH},
+ * never as a public {@code FileProvider} content URI. What the private
+ * installer then commits through {@code PackageInstaller} is a second
+ * boundary, covered independently by {@code SessionInstallActivityTest}.
  */
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 28)
 public class UpdatesActivitySingleUpdateActionTest {
+
+    /** The hand-off contract, spelled out: this screen launches the
+     *  private installer explicitly, with the pinned release's own cached
+     *  path and the values that release was verified against. */
+    private static final String SESSION_INSTALL_ACTION =
+            "com.vibertemis.quest.update.action.SESSION_INSTALL";
+    private static final String EXTRA_APK_PATH =
+            "com.vibertemis.quest.update.extra.APK_PATH";
+    private static final String EXTRA_PACKAGE =
+            "com.vibertemis.quest.update.extra.PACKAGE";
+    private static final String EXTRA_VERSION_CODE =
+            "com.vibertemis.quest.update.extra.VERSION_CODE";
+    private static final String EXTRA_BYTES =
+            "com.vibertemis.quest.update.extra.BYTES";
+    private static final String EXTRA_SHA256 =
+            "com.vibertemis.quest.update.extra.SHA256";
 
     private KeyPair keyPair;
     private String keyPem;
@@ -113,7 +144,7 @@ public class UpdatesActivitySingleUpdateActionTest {
     // ------------------------------------------------------------------
 
     @Test public void oneTapDownloadsVerifiesAndOpensInstaller() throws Exception {
-        publishAvailable("0.1.0.7", 7);
+        byte[] apk = publishAvailable("0.1.0.7", 7);
         ActivityController<UpdatesActivity> ctl = openActivity();
         try {
             UpdatesActivity a = ctl.get();
@@ -133,15 +164,29 @@ public class UpdatesActivitySingleUpdateActionTest {
                     "0.1.0.7", repo().snapshot().downloaded.version);
 
             ShadowActivity.IntentForResult launched = installerIntent(a);
-            assertNotNull("the OS installer must be launched", launched);
-            assertEquals(Intent.ACTION_INSTALL_PACKAGE, launched.intent.getAction());
-            assertEquals("application/vnd.android.package-archive", launched.intent.getType());
-            assertNotNull("the APK must be handed over as a content URI",
-                    launched.intent.getData());
-            assertEquals("the installer must be given a FileProvider content URI",
-                    "content", launched.intent.getData().getScheme());
-            assertTrue("the read grant must be attached so the installer can read it",
-                    (launched.intent.getFlags() & Intent.FLAG_GRANT_READ_URI_PERMISSION) != 0);
+            assertNotNull("the private session installer must be launched", launched);
+            Intent handoff = launched.intent;
+            assertEquals("the hand-off must name the private installer explicitly",
+                    SessionInstallActivity.class.getName(),
+                    handoff.getComponent().getClassName());
+            assertEquals("the hand-off must carry the session-install action",
+                    SESSION_INSTALL_ACTION, handoff.getAction());
+            assertNull("the hand-off must not share a public FileProvider URI",
+                    handoff.getData());
+            File handed = handedApk(launched);
+            assertTrue("the private installer must be given this release's own copy: "
+                            + handed,
+                    handed.getPath().contains("0.1.0.7"));
+            assertEquals("the pinned package must be handed over",
+                    UpdateTestFixture.packageName(UpdateTestFixture.context()),
+                    stringExtra(handoff, EXTRA_PACKAGE));
+            assertEquals("the pinned versionCode must be handed over",
+                    installedVersionCode + 1, longExtra(handoff, EXTRA_VERSION_CODE));
+            assertEquals("the pinned byte count must be handed over",
+                    (long) apk.length, longExtra(handoff, EXTRA_BYTES));
+            assertEquals("the digest the release was verified against must be handed over",
+                    UpdateTestFixture.hex(UpdateTestFixture.sha256(apk)),
+                    stringExtra(handoff, EXTRA_SHA256));
             assertTrue("the activity must be awaiting the system answer",
                     a.awaitingSystemForTest());
             assertTrue("the status must be honest about waiting on Android: "
@@ -578,6 +623,114 @@ public class UpdatesActivitySingleUpdateActionTest {
     }
 
     // ------------------------------------------------------------------
+    //  7. The Update tap joins the check that is already running
+    // ------------------------------------------------------------------
+
+    @Test public void oneTapJoinsTheAutomaticCheckOnAnEmptyRepository() throws Exception {
+        final String version = "0.1.0.99";
+        final UpdateRepository.CheckSource.Result answer = signedAnswer(version, 99);
+        final CountDownLatch gate = new CountDownLatch(1);
+        final AtomicInteger checks = new AtomicInteger();
+        // Nothing is published: the automatic check that starts with the
+        // screen is the only way this release can be learned about, and
+        // it is held inside the gate. The factory has to be in place
+        // before the repository is created, so the background check
+        // picks this source up.
+        UpdateRepositoryProvider.installCheckSourceFactoryForTest(
+                (context, key) -> versionCode -> {
+                    checks.incrementAndGet();
+                    awaitGate(gate);
+                    return answer;
+                });
+        ActivityController<UpdatesActivity> ctl = openActivity();
+        try {
+            UpdatesActivity a = ctl.get();
+            idleUntil(a, () -> checks.get() > 0);
+            assertEquals("a check that has not answered must hand nothing off",
+                    0, countInstallerLaunches(a));
+
+            // One tap, while the screen is still checking. With no
+            // published release the button still carries the Update
+            // label, but the action it offers is the check itself: the
+            // tap joins the running check instead of starting one.
+            assertEquals("the primary stays the plain check action during the check",
+                    UpdatesActivity.PrimaryAction.CHECK, a.primaryActionForTest());
+            assertEquals("the button must still read as the single Update action",
+                    "Update", a.primaryLabelForTest());
+            assertTrue("the primary must be tappable while the check runs",
+                    a.isPrimaryEnabledForTest());
+            a.primaryButtonForTest().performClick();
+
+            gate.countDown();
+            idleUntil(a, a::handedToSystemForTest);
+
+            assertEquals("the tap must join the running check, not start another one",
+                    1, checks.get());
+            assertEquals("one hand-off to the private installer, and only one",
+                    1, countInstallerLaunches(a));
+            assertEquals("one download attempt, for the release the check returned",
+                    1, transport.created.get());
+            assertEquals("the attempt must pin the release the joined check returned",
+                    version, a.pinnedVersionForTest());
+            assertEquals("the hand-off must carry the pinned versionCode",
+                    installedVersionCode + 1,
+                    longExtra(installerIntent(a).intent, EXTRA_VERSION_CODE));
+        } finally {
+            gate.countDown();
+            ctl.pause().stop().destroy();
+        }
+    }
+
+    @Test public void cancelDuringTheJoinedCheckBeatsItsResult() throws Exception {
+        final String version = "0.1.0.99";
+        final UpdateRepository.CheckSource.Result answer = signedAnswer(version, 99);
+        final CountDownLatch gate = new CountDownLatch(1);
+        final AtomicInteger checks = new AtomicInteger();
+        UpdateRepositoryProvider.installCheckSourceFactoryForTest(
+                (context, key) -> versionCode -> {
+                    checks.incrementAndGet();
+                    awaitGate(gate);
+                    return answer;
+                });
+        ActivityController<UpdatesActivity> ctl = openActivity();
+        try {
+            UpdatesActivity a = ctl.get();
+            idleUntil(a, () -> checks.get() > 0);
+            assertEquals("nothing may be handed off before the check answers",
+                    0, countInstallerLaunches(a));
+
+            // The user taps Update and then changes their mind, using the
+            // screen's own Cancel, while the joined check is still
+            // running.
+            a.primaryButtonForTest().performClick();
+            assertTrue("cancel must be offered while the joined check runs",
+                    a.isCancelVisibleForTest());
+            a.cancelButtonForTest().performClick();
+            idle();
+            assertNull("cancel must leave nothing pinned", a.pinnedVersionForTest());
+
+            // The valid, correctly signed release now arrives.
+            gate.countDown();
+            idleUntil(a, () -> repo().snapshot().hasAvailable());
+            assertEquals("the check did run to completion", 1, checks.get());
+            assertEquals("the arrived release must be advertised for a later tap",
+                    version, repo().snapshot().available.version);
+
+            assertEquals("a cancelled check must never hand off",
+                    0, countInstallerLaunches(a));
+            assertFalse("a cancelled check must not claim a hand-off",
+                    a.handedToSystemForTest());
+            assertNull("no installer intent may be launched", installerIntent(a));
+            assertEquals("a cancelled check must not download", 0, transport.created.get());
+            assertFalse("nothing may be cached by a cancelled check",
+                    repo().snapshot().hasDownloaded());
+        } finally {
+            gate.countDown();
+            ctl.pause().stop().destroy();
+        }
+    }
+
+    // ------------------------------------------------------------------
     //  Fixtures
     // ------------------------------------------------------------------
 
@@ -621,6 +774,31 @@ public class UpdatesActivitySingleUpdateActionTest {
         return s.sign();
     }
 
+    /** The signed answer a gated background check hands back once its
+     *  gate opens, plus the bytes the transport will serve for that
+     *  release. Nothing is published to the repository: this release is
+     *  only ever learned about through the check itself. */
+    private UpdateRepository.CheckSource.Result signedAnswer(String version, long sequence)
+            throws Exception {
+        byte[] apk = ("apk-" + version + "-" + sequence)
+                .getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        payloads.put(version, apk);
+        byte[] body = body(version, sequence, apk);
+        byte[] sig = sign(body);
+        return new UpdateRepository.CheckSource.Result(
+                UpdateManifest.verify(body, sig, keyPem), body, sig);
+    }
+
+    /** Hold a background worker at the gate, bounded so a failing test
+     *  can never strand a thread. */
+    private static void awaitGate(CountDownLatch gate) {
+        try {
+            gate.await(2, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
     private UpdateRepository repo() {
         return UpdateRepositoryProvider.get(UpdateTestFixture.context());
     }
@@ -653,19 +831,28 @@ public class UpdatesActivitySingleUpdateActionTest {
         return all.isEmpty() ? null : all.get(0);
     }
 
-    /** The oldest ACTION_INSTALL_PACKAGE launch, if any. */
+    /** The hand-off is an explicit, in-app launch of the private session
+     *  installer, so it is identified by its component rather than by an
+     *  action some other caller could also use. */
+    private static boolean isSessionInstall(Intent launch) {
+        return launch.getComponent() != null
+                && SessionInstallActivity.class.getName()
+                        .equals(launch.getComponent().getClassName());
+    }
+
+    /** The oldest private-installer launch, if any. */
     private static ShadowActivity.IntentForResult installerIntent(UpdatesActivity a) {
         for (ShadowActivity.IntentForResult i : allIntents(a)) {
-            if (Intent.ACTION_INSTALL_PACKAGE.equals(i.intent.getAction())) return i;
+            if (isSessionInstall(i.intent)) return i;
         }
         return null;
     }
 
-    /** The newest ACTION_INSTALL_PACKAGE launch, if any. */
+    /** The newest private-installer launch, if any. */
     private static ShadowActivity.IntentForResult latestInstallerIntent(UpdatesActivity a) {
         ShadowActivity.IntentForResult newest = null;
         for (ShadowActivity.IntentForResult i : allIntents(a)) {
-            if (Intent.ACTION_INSTALL_PACKAGE.equals(i.intent.getAction())) newest = i;
+            if (isSessionInstall(i.intent)) newest = i;
         }
         return newest;
     }
@@ -673,9 +860,36 @@ public class UpdatesActivitySingleUpdateActionTest {
     private static int countInstallerLaunches(UpdatesActivity a) {
         int count = 0;
         for (ShadowActivity.IntentForResult i : allIntents(a)) {
-            if (Intent.ACTION_INSTALL_PACKAGE.equals(i.intent.getAction())) count++;
+            if (isSessionInstall(i.intent)) count++;
         }
         return count;
+    }
+
+    private static String stringExtra(Intent handoff, String name) {
+        Object value = handoff.getExtras() == null ? null : handoff.getExtras().get(name);
+        assertNotNull("the hand-off must carry " + name, value);
+        return String.valueOf(value);
+    }
+
+    private static long longExtra(Intent handoff, String name) {
+        Object value = handoff.getExtras() == null ? null : handoff.getExtras().get(name);
+        assertNotNull("the hand-off must carry " + name, value);
+        assertTrue(name + " must be handed over as a number, not " + value,
+                value instanceof Number);
+        return ((Number) value).longValue();
+    }
+
+    /** The APK the private installer was handed, resolved from the
+     *  explicit path extra. That installer reads the file itself, so the
+     *  path must name a real file inside the app's own cache. */
+    private static File handedApk(ShadowActivity.IntentForResult launch) throws Exception {
+        File apk = new File(stringExtra(launch.intent, EXTRA_APK_PATH)).getCanonicalFile();
+        File cache = UpdateTestFixture.context().getCacheDir().getCanonicalFile();
+        assertTrue("the handed APK must live under the app cache: " + apk
+                        + " (cache " + cache + ")",
+                apk.getPath().startsWith(cache.getPath() + File.separator));
+        assertTrue("the handed APK must exist: " + apk, apk.isFile());
+        return apk;
     }
 
     private static void idle() {

@@ -101,7 +101,7 @@
          does not block gaming. The badge is also surfaced briefly
          after a successful no-newer-available check so the user can
          see that the latest known state has been confirmed. -->
-    <string name="hub_btn_updates">App updates</string>
+    <string name="hub_btn_updates">Update</string>
     <string name="hub_updates_badge_default">No updates available.</string>
     <string name="hub_updates_badge_available">Update %1$s available.</string>
     <string name="hub_updates_badge_ready">Update %1$s is verified and ready to install.</string>
