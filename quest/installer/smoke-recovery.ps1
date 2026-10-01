@@ -887,7 +887,34 @@ try {
         return $false
     } 'second LAN begin surfaced to manager'
     $expectedCode2 = $script:expectedCode2
-    $approveBtn2 = [RecoverySmokeUi]::FindVisible($script:managerProcess.Id, 'Approve')
+    if (-not $expectedCode2) { throw 'Server did not return a code for the second LAN begin' }
+    # The pending read above only proves the companion recorded the
+    # second session. The manager's coordinator then polls on its own
+    # ~2 second timer before it surfaces the card, so the UI is not on
+    # screen at this point however fast the backend answered. The code
+    # and the decision row are therefore waited for together, in one
+    # polling iteration, instead of being read once and raced against:
+    # a card that is up but whose Approve is not yet enabled must not
+    # satisfy the wait either, or the click below would race the same
+    # way one step later.
+    $script:codeHwnd2 = [IntPtr]::Zero
+    $script:approveBtn2 = [IntPtr]::Zero
+    Wait-Until {
+        $code = [RecoverySmokeUi]::FindRegexVisible($script:managerProcess.Id,'\A[0-9A-F]{4}(-[0-9A-F]{4}){3}\z')
+        if ($code -eq [IntPtr]::Zero) { return $false }
+        if ([RecoverySmokeUi]::Read($code) -ne $expectedCode2) { return $false }
+        $button = [RecoverySmokeUi]::FindVisible($script:managerProcess.Id, 'Approve')
+        if ($button -eq [IntPtr]::Zero) { return $false }
+        if (-not [RecoverySmokeUi]::IsWindowEnabled($button)) { return $false }
+        # Recorded only once every condition holds, so a handle from an
+        # earlier, half-drawn card can never leak into the assertions.
+        $script:codeHwnd2 = $code
+        $script:approveBtn2 = $button
+        return $true
+    } 'second request card code and Approve visible'
+    $codeHwnd2 = $script:codeHwnd2
+    $approveBtn2 = $script:approveBtn2
+    Assert-FullyOnScreen -Hwnd $codeHwnd2 -Label 'comparison code (retry test)' -MinWidth 200 -MinHeight 24
     [void](Assert-Actionable 'Approve' -Hwnd $approveBtn2 -Describe 'Approve for the retry test')
     $tamperedCode = if ($expectedCode2 -eq '0000-1111-2222-3333') { 'FFFF-EEEE-DDDD-CCCC' } else { '0000-1111-2222-3333' }
     $resp = Send-Admin '/pairing/admin/decision' @{ session_id = $sessionId2; code = $tamperedCode; approve = $true } -AllowError
