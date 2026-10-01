@@ -79,8 +79,11 @@ ACTUAL_HEAD="$(cd "${UPSTREAM}" && git rev-parse HEAD)"
     app/build.gradle \
     app/proguard-rules.pro \
     app/src/main/AndroidManifest.xml \
+    app/src/main/java/com/limelight/Game.java \
+    app/src/main/java/com/limelight/binding/video/XrRenderer.java \
     app/src/main/java/com/limelight/preferences/PreferenceConfiguration.java \
     app/src/main/java/com/limelight/preferences/StreamSettings.java \
+    app/src/main/jni/xr-renderer/xr_renderer.c \
     app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml \
     app/src/main/res/xml/preferences.xml \
     gradle.properties)
