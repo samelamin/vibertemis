@@ -69,7 +69,7 @@ public sealed class VrpathSteamVrLocator : ISteamVrLocator
             }
         }
         if(roots.Count>0)return new(SteamVrDiscoveryKind.InstalledUninitialized,roots,libraries,
-            "SteamVR is installed. Open it once to finish setup, then close it and retry Setup VR.");
+            "SteamVR is installed. Open it once to finish setup, then close it and retry Set up VR.");
         return new(hadRecord?SteamVrDiscoveryKind.StaleRecorded:SteamVrDiscoveryKind.Missing,recorded,libraries,
             reason??"Install SteamVR through Steam.");
     }

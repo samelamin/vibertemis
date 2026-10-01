@@ -49,21 +49,23 @@ public sealed partial class MainForm
         AsOfUtc: DateTime.UtcNow);
 
     private TableLayoutPanel _panelApproval = null!;
-    private readonly Label _lblHostReady = new() { AutoSize = true, Text = "Host ready: not yet known.", MaximumSize = new Size(650, 0) };
-    private readonly Label _lblHostReadyNext = new() { AutoSize = true, Text = "", MaximumSize = new Size(650, 0) };
-    private Label _lblPanelTitle = new() { AutoSize = true, Font = new Font(SystemFonts.MessageBoxFont!, FontStyle.Bold) };
-    private Label _lblPanelCode = new() { AutoSize = true, Font = new Font("Consolas", 22f, FontStyle.Bold) };
-    private Label _lblPanelStatus = new() { AutoSize = true, MaximumSize = new Size(700, 0) };
+    // The readiness header owns the quiet posture; these are aliases
+    // over its two prominent labels so the state controller keeps the
+    // same field names.
+    private Label _lblHostReady => _lblHeader;
+    private Label _lblHostReadyNext => _lblSubStatus;
+    private Label _lblPanelTitle = new() { AutoSize = true, Font = UiTheme.SectionFont() };
+    private Label _lblPanelCode = new() { AutoSize = true, Font = UiTheme.CodeFont() };
+    private Label _lblPanelStatus = new() { AutoSize = true, MaximumSize = new Size(640, 0) };
     private Label _lblPanelExpiry = new() { AutoSize = true };
-    private Label _lblPanelRecovery = new() { AutoSize = true, MaximumSize = new Size(700, 0) };
-    private FlowLayoutPanel _panelActions = null!;
-    private Button _btnApprove = new() { Text = "Codes match — approve", AutoSize = true, Enabled = false };
+    private FlowLayoutPanel _panelDecisionRow = null!;
+    private Button _btnApprove = new() { Text = "Approve", AutoSize = true, Enabled = false };
     private Button _btnReject = new() { Text = "Reject", AutoSize = true, Enabled = false };
+    private Button _btnPanelClose = new() { Text = "Hide", AutoSize = true };
     private Button _btnPause = new() { Text = "Pause 1 hour", AutoSize = true };
     private Button _btnResume = new() { Text = "Resume", AutoSize = true };
     private Button _btnTurnOff = new() { Text = "Turn off", AutoSize = true };
     private Button _btnForgetAll = new() { Text = "Forget paired headsets…", AutoSize = true };
-    private Button _btnPanelClose = new() { Text = "Hide", AutoSize = true };
 
     private readonly System.Windows.Forms.Timer _expiryTimer = new() { Interval = 1000 };
     private readonly DeduplicatedUpdateTrayNotice _updateNotice = new();
@@ -82,35 +84,47 @@ public sealed partial class MainForm
 
     private void InitializeReceivingUx()
     {
-        _panelActions = new FlowLayoutPanel
+        // Approve / Reject live in their own row so the code sits above
+        // them and the demoted Hide button trails to the right. No
+        // control here takes focus or acts as a default: the owner has to
+        // read the code on their Quest before deciding.
+        _panelDecisionRow = new FlowLayoutPanel
         {
-            Dock = DockStyle.Fill,
+            Dock = DockStyle.Top,
             AutoSize = true,
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
             FlowDirection = FlowDirection.LeftToRight,
             WrapContents = true,
         };
-        _panelActions.Controls.AddRange(new Control[] { _btnApprove, _btnReject, _btnPause, _btnResume, _btnTurnOff, _btnForgetAll, _btnPanelClose });
+        UiTheme.ApplyButton(_btnApprove, UiTheme.ButtonRole.Primary);
+        UiTheme.ApplyButton(_btnReject, UiTheme.ButtonRole.Secondary);
+        UiTheme.ApplyButton(_btnPanelClose, UiTheme.ButtonRole.Demoted);
+        _panelDecisionRow.Controls.AddRange(new Control[] { _btnApprove, _btnReject, _btnPanelClose });
 
+        // The request card is a row of the root scroll content, not a
+        // strip pinned to the bottom of the window: a waiting Quest has
+        // to be the first thing under the readiness header, and the card
+        // is hidden outright when there is no request to answer.
+        // Receiving management (Pause / Resume / Turn off / Forget) lives
+        // in Advanced, so this row only ever carries the one decision.
         _panelApproval = new TableLayoutPanel
         {
             Visible = false,
-            Dock = DockStyle.Bottom,
+            Dock = DockStyle.Top,
             ColumnCount = 1,
-            RowCount = 6,
+            RowCount = 5,
             AutoSize = true,
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
-            Padding = new Padding(12),
+            Padding = UiTheme.CardPadding,
             BorderStyle = BorderStyle.FixedSingle,
         };
         _panelApproval.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        for (var i = 0; i < 6; i++) _panelApproval.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        for (var i = 0; i < 5; i++) _panelApproval.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         _panelApproval.Controls.Add(_lblPanelTitle, 0, 0);
         _panelApproval.Controls.Add(_lblPanelCode, 0, 1);
         _panelApproval.Controls.Add(_lblPanelStatus, 0, 2);
         _panelApproval.Controls.Add(_lblPanelExpiry, 0, 3);
-        _panelApproval.Controls.Add(_lblPanelRecovery, 0, 4);
-        _panelApproval.Controls.Add(_panelActions, 0, 5);
+        _panelApproval.Controls.Add(_panelDecisionRow, 0, 4);
     }
 
     private void StartReceivingCoordinator()
@@ -192,47 +206,83 @@ public sealed partial class MainForm
         bool serverReceiving = s.Receiving;
         string status;
         string action;
-        if (!snap.CompanionRunning)
+        // A pending pairing request owns the screen: its Approve /
+        // Reject decision is the only thing the owner can act on, so
+        // it outranks even a stale action error.
+        if (s.State == "pending" && !string.IsNullOrEmpty(s.SessionId))
         {
-            status = "Host ready: stopped. Click Start hosting, then Setup VR or Pair headset.";
-            action = "Next action: choose Start hosting to enable the host service.";
+            // The card right below carries the code and the decision.
+            // This line only names the posture and points at it, so the
+            // same instruction is not printed twice on screen.
+            status = "A Quest is waiting for approval.";
+            action = "Compare the code in the card below with your Quest, then choose Approve or Reject.";
+        }
+        // An action that already failed stays on screen. The activity
+        // log is collapsed by default, so a failure reported only to
+        // the log is invisible exactly when the owner needs it.
+        else if (!string.IsNullOrEmpty(_actionError))
+        {
+            status = _actionError;
+            action = "Fix the problem above, then choose the same action again.";
+        }
+        // A missing Windows runtime is not a failed action and not a
+        // stopped host: it is a PC that cannot host at all yet. It is
+        // named here, on the readiness line that is always on screen,
+        // rather than as a sticky action error, because Set up VR
+        // repairs it and the wording would otherwise still be standing
+        // after the runtime is installed.
+        else if (!RuntimeReady())
+        {
+            status = "PC setup needed. This PC is missing the required Windows runtime.";
+            action = "Choose Set up VR. It installs the required Windows runtime, then finishes setup.";
+        }
+        else if (!snap.CompanionRunning)
+        {
+            // The primary row is what makes this line truthful: while
+            // Set up VR is on screen Start is hidden, so naming Start
+            // here would point at a control the owner cannot press.
+            if (IsSetupNeeded())
+            {
+                status = "Host stopped. VR setup is still needed.";
+                action = "Choose Set up VR to finish PC setup.";
+            }
+            else
+            {
+                status = "Host stopped.";
+                action = "Choose Start to start the host service.";
+            }
         }
         else if (!snap.Receiving)
         {
-            status = "Host ready: receiving pairing requests is OFF.";
-            action = "Next action: choose Setup VR or Pair headset to enable receiving.";
+            status = "Not receiving pairing requests.";
+            action = "Choose Pair headset to enable receiving.";
         }
         else if (snap.Suppressed)
         {
-            status = "Host ready: receiving pairing requests is paused for the next hour.";
-            action = "Next action: click Resume to re-enable receiving now.";
-        }
-        else if (s.State == "pending")
-        {
-            status = "Host ready: a Quest is waiting for approval. Compare the code, then Approve or Reject.";
-            action = "Next action: click Approve only when the code matches every character on your Quest.";
+            status = "Pairing paused for the next hour.";
+            action = "Open Advanced, then choose Resume to re-enable receiving now.";
         }
         else if (serverReceiving)
         {
             // Receiving is desired AND the latest /pending or
             // /renew snapshot confirms the server-side lease is
-            // live. Only then do we say ON; before the first
+            // live. Only then do we say ready; before the first
             // confirmed live lease, fall through to "starting".
-            status = "Host ready: receiving pairing requests is ON.";
-            action = "Next action: in Vibertemis on Quest, choose Setup VR and select this PC.";
+            status = "Ready for headset pairing.";
+            action = "On your Quest, choose Set up PC and select this PC.";
         }
         else if (snap.Receiving)
         {
             // Desired ON, companion running, suppression clear,
             // but the latest server snapshot has Receiving=false
             // (admin renew failed or lease not yet observed).
-            status = "Host ready: receiving pairing requests is starting up. Waiting for the host service to confirm.";
-            action = "Next action: if this persists, click Pause 1 hour and Resume to retry the renewal.";
+            status = "Starting pairing. Waiting for the host service.";
+            action = "If this persists, open Advanced, then choose Pause 1 hour and Resume to retry the renewal.";
         }
         else
         {
-            status = "Host ready: receiving pairing requests is starting up.";
-            action = "Next action: in Vibertemis on Quest, choose Setup VR and select this PC.";
+            status = "Starting pairing.";
+            action = "On your Quest, choose Set up PC and select this PC.";
         }
         if (_lblHostReady.Text != status) _lblHostReady.Text = status;
         if (_lblHostReadyNext.Text != action) _lblHostReadyNext.Text = action;
@@ -287,11 +337,15 @@ public sealed partial class MainForm
             if (gen != Generation) return;
             var detail = ex is PairingAdminException pae
                 ? pae.OwnerText
-                : "Host service unavailable. Start hosting, then try again.";
+                : "Host service unavailable. Choose Start, then try again.";
             LogStatus("Pairing: " + detail);
             var hint = IsLikelyPairingSetupError(ex)
-                ? "Next action: in Vibertemis on Quest, choose Setup VR and select this PC, then try again."
-                : "Next action: choose Pause 1h, Resume, Turn off, or Forget all from the pairing panel.";
+                ? "On your Quest, choose Set up PC and select this PC, then try again."
+                // Names controls that really are on screen: Pause 1
+                // hour and Resume live in Advanced. Nothing here
+                // suggests a destructive reset, which is never the
+                // first recovery for a renewal that failed.
+                : "Try again in a moment. If it keeps failing, open Advanced, then choose Pause 1 hour and Resume.";
             if (_lblHostReadyNext.Text != hint) _lblHostReadyNext.Text = hint;
             RenderApprovalPanelFromController();
         };
@@ -355,6 +409,7 @@ public sealed partial class MainForm
         }
         RenderApprovalPanelFromController();
         RefreshHostReady();
+        RefreshPrimaryActionVisibility();
     }
 
     private void RestoreDefaultTrayTooltip()
@@ -459,48 +514,81 @@ public sealed partial class MainForm
 
     private void ApplyApprovalModel(ApprovalPanelModel model)
     {
-        if (_panelApproval.Visible != model.PanelVisible)
-        {
-            _panelApproval.Visible = model.PanelVisible;
-        }
-        // The request-specific rows (title/code/status/expiry/recovery)
-        // hide when the controller says no request is on screen.
-        // The action row stays visible so management controls are
-        // reachable.
+        // The card exists only for a request the owner has to answer:
+        // title, code, status (which also carries an action error), the
+        // countdown, and the three decision buttons. The idle postures
+        // (receiving off, paused, waiting) already have a home on the
+        // readiness header, so rendering them here as well only
+        // duplicated the same sentence twice on screen.
         bool requestRows = model.RequestPaneVisible;
+        bool cardVisible = model.PanelVisible && requestRows;
+        bool wasVisible = _panelApproval.Visible;
+        if (wasVisible != cardVisible) _panelApproval.Visible = cardVisible;
+
+        if (_lblPanelTitle.Text != model.Title) _lblPanelTitle.Text = model.Title;
+        if (_lblPanelCode.Text != model.Code) _lblPanelCode.Text = model.Code;
+        // The controller's recovery line is the follow-up for this exact
+        // request (retry, hide), so it rides with the request it belongs
+        // to. It is never used for the idle posture: that card stays
+        // hidden, and the header already carries the next action.
+        var status = requestRows && !string.IsNullOrEmpty(model.Recovery)
+            ? model.Status + " " + model.Recovery
+            : model.Status;
+        if (_lblPanelStatus.Text != status) _lblPanelStatus.Text = status;
+        if (_lblPanelExpiry.Text != model.Expiry) _lblPanelExpiry.Text = model.Expiry;
         _lblPanelTitle.Visible = requestRows;
         _lblPanelCode.Visible = requestRows;
         _lblPanelStatus.Visible = requestRows;
         _lblPanelExpiry.Visible = requestRows;
-        _lblPanelRecovery.Visible = requestRows;
-        if (requestRows)
-        {
-            if (_lblPanelTitle.Text != model.Title) _lblPanelTitle.Text = model.Title;
-            if (_lblPanelCode.Text != model.Code) _lblPanelCode.Text = model.Code;
-            if (_lblPanelStatus.Text != model.Status) _lblPanelStatus.Text = model.Status;
-            if (_lblPanelExpiry.Text != model.Expiry) _lblPanelExpiry.Text = model.Expiry;
-            if (_lblPanelRecovery.Text != model.Recovery) _lblPanelRecovery.Text = model.Recovery;
-        }
-        else
-        {
-            // Status and recovery are always visible to the user;
-            // they describe the current pairing posture and the
-            // next action the owner can take.
-            if (_lblPanelStatus.Text != model.Status) _lblPanelStatus.Text = model.Status;
-            if (_lblPanelRecovery.Text != model.Recovery) _lblPanelRecovery.Text = model.Recovery;
-            _lblPanelStatus.Visible = true;
-            _lblPanelRecovery.Visible = true;
-        }
         _btnApprove.Visible = requestRows;
         _btnReject.Visible = requestRows;
         _btnPanelClose.Visible = requestRows;
         _btnApprove.Enabled = model.ApproveEnabled;
         _btnReject.Enabled = model.RejectEnabled;
+        _btnPanelClose.Enabled = model.HideEnabled;
+        // The visible label is just "Approve" / "Reject", so the code
+        // it acts on would never reach a screen reader. The accessible
+        // name carries the exact code shown in the card above them, and
+        // is cleared again the moment the request rows leave the screen
+        // so a stale code can never be announced against no request.
+        var decisionCode = requestRows && cardVisible ? model.Code : "";
+        // The code itself is grouped for the eye ("1111-2222-3333-4444"),
+        // which a screen reader reads as one long number. Spelling the
+        // characters apart in the accessible name alone is what makes the
+        // comparison the status line asks for possible out loud; the
+        // printed code stays grouped. The controller's "Waiting for Quest…"
+        // stand-in is a sentence, not a code, so it is spoken as written.
+        var spokenCode = string.IsNullOrEmpty(decisionCode) || decisionCode.IndexOf(' ') >= 0
+            ? decisionCode
+            : string.Join(" ", decisionCode.ToCharArray());
+        var approveName = string.IsNullOrEmpty(decisionCode) ? null : "Approve " + spokenCode;
+        var rejectName = string.IsNullOrEmpty(decisionCode) ? null : "Reject " + spokenCode;
+        if (_btnApprove.AccessibleName != approveName) _btnApprove.AccessibleName = approveName;
+        if (_btnReject.AccessibleName != rejectName) _btnReject.AccessibleName = rejectName;
+        // Receiving management lives in Advanced; its enabled state comes
+        // from the same controller model as the decision buttons.
         _btnPause.Enabled = model.PauseEnabled;
         _btnResume.Enabled = model.ResumeEnabled;
         _btnTurnOff.Enabled = model.TurnOffEnabled;
         _btnForgetAll.Enabled = model.ForgetEnabled;
-        _btnPanelClose.Enabled = model.HideEnabled;
+
+        if (_requestDominates != cardVisible)
+        {
+            _requestDominates = cardVisible;
+            // Both rows come back from a fresh readiness probe, so a
+            // resolved or hidden request restores what the owner actually
+            // needs next instead of a remembered guess.
+            RefreshPrereqPanelVisibility();
+            RefreshPrimaryActionVisibility();
+            // A decision on screen outranks the update action, so the
+            // update button's prominence is recomputed here too.
+            RefreshUpdateButtonStyle();
+        }
+        // A card that appears while the owner is scrolled elsewhere in
+        // the root is still a real request. Bring it into view without
+        // taking focus from wherever they were.
+        if (cardVisible && !wasVisible) RevealInScrollHost(_panelApproval);
+
         if (model.Kind is ApprovalKind.Pending or ApprovalKind.ActionError or ApprovalKind.PendingBusy)
             _expiryTimer.Start();
         else
@@ -668,14 +756,14 @@ public sealed partial class MainForm
         {
             LogStatus(pae.OwnerText);
             _decisionErrorSessionId = captured.SessionId;
-            _decisionActionErrorText = pae.OwnerText + " Click Approve to retry.";
+            _decisionActionErrorText = pae.OwnerText + " Click " + (approve ? "Approve" : "Reject") + " to retry.";
             RenderApprovalPanelFromController();
         }
         catch (Exception ex)
         {
             LogStatus("Decision failed: " + ex.Message);
             _decisionErrorSessionId = captured.SessionId;
-            _decisionActionErrorText = "Decision failed. Click Approve to retry.";
+            _decisionActionErrorText = "Decision failed. Click " + (approve ? "Approve" : "Reject") + " to retry.";
             RenderApprovalPanelFromController();
         }
         finally
