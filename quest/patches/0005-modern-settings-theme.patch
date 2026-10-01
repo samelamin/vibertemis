@@ -1,0 +1,70 @@
+diff --git a/app/src/main/AndroidManifest.xml b/app/src/main/AndroidManifest.xml
+index a48575f2..a2313fd0 100644
+--- a/app/src/main/AndroidManifest.xml
++++ b/app/src/main/AndroidManifest.xml
+@@ -243,6 +243,7 @@
+         </activity>
+         <activity
+             android:name=".preferences.StreamSettings"
++            android:theme="@style/Theme.Vibertemis.Settings"
+             android:resizeableActivity="true"
+             android:enableOnBackInvokedCallback="true"
+             android:configChanges="mcc|mnc|touchscreen|keyboard|keyboardHidden|navigation|screenLayout|fontScale|uiMode|orientation|screenSize|smallestScreenSize|layoutDirection"
+diff --git a/app/src/main/res/layout/activity_stream_settings.xml b/app/src/main/res/layout/activity_stream_settings.xml
+index f829793f..ec4cf2eb 100644
+--- a/app/src/main/res/layout/activity_stream_settings.xml
++++ b/app/src/main/res/layout/activity_stream_settings.xml
+@@ -3,6 +3,7 @@
+     android:layout_width="match_parent"
+     android:layout_height="match_parent"
+     android:orientation="vertical"
++    android:background="@color/hub_panel_bg"
+     tools:context=".preferences.StreamSettings">
+ 
+     <!-- Headset panels do not always give the user a system back control, so
+@@ -12,17 +13,18 @@
+         android:layout_height="wrap_content"
+         android:orientation="horizontal"
+         android:gravity="center_vertical"
+-        android:paddingStart="8dp"
+-        android:paddingEnd="16dp"
+-        android:paddingTop="8dp"
+-        android:paddingBottom="8dp">
++        android:paddingStart="20dp"
++        android:paddingEnd="24dp"
++        android:paddingTop="16dp"
++        android:paddingBottom="12dp">
+ 
+         <ImageButton
+             android:id="@+id/settings_back"
+-            android:layout_width="48dp"
+-            android:layout_height="48dp"
++            android:layout_width="56dp"
++            android:layout_height="56dp"
+             android:src="@drawable/ic_settings_back"
+-            android:background="?android:attr/selectableItemBackground"
++            android:tint="@color/hub_panel_fg"
++            android:background="@drawable/hub_btn_secondary_bg"
+             android:scaleType="fitCenter"
+             android:padding="10dp"
+             android:contentDescription="@string/title_settings_back" />
+@@ -30,13 +32,17 @@
+         <TextView
+             android:layout_width="wrap_content"
+             android:layout_height="wrap_content"
+-            android:layout_marginStart="8dp"
++            android:layout_marginStart="16dp"
+             android:text="@string/title_settings_back"
+-            android:textSize="18sp" />
++            android:fontFamily="sans-serif-medium"
++            android:textColor="@color/hub_panel_fg"
++            android:textSize="26sp" />
+     </LinearLayout>
+ 
+     <FrameLayout
+         android:id="@+id/stream_settings"
++        android:paddingStart="12dp"
++        android:paddingEnd="12dp"
+         android:layout_width="match_parent"
+         android:layout_height="0dp"
+         android:layout_weight="1" />

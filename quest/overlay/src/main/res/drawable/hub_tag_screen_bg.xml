@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Last used tag on the Big Screen art. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <solid android:color="@color/hub_screen_tint" />
+    <corners android:radius="999dp" />
+</shape>

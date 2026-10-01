@@ -1,30 +1,30 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Mint primary action (Install now, Full VR on phone). 2dp light ring on focus/hover for the Quest ray pointer. -->
+<!-- Big Screen start button: sky fill. -->
 <selector xmlns:android="http://schemas.android.com/apk/res/android">
     <item android:state_pressed="true">
         <shape android:shape="rectangle">
-            <solid android:color="@color/hub_panel_accent_pressed" />
+            <solid android:color="@color/hub_screen_tint_pressed" />
             <stroke android:width="2dp" android:color="@color/hub_panel_fg" />
             <corners android:radius="16dp" />
         </shape>
     </item>
     <item android:state_focused="true">
         <shape android:shape="rectangle">
-            <solid android:color="@color/hub_panel_accent" />
+            <solid android:color="@color/hub_screen_tint" />
             <stroke android:width="3dp" android:color="@color/hub_panel_fg" />
             <corners android:radius="16dp" />
         </shape>
     </item>
     <item android:state_hovered="true">
         <shape android:shape="rectangle">
-            <solid android:color="@color/hub_panel_accent" />
+            <solid android:color="@color/hub_screen_tint" />
             <stroke android:width="3dp" android:color="@color/hub_panel_fg" />
             <corners android:radius="16dp" />
         </shape>
     </item>
     <item>
         <shape android:shape="rectangle">
-            <solid android:color="@color/hub_panel_accent" />
+            <solid android:color="@color/hub_screen_tint" />
             <corners android:radius="16dp" />
         </shape>
     </item>

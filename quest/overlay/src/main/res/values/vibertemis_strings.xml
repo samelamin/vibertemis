@@ -2,12 +2,12 @@
 <resources>
 
     <!-- Hub panel -->
-    <string name="hub_title">Vibertemis XR Preview</string>
-    <string name="hub_subtitle_default">Choose a launch mode</string>
+    <string name="hub_title">Vibertemis</string>
+    <string name="hub_subtitle_default">How do you want to play?</string>
     <string name="hub_subtitle_companion_required">A companion program must be running on the PC for either mode. Tap Setup for instructions.</string>
     <string name="hub_status_no_profile">Streaming settings not yet configured.</string>
-    <string name="hub_status_screen_summary">Screen streaming: %1$s @ %2$s fps, %3$s Mbps, codec %4$s.</string>
-    <string name="hub_status_unknown">Screen streaming: open Streaming settings to choose values.</string>
+    <string name="hub_status_screen_summary">%1$s · %2$s fps · %3$s Mbps · %4$s</string>
+    <string name="hub_status_unknown">Pick a quality preset in Settings.</string>
 
     <!-- Connection card. The hub follows the dark-ink + teal palette
          specified by the Claude frontend-design pass. The card is the
@@ -15,35 +15,35 @@
          Settings, Updates footer) live below it. -->
 
     <!-- Primary 72dp Connect, paired headset. -->
-    <string name="hub_btn_connect">Connect</string>
+    <string name="hub_btn_connect">Start VR</string>
     <!-- Primary 72dp Connect for an unpaired headset; "Set up PC" is
          the discoverable affordance, not a separate manual button. -->
     <string name="hub_btn_setup_pc">Set up PC</string>
     <!-- Secondary 56dp Flat screen override (headset only). -->
-    <string name="hub_btn_screen">Flat screen</string>
-    <string name="hub_btn_screen_summary">Play regular PC games on a virtual screen.</string>
+    <string name="hub_btn_screen">Start Big Screen</string>
+    <string name="hub_btn_screen_summary">Any PC game on a giant virtual display. Controllers work as a gamepad or mouse.</string>
     <!-- Secondary 56dp Settings. -->
     <string name="hub_btn_settings">Settings</string>
     <!-- 48dp link "Setup" — the VR-setup picker. Reachable from the
          hub (advanced placement) and from inside Settings > Advanced. -->
-    <string name="hub_btn_setup">Setup</string>
+    <string name="hub_btn_setup">Setup help</string>
     <!-- Paired-state affordance of the same link: the setup picker is
          opened to change which saved PC this headset targets. -->
     <string name="hub_btn_change_pc">Change PC</string>
 
     <!-- Connection card status block. Honest saved-PC state only;
          no fabricated hostname/lastplayed/Ready label. -->
-    <string name="hub_card_title">Connection</string>
-    <string name="hub_card_paired">Saved PC: %1$s</string>
-    <string name="hub_card_unpaired">No PC paired for VR.</string>
+    <string name="hub_card_title">Full VR</string>
+    <string name="hub_card_paired">Paired with %1$s</string>
+    <string name="hub_card_unpaired">No PC paired for VR yet</string>
     <string name="hub_card_paired_caveat">Your PC will be checked when you connect.</string>
 
     <!-- Connection card note line, one honest line per state. Headset
          states name the PC action; the phone state names the missing
          choice. -->
-    <string name="hub_card_note_paired">Starts SteamVR on your PC.</string>
-    <string name="hub_card_note_unpaired">Open VR Host Manager on your PC, then set up this headset.</string>
-    <string name="hub_card_note_phone">Choose a PC to stream your games.</string>
+    <string name="hub_card_note_paired">SteamVR games with head and hand tracking. SteamVR starts on your PC for you.</string>
+    <string name="hub_card_note_unpaired">SteamVR games with head and hand tracking. Open VR Host Manager on your PC, then set it up here.</string>
+    <string name="hub_card_note_phone">Stream games from your PC.</string>
     <string name="hub_card_pc_choose">Choose a PC to play.</string>
 
     <!-- Inline connection phases. Drawn into the card during a connect
@@ -90,8 +90,8 @@
     <string name="hub_restart_confirm">Restart VR</string>
     <string name="hub_restart_cancel">Cancel</string>
 
-    <string name="hub_subtitle_detected_headset">VR headset detected. Connect to play SteamVR games.</string>
-    <string name="hub_subtitle_detected_phone">Connect to stream PC games.</string>
+    <string name="hub_subtitle_detected_headset">How do you want to play?</string>
+    <string name="hub_subtitle_detected_phone">Ready to play</string>
     <string name="hub_steamvr_unsupported">PCVR requires a VR headset.</string>
     <string name="hub_steamvr_companion_reminder">First connection? In Windows VR Host Manager, choose Pair headset. Here, choose Set up PC, compare the code and approve once on the PC.</string>
     <string name="hub_mic_denied">Microphone permission is required to start SteamVR. PCVR not started.</string>
@@ -101,13 +101,13 @@
          does not block gaming. The badge is also surfaced briefly
          after a successful no-newer-available check so the user can
          see that the latest known state has been confirmed. -->
-    <string name="hub_btn_updates">Update</string>
+    <string name="hub_btn_updates">Updates</string>
     <string name="hub_updates_badge_default">No updates available.</string>
-    <string name="hub_updates_badge_available">Update %1$s available.</string>
-    <string name="hub_updates_badge_ready">Update %1$s is verified and ready to install.</string>
+    <string name="hub_updates_badge_available">Version %1$s available</string>
+    <string name="hub_updates_badge_ready">Version %1$s ready to install</string>
     <string name="hub_updates_badge_checking">Checking for updates…</string>
-    <string name="hub_updates_badge_offline">Update check unavailable. Tap App updates to retry.</string>
-    <string name="hub_updates_badge_current">App is up to date.</string>
+    <string name="hub_updates_badge_offline">Couldn’t check for updates</string>
+    <string name="hub_updates_badge_current">Up to date</string>
 
     <!-- Back row in nested settings / setup. -->
     <string name="back_row_title">Back</string>
@@ -278,4 +278,16 @@
     <string name="top_section_pcvr_title">SteamVR (PC) settings</string>
     <string name="top_section_pcvr_summary">PC pairing, codec, Home and Travel bitrate limits, plus guidance for display settings on the PC.</string>
 
+    <!-- Redesigned hub: mode cards, update banner. -->
+    <string name="hub_subtitle_note">Both modes stream from your PC. Switch any time.</string>
+    <string name="hub_mode_screen_title">Big Screen</string>
+    <string name="hub_card_title_phone">Play</string>
+    <string name="hub_btn_play">Choose a PC</string>
+    <string name="hub_last_used">Last used</string>
+    <string name="hub_update_banner_available">Version %1$s is available</string>
+    <string name="hub_update_banner_ready">Version %1$s is ready to install</string>
+    <string name="hub_update_banner_body_available">Takes about a minute. Android asks you to confirm.</string>
+    <string name="hub_update_banner_body_ready">Downloaded and verified. Android asks you to confirm.</string>
+    <string name="hub_update_banner_install">Update now</string>
+    <string name="hub_update_banner_later">Later</string>
 </resources>

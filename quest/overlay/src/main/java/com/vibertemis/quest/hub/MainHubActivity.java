@@ -354,6 +354,8 @@ public class MainHubActivity extends Activity {
     private boolean restartPromptPending;
     private volatile int connectGeneration;
     private com.vibertemis.quest.update.UpdateRepository updateRepository;
+    /** Version whose banner the user dismissed with Later (process lifetime). */
+    private String dismissedUpdateVersion;
     private com.vibertemis.quest.update.UpdateRepository.Observer updateObserver;
     private volatile HostClient hostClient;
     private com.vibertemis.quest.pcvr.PairingSession vrBootstrap;
@@ -511,6 +513,14 @@ public class MainHubActivity extends Activity {
             connectNote.setText(R.string.hub_subtitle_detected_phone);
             screenBtn.setVisibility(View.GONE);
             screenNote.setVisibility(View.GONE);
+            // Phones get a single "Play" card: no Big Screen card, no VR
+            // art, and the mint primary action instead of the VR styling.
+            findViewById(R.id.hub_card_screen).setVisibility(View.GONE);
+            findViewById(R.id.hub_art_vr_frame).setVisibility(View.GONE);
+            findViewById(R.id.hub_subtitle_note).setVisibility(View.GONE);
+            ((TextView) findViewById(R.id.hub_card_title)).setText(R.string.hub_card_title_phone);
+            connectBtn.setBackgroundResource(R.drawable.hub_btn_primary_bg);
+            connectBtn.setTextColor(getColor(R.color.hub_panel_accent_on));
             cardPcCaveat.setVisibility(View.GONE);
             cardPcStatus.setText(R.string.hub_card_unpaired);
             // Phones never reach Setup VR through the primary
@@ -537,17 +547,16 @@ public class MainHubActivity extends Activity {
                 launchStreamingSettings();
             }
         });
-        findViewById(R.id.hub_btn_updates).setOnClickListener(v -> {
-            if (launchPending || requestPending || connectPending) return;
-            try {
-                launchPending = true;
-                startActivity(new Intent(this, com.vibertemis.quest.update.UpdatesActivity.class)
-                        .putExtra(com.vibertemis.quest.update.UpdatesActivity.EXTRA_REQUEST_UPDATE, true));
-            } catch (ActivityNotFoundException | SecurityException e) {
-                launchPending = false;
-                Toast.makeText(this, "Updates screen unavailable", Toast.LENGTH_LONG).show();
-            }
+        findViewById(R.id.hub_btn_updates).setOnClickListener(v -> openUpdates());
+        findViewById(R.id.hub_update_banner_action).setOnClickListener(v -> openUpdates());
+        findViewById(R.id.hub_update_banner_later).setOnClickListener(v -> {
+            com.vibertemis.quest.update.UpdateRepository repository = updateRepository;
+            com.vibertemis.quest.update.UpdateRepository.Snapshot snap =
+                    repository == null ? null : repository.snapshot();
+            dismissedUpdateVersion = bannerVersion(snap);
+            renderUpdatesBadge(snap);
         });
+        renderVersionChip();
         bindUpdateRepository();
         if (VrCapabilities.isHeadset(this)) setupBtn.setText(R.string.hub_btn_setup);
         setupBtn.setOnClickListener(new View.OnClickListener() {
@@ -894,6 +903,7 @@ public class MainHubActivity extends Activity {
             i.setComponent(new ComponentName(getPackageName(), PcView.class.getName()));
             launchPending = true;
             startActivity(i);
+            prefs.rememberMode(HubPrefs.MODE_SCREEN);
         } catch (ActivityNotFoundException e) {
             launchPending = false;
             Log.w(TAG, "PcView not available: " + e.getMessage());
@@ -2118,6 +2128,7 @@ public class MainHubActivity extends Activity {
             clearInlineError();
             launchPending = true;
             startActivity(i);
+            prefs.rememberMode(HubPrefs.MODE_VR);
         } catch (ActivityNotFoundException e) {
             launchPending = false;
             // Nothing can come back through the return contract now.
@@ -2527,14 +2538,14 @@ public class MainHubActivity extends Activity {
         ((TextView) findViewById(R.id.hub_connect_note)).setText(headset
                 ? getString(paired ? R.string.hub_card_note_paired : R.string.hub_card_note_unpaired)
                 : getString(R.string.hub_card_note_phone));
-        findViewById(R.id.hub_status).setVisibility(headset ? View.GONE : View.VISIBLE);
+        renderLastMode(headset);
         Button setup = findViewById(R.id.hub_btn_setup);
         setup.setText(headset && paired ? getString(R.string.hub_btn_change_pc)
                 : getString(R.string.hub_btn_setup));
         setup.setVisibility(headset && !paired ? View.GONE : View.VISIBLE);
         connect.setEnabled(!connectPending && !launchPending);
-        connect.setText(connectPending ? getString(R.string.hub_connecting) : getString(headset && !paired
-                ? R.string.hub_btn_setup_pc : R.string.hub_btn_connect));
+        connect.setText(connectPending ? getString(R.string.hub_connecting) : getString(!headset
+                ? R.string.hub_btn_play : !paired ? R.string.hub_btn_setup_pc : R.string.hub_btn_connect));
         findViewById(R.id.hub_btn_cancel_connection).setVisibility(connectPending ? View.VISIBLE : View.GONE);
         TextView savedPc = findViewById(R.id.hub_card_pc_status);
         if (headset && paired) {
@@ -2544,6 +2555,8 @@ public class MainHubActivity extends Activity {
                         : getString(R.string.hub_card_paired, saved.address));
             } catch (Exception ignored) { savedPc.setText(R.string.hub_card_unpaired); }
         } else savedPc.setText(headset ? getString(R.string.hub_card_unpaired) : getString(R.string.hub_card_pc_choose));
+        savedPc.setCompoundDrawablesRelativeWithIntrinsicBounds(headset && paired
+                ? R.drawable.hub_dot_ok : R.drawable.hub_dot_wait, 0, 0, 0);
         // The paired caveat is only true when a PC is actually saved, so
         // it rides the same headset && paired condition as the saved-PC
         // line. An unpaired headset or a phone must not be told its PC
@@ -2739,7 +2752,78 @@ public class MainHubActivity extends Activity {
      * No "up to date" badge is shown before a successful check has
      * happened — the badge is hidden when nothing is known yet.
      */
+    private void openUpdates() {
+        if (launchPending || requestPending || connectPending) return;
+        try {
+            launchPending = true;
+            startActivity(new Intent(this, com.vibertemis.quest.update.UpdatesActivity.class)
+                    .putExtra(com.vibertemis.quest.update.UpdatesActivity.EXTRA_REQUEST_UPDATE, true));
+        } catch (ActivityNotFoundException | SecurityException e) {
+            launchPending = false;
+            Toast.makeText(this, "Updates screen unavailable", Toast.LENGTH_LONG).show();
+        }
+    }
+
+    /** Installed versionName in the header chip; hidden if unreadable. */
+    private void renderVersionChip() {
+        TextView chip = findViewById(R.id.hub_version);
+        if (chip == null) return;
+        try {
+            String name = getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
+            if (name == null || name.isEmpty()) { chip.setVisibility(View.GONE); return; }
+            int suffix = name.indexOf('-');
+            chip.setText(suffix > 0 ? name.substring(0, suffix) : name);
+            chip.setVisibility(View.VISIBLE);
+        } catch (PackageManager.NameNotFoundException | RuntimeException e) {
+            chip.setVisibility(View.GONE);
+        }
+    }
+
+    /** The version the banner would advertise for this snapshot, or null. */
+    private static String bannerVersion(com.vibertemis.quest.update.UpdateRepository.Snapshot snap) {
+        if (snap == null || snap.checking) return null;
+        if (snap.hasDownloaded()) return snap.downloaded.version;
+        if (snap.hasAvailable()) return snap.available.version;
+        return null;
+    }
+
+    /**
+     * Banner across the top of the hub whenever the shared snapshot has
+     * an available or already-downloaded update, so a new version is
+     * never only a footnote. "Later" hides it for that version until the
+     * process restarts; a newer version shows it again.
+     */
+    private void renderUpdateBanner(com.vibertemis.quest.update.UpdateRepository.Snapshot snap) {
+        View banner = findViewById(R.id.hub_update_banner);
+        if (banner == null) return;
+        String version = bannerVersion(snap);
+        if (version == null || version.equals(dismissedUpdateVersion)) {
+            banner.setVisibility(View.GONE);
+            return;
+        }
+        boolean ready = snap.hasDownloaded();
+        ((TextView) findViewById(R.id.hub_update_banner_title)).setText(getString(ready
+                ? R.string.hub_update_banner_ready : R.string.hub_update_banner_available, version));
+        ((TextView) findViewById(R.id.hub_update_banner_body)).setText(ready
+                ? R.string.hub_update_banner_body_ready : R.string.hub_update_banner_body_available);
+        banner.setVisibility(View.VISIBLE);
+    }
+
+    /** "Last used" tag and accent outline on the mode the user last started. */
+    private void renderLastMode(boolean headset) {
+        String mode = headset ? prefs.getLastMode() : null;
+        boolean screen = HubPrefs.MODE_SCREEN.equals(mode);
+        boolean vr = HubPrefs.MODE_VR.equals(mode);
+        findViewById(R.id.hub_tag_screen).setVisibility(screen ? View.VISIBLE : View.GONE);
+        findViewById(R.id.hub_tag_vr).setVisibility(vr ? View.VISIBLE : View.GONE);
+        findViewById(R.id.hub_card_screen).setBackgroundResource(screen
+                ? R.drawable.hub_card_screen_bg : R.drawable.hub_card_bg);
+        findViewById(R.id.hub_card_connection).setBackgroundResource(vr
+                ? R.drawable.hub_card_vr_bg : R.drawable.hub_card_bg);
+    }
+
     private void renderUpdatesBadge(com.vibertemis.quest.update.UpdateRepository.Snapshot snap) {
+        renderUpdateBanner(snap);
         TextView badge = findViewById(R.id.hub_updates_badge);
         if (badge == null) return;
         if (snap == null) { badge.setVisibility(View.GONE); return; }

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Full VR card art: a headset with two Touch controllers in orbit. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="560dp" android:height="196dp"
+    android:viewportWidth="560" android:viewportHeight="196">
+    <path android:strokeColor="#3A271A" android:strokeWidth="1" android:pathData="M70,104 A210,70 0 1 0 490,104 A210,70 0 1 0 70,104 Z" />
+    <path android:strokeColor="#4A301E" android:strokeWidth="1" android:pathData="M130,104 A150,50 0 1 0 430,104 A150,50 0 1 0 130,104 Z" />
+    <path android:fillColor="#2A1B12" android:strokeColor="#FF9F6B" android:strokeWidth="2"
+        android:pathData="M200,84 C200,66 220,60 280,60 C340,60 360,66 360,84 V112 C360,128 346,134 326,134 C306,134 300,120 280,120 C260,120 254,134 234,134 C214,134 200,128 200,112 Z" />
+    <path android:strokeColor="#FF9F6B" android:strokeAlpha="0.5" android:strokeWidth="1.5" android:pathData="M214,92 H346" />
+    <path android:strokeColor="#FF9F6B" android:strokeWidth="2" android:pathData="M98,120 A22,22 0 1 0 142,120 A22,22 0 1 0 98,120 Z" />
+    <path android:strokeColor="#FF9F6B" android:strokeWidth="2" android:strokeLineCap="round" android:pathData="M120,142 V170" />
+    <path android:strokeColor="#FF9F6B" android:strokeWidth="2" android:pathData="M418,120 A22,22 0 1 0 462,120 A22,22 0 1 0 418,120 Z" />
+    <path android:strokeColor="#FF9F6B" android:strokeWidth="2" android:strokeLineCap="round" android:pathData="M440,142 V170" />
+</vector>

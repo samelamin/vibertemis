@@ -21,6 +21,7 @@ import android.content.SharedPreferences;
 public final class HubPrefs {
     private static final String FILE = "vibertemis_quest_hub";
     private static final String K_LAST_PROFILE = "vibertemis_quest_hub_last_profile";
+    private static final String K_LAST_MODE = "vibertemis_quest_hub_last_mode";
     private static final String K_COMPANION_REMINDER_DISMISSED =
             "vibertemis_quest_hub_companion_reminder_dismissed";
 
@@ -29,6 +30,10 @@ public final class HubPrefs {
     public static final String PROFILE_TRAVEL = "travel";
     public static final String PROFILE_HQ = "hq";
     public static final String PROFILE_CUSTOM = "custom";
+
+    /** Launch modes for the hub's "Last used" tag. Stable on disk. */
+    public static final String MODE_SCREEN = "screen";
+    public static final String MODE_VR = "vr";
 
     private final SharedPreferences sp;
 
@@ -43,6 +48,15 @@ public final class HubPrefs {
 
     public void rememberProfile(String name) {
         sp.edit().putString(K_LAST_PROFILE, name).apply();
+    }
+
+    /** The mode the user last started, or null before the first start. */
+    public String getLastMode() {
+        return sp.getString(K_LAST_MODE, null);
+    }
+
+    public void rememberMode(String mode) {
+        sp.edit().putString(K_LAST_MODE, mode).apply();
     }
 
     public boolean isCompanionReminderDismissed() {

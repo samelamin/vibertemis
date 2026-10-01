@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Big Screen card art: a floating virtual display over a floor grid. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="560dp" android:height="196dp"
+    android:viewportWidth="560" android:viewportHeight="196">
+    <path android:strokeColor="#1C2C40" android:strokeWidth="1" android:pathData="M0,196 L280,150 L560,196" />
+    <path android:strokeColor="#18263A" android:strokeWidth="1" android:pathData="M70,196 L280,150 L490,196 M140,196 L280,150 L420,196 M210,196 L280,150 L350,196" />
+    <path android:strokeColor="#15212F" android:strokeWidth="1" android:pathData="M0,176 H560 M0,164 H560 M0,156 H560" />
+    <path android:fillColor="#14233A" android:strokeColor="#7CB8FF" android:strokeWidth="2"
+        android:pathData="M160,28 H400 A10,10 0 0 1 410,38 V146 A10,10 0 0 1 400,156 H160 A10,10 0 0 1 150,146 V38 A10,10 0 0 1 160,28 Z" />
+    <path android:fillColor="#1B3254" android:pathData="M169,42 H391 A5,5 0 0 1 396,47 V137 A5,5 0 0 1 391,142 H169 A5,5 0 0 1 164,137 V47 A5,5 0 0 1 169,42 Z" />
+    <path android:fillColor="#244470" android:pathData="M164,118 L230,84 L276,108 L320,76 L396,122 V142 H164 Z" />
+    <path android:fillColor="#7CB8FF" android:fillAlpha="0.7" android:pathData="M342,66 A10,10 0 1 0 362,66 A10,10 0 1 0 342,66 Z" />
+</vector>

@@ -1,44 +1,30 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Vibertemis XR Preview hub. Quiet utility layout: a single
-  Connection card with one prominent primary action, two secondary
-  rows, one advanced link, and a true-state Updates footer.
+  Vibertemis hub. Layout follows the "Vibertemis Redesign" canvas
+  (Quest hub · Two mode cards):
 
-  Spacing tokens (24dp padding / 20dp card padding / 14dp card
-  radius) come from the Claude frontend-design pass.
+    header   title, version chip, Settings
+    banner   update available / ready (hidden unless the shared
+             UpdateRepository snapshot says so)
+    heading  "How do you want to play?"
+    cards    Big Screen | Full VR, equal weight, side by side
+    footer   Setup / Change PC, update status line, Updates link
 
-    background  #0D1216
-    card        #141B21 (1dp #1F2A33 stroke)
-    text        #ECF2F5 (primary) / #9BA8B2 (secondary)
-    teal        #14616E (primary) / #7FE0D2 (focus)
+  Headsets show both cards. Phones hide the Big Screen card: the
+  primary Connect in the remaining card already opens the flat PcView.
 
-  Touch-target heights:
-    primary  Connect 72dp
-    secondary Flat screen, Updates, Setup 56dp
-    inline   Cancel connection, Retry, Cancel error 56dp
-    link     Updates 48dp
+  Every view id the activity and tests rely on is kept: the VR card
+  is still hub_card_connection and owns the connect / phase / error
+  views; hub_btn_screen, hub_btn_settings and hub_btn_setup keep their
+  56dp minimum targets.
 
-  Every hub button sets textAllCaps="false" and carries no
-  contentDescription: the visible label is the accessible name, and
-  the Connect / Set up PC / Change PC labels are set in code from
-  pairing state, so a static description would go stale.
+  Buttons set textAllCaps="false" and carry no contentDescription: the
+  visible label is the accessible name, and several labels are set in
+  code from pairing state, so a static description would go stale.
 
-  Connect changes purpose by pairing state. If paired, the primary
-  Connect launches the authenticated PCVR flow. If unpaired, the
-  primary "Set up PC" button opens the VR-setup picker (the same
-  flow that lives under Settings > Advanced for paired headsets).
-
-  Inline phase and inline error are drawn INTO the card during a
-  connect attempt so the user sees real progress without a wall of
-  dialogs. The phase pill, the inline error text, and the inline
-  Retry chip are hidden at rest and shown only when relevant. The
-  Cancel button follows the phase line it interrupts.
-
-  No fabricated hostname, lastplayed time, connection metrics, or
-  Ready label. The saved-PC line shows ONLY what is actually
-  persisted in PairingStore (the saved address). "Saved pairing is
-  not proof the PC is online" is shown above the primary action so the
-  user never confuses persistence with reachability.
+  The saved-PC line shows ONLY what PairingStore persisted. "Your PC
+  will be checked when you connect" stays visible for a paired headset
+  so persistence is never confused with reachability.
 -->
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
@@ -51,277 +37,531 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical"
-        android:paddingStart="24dp"
-        android:paddingEnd="24dp"
+        android:paddingStart="32dp"
+        android:paddingEnd="32dp"
         android:paddingTop="24dp"
-        android:paddingBottom="32dp">
+        android:paddingBottom="20dp">
 
-        <TextView
-            android:id="@+id/hub_title"
+        <!-- Header -->
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:textSize="28sp"
-            android:textStyle="bold"
-            android:textColor="@color/hub_panel_fg"
-            android:text="@string/hub_title" />
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
 
+            <TextView
+                android:id="@+id/hub_title"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:fontFamily="sans-serif-medium"
+                android:textSize="22sp"
+                android:textColor="@color/hub_panel_fg"
+                android:text="@string/hub_title" />
+
+            <TextView
+                android:id="@+id/hub_version"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="12dp"
+                android:paddingStart="10dp"
+                android:paddingEnd="10dp"
+                android:paddingTop="3dp"
+                android:paddingBottom="3dp"
+                android:background="@drawable/hub_chip_bg"
+                android:textSize="13sp"
+                android:textColor="@color/hub_panel_subtle"
+                android:visibility="gone" />
+
+            <View
+                android:layout_width="0dp"
+                android:layout_height="1dp"
+                android:layout_weight="1" />
+
+            <Button
+                android:id="@+id/hub_btn_settings"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:minHeight="56dp"
+                android:minWidth="0dp"
+                android:paddingStart="18dp"
+                android:paddingEnd="20dp"
+                android:drawableStart="@drawable/hub_ic_settings"
+                android:drawablePadding="10dp"
+                android:textSize="16sp"
+                android:textAllCaps="false"
+                android:textColor="@color/hub_panel_fg"
+                android:background="@drawable/hub_btn_secondary_bg"
+                android:stateListAnimator="@null"
+                android:text="@string/hub_btn_settings" />
+        </LinearLayout>
+
+        <!-- Update banner. Hidden unless an update is available or
+             already downloaded. Install opens the Updates screen with
+             the explicit update request; Later hides it for this
+             version until the app restarts. -->
+        <LinearLayout
+            android:id="@+id/hub_update_banner"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="18dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingStart="20dp"
+            android:paddingEnd="12dp"
+            android:paddingTop="12dp"
+            android:paddingBottom="12dp"
+            android:background="@drawable/hub_banner_bg"
+            android:visibility="gone">
+
+            <ImageView
+                android:layout_width="24dp"
+                android:layout_height="24dp"
+                android:importantForAccessibility="no"
+                android:src="@drawable/hub_ic_download" />
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:layout_marginStart="16dp"
+                android:layout_marginEnd="12dp"
+                android:orientation="vertical">
+
+                <TextView
+                    android:id="@+id/hub_update_banner_title"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:fontFamily="sans-serif-medium"
+                    android:textSize="16sp"
+                    android:textColor="@color/hub_panel_fg" />
+
+                <TextView
+                    android:id="@+id/hub_update_banner_body"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:textSize="14sp"
+                    android:textColor="@color/hub_banner_subtle" />
+            </LinearLayout>
+
+            <Button
+                android:id="@+id/hub_update_banner_later"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:minHeight="48dp"
+                android:minWidth="0dp"
+                android:paddingStart="16dp"
+                android:paddingEnd="16dp"
+                android:textSize="15sp"
+                android:textAllCaps="false"
+                android:textColor="@color/hub_banner_subtle"
+                android:background="@drawable/hub_btn_ghost_bg"
+                android:stateListAnimator="@null"
+                android:text="@string/hub_update_banner_later" />
+
+            <Button
+                android:id="@+id/hub_update_banner_action"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:minHeight="48dp"
+                android:minWidth="0dp"
+                android:paddingStart="20dp"
+                android:paddingEnd="20dp"
+                android:fontFamily="sans-serif-medium"
+                android:textSize="15sp"
+                android:textAllCaps="false"
+                android:textColor="@color/hub_panel_accent_on"
+                android:background="@drawable/hub_btn_primary_bg"
+                android:stateListAnimator="@null"
+                android:text="@string/hub_update_banner_install" />
+        </LinearLayout>
+
+        <!-- Heading -->
         <TextView
             android:id="@+id/hub_subtitle"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="4dp"
-            android:textSize="16sp"
-            android:textColor="@color/hub_panel_subtle"
+            android:layout_marginTop="22dp"
+            android:fontFamily="sans-serif-medium"
+            android:textSize="28sp"
+            android:letterSpacing="-0.01"
+            android:textColor="@color/hub_panel_fg"
             android:text="@string/hub_subtitle_default" />
 
         <TextView
-            android:id="@+id/hub_status"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
-            android:textSize="16sp"
-            android:textColor="@color/hub_panel_fg"
-            android:text="@string/hub_status_unknown" />
-
-        <!-- Connection card. 20dp padding around the body, 14dp
-             corners. The card is the only prominent panel on the
-             hub. Every other row lives outside it as a secondary
-             action. -->
-        <LinearLayout
-            android:id="@+id/hub_card_connection"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="20dp"
-            android:orientation="vertical"
-            android:padding="20dp"
-            android:background="@drawable/hub_card_bg">
-
-            <TextView
-                android:id="@+id/hub_card_title"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:textSize="15sp"
-                android:textColor="@color/hub_panel_subtle"
-                android:textAllCaps="true"
-                android:letterSpacing="0.08"
-                android:text="@string/hub_card_title" />
-
-            <TextView
-                android:id="@+id/hub_card_pc_status"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="6dp"
-                android:textSize="20sp"
-                android:textStyle="bold"
-                android:textColor="@color/hub_panel_fg"
-                android:text="@string/hub_card_unpaired" />
-
-            <TextView
-                android:id="@+id/hub_card_pc_caveat"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="2dp"
-                android:textSize="15sp"
-                android:textColor="@color/hub_panel_subtle"
-                android:text="@string/hub_card_paired_caveat" />
-
-            <!-- Primary 72dp Connect. Text is set in code based on
-                 pairing state: "Connect" if paired, "Set up PC" if
-                 unpaired. Background and text colour are pinned
-                 in the activity so we never depend on the platform
-                 theme picking a foreground that fights the teal.
-                 No contentDescription: the visible label is the
-                 accessible name, and the label changes in code, so a
-                 static description would go stale. -->
-            <Button
-                android:id="@+id/hub_btn_connect"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="20dp"
-                android:minHeight="72dp"
-                android:textSize="20sp"
-                android:textStyle="bold"
-                android:textAllCaps="false"
-                android:textColor="@color/hub_panel_accent_on"
-                android:background="@drawable/hub_btn_primary_bg"
-                android:text="@string/hub_btn_connect" />
-
-            <TextView
-                android:id="@+id/hub_connect_note"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:textSize="15sp"
-                android:textColor="@color/hub_panel_subtle"
-                android:text="@string/hub_subtitle_companion_required" />
-
-            <!-- Inline phase pill. Hidden at rest (visibility="gone").
-                 Drawn only while a connect attempt is in flight so
-                 the user sees real progress without a modal
-                 dialog. -->
-            <TextView
-                android:id="@+id/hub_card_phase"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="12dp"
-                android:paddingStart="14dp"
-                android:paddingEnd="14dp"
-                android:paddingTop="10dp"
-                android:paddingBottom="10dp"
-                android:textSize="15sp"
-                android:textColor="@color/hub_panel_subtle"
-                android:background="@drawable/hub_phase_pill_bg"
-                android:visibility="gone" />
-
-            <!-- Cancel the in-flight connect. Sits directly after the
-                 phase line it interrupts. Hidden at rest. -->
-            <Button
-                android:id="@+id/hub_btn_cancel_connection"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="12dp"
-                android:minHeight="56dp"
-                android:textAllCaps="false"
-                android:textColor="@color/hub_panel_fg"
-                android:background="@drawable/hub_btn_secondary_bg"
-                android:text="@string/hub_phase_cancel"
-                android:visibility="gone" />
-
-            <!-- Inline error block. Hidden at rest. Shown when the
-                 connect attempt fails. Inline Retry button is
-                 included so the user never has to re-navigate to
-                 the primary Connect. -->
-            <LinearLayout
-                android:id="@+id/hub_card_error_row"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="12dp"
-                android:orientation="vertical"
-                android:paddingStart="14dp"
-                android:paddingEnd="14dp"
-                android:paddingTop="10dp"
-                android:paddingBottom="14dp"
-                android:background="@drawable/hub_phase_pill_bg"
-                android:visibility="gone">
-
-                <TextView
-                    android:id="@+id/hub_card_error"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:textSize="15sp"
-                    android:textColor="@color/hub_panel_error" />
-
-                <Button
-                    android:id="@+id/hub_card_error_retry"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="10dp"
-                    android:minHeight="56dp"
-                    android:textSize="15sp"
-                    android:textStyle="bold"
-                    android:textAllCaps="false"
-                    android:textColor="@color/hub_panel_focus"
-                    android:background="@drawable/hub_chip_retry_bg"
-                    android:text="@string/hub_phase_retry"
-                    android:visibility="gone" />
-
-                <Button
-                    android:id="@+id/hub_card_error_cancel"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="10dp"
-                    android:minHeight="56dp"
-                    android:textSize="15sp"
-                    android:textAllCaps="false"
-                    android:textColor="@color/hub_panel_subtle"
-                    android:background="@android:color/transparent"
-                    android:text="@string/hub_phase_cancel"
-                    android:visibility="gone" />
-            </LinearLayout>
-        </LinearLayout>
-
-        <!-- Secondary 56dp rows. Flat screen is headset-only; on a
-             phone the primary Connect already routes to flat PcView
-             so a second flat surface would be a duplicate of the
-             primary action. -->
-        <Button
-            android:id="@+id/hub_btn_screen"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="20dp"
-            android:minHeight="56dp"
-            android:textSize="17sp"
-            android:textAllCaps="false"
-            android:textColor="@color/hub_panel_fg"
-            android:background="@drawable/hub_btn_secondary_bg"
-            android:text="@string/hub_btn_screen" />
-
-        <TextView
-            android:id="@+id/hub_screen_note"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="6dp"
-            android:textSize="15sp"
-            android:textColor="@color/hub_panel_subtle"
-            android:text="@string/hub_btn_screen_summary" />
-
-        <!-- Secondary 56dp Settings. -->
-        <Button
-            android:id="@+id/hub_btn_settings"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="20dp"
-            android:minHeight="56dp"
-            android:textSize="17sp"
-            android:textAllCaps="false"
-            android:textColor="@color/hub_panel_fg"
-            android:background="@drawable/hub_btn_secondary_bg"
-            android:text="@string/hub_btn_settings" />
-
-        <!-- Advanced link "Setup" (or "Change PC" once paired) — 56dp.
-             Reachable from the hub (advanced placement) and from
-             Settings > Advanced. Visually a secondary action so a
-             4-button panel of primary controls never appears. Text
-             only, no fill, teal text colour so it reads as a link.
-             The label is set in code from pairing state, so it is the
-             accessible name on its own. -->
-        <Button
-            android:id="@+id/hub_btn_setup"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="20dp"
-            android:minHeight="56dp"
-            android:textSize="16sp"
-            android:textColor="@color/hub_panel_focus"
-            android:background="@android:color/transparent"
-            android:textAllCaps="false"
-            android:text="@string/hub_btn_setup" />
-
-        <!-- Updates footer. 48dp link + a true-state badge drawn from
-         the provider snapshot. The badge is hidden when nothing is
-         known yet so we never paint a fake "up to date" before a
-         real check has run. -->
-        <Button
-            android:id="@+id/hub_btn_updates"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="20dp"
-            android:minHeight="48dp"
-            android:textSize="16sp"
-            android:textColor="@color/hub_panel_focus"
-            android:background="@android:color/transparent"
-            android:textAllCaps="false"
-            android:text="@string/hub_btn_updates" />
-
-        <TextView
-            android:id="@+id/hub_updates_badge"
+            android:id="@+id/hub_subtitle_note"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="4dp"
-            android:layout_marginBottom="4dp"
             android:textSize="15sp"
             android:textColor="@color/hub_panel_subtle"
-            android:visibility="gone"
-            android:text="@string/hub_updates_badge_default" />
+            android:text="@string/hub_subtitle_note" />
+
+        <!-- Mode cards -->
+        <LinearLayout
+            android:id="@+id/hub_mode_row"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="18dp"
+            android:baselineAligned="false"
+            android:orientation="horizontal">
+
+            <!-- Big Screen (headset only) -->
+            <LinearLayout
+                android:id="@+id/hub_card_screen"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:layout_marginEnd="10dp"
+                android:orientation="vertical"
+                android:background="@drawable/hub_card_bg">
+
+                <FrameLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="132dp"
+                    android:layout_margin="2dp"
+                    android:background="@color/hub_screen_art_bg">
+
+                    <ImageView
+                        android:layout_width="match_parent"
+                        android:layout_height="match_parent"
+                        android:importantForAccessibility="no"
+                        android:scaleType="fitCenter"
+                        android:src="@drawable/hub_art_screen" />
+
+                    <TextView
+                        android:id="@+id/hub_tag_screen"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_margin="12dp"
+                        android:paddingStart="10dp"
+                        android:paddingEnd="10dp"
+                        android:paddingTop="4dp"
+                        android:paddingBottom="4dp"
+                        android:background="@drawable/hub_tag_screen_bg"
+                        android:fontFamily="sans-serif-medium"
+                        android:letterSpacing="0.06"
+                        android:textAllCaps="true"
+                        android:textSize="11sp"
+                        android:textColor="@color/hub_screen_on"
+                        android:text="@string/hub_last_used"
+                        android:visibility="gone" />
+                </FrameLayout>
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:orientation="vertical"
+                    android:padding="20dp">
+
+                    <TextView
+                        android:id="@+id/hub_card_screen_title"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:fontFamily="sans-serif-medium"
+                        android:textSize="22sp"
+                        android:textColor="@color/hub_panel_fg"
+                        android:text="@string/hub_mode_screen_title" />
+
+                    <TextView
+                        android:id="@+id/hub_screen_note"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="4dp"
+                        android:textSize="15sp"
+                        android:textColor="@color/hub_panel_subtle"
+                        android:text="@string/hub_btn_screen_summary" />
+
+                    <TextView
+                        android:id="@+id/hub_status"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="14dp"
+                        android:drawableStart="@drawable/hub_dot_ok"
+                        android:drawablePadding="10dp"
+                        android:gravity="center_vertical"
+                        android:textSize="14sp"
+                        android:textColor="@color/hub_panel_fg"
+                        android:text="@string/hub_status_unknown" />
+
+                    <View
+                        android:layout_width="match_parent"
+                        android:layout_height="0dp"
+                        android:layout_weight="1"
+                        android:minHeight="16dp" />
+
+                    <Button
+                        android:id="@+id/hub_btn_screen"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:minHeight="60dp"
+                        android:fontFamily="sans-serif-medium"
+                        android:textSize="18sp"
+                        android:textAllCaps="false"
+                        android:textColor="@color/hub_screen_on"
+                        android:background="@drawable/hub_btn_screen_bg"
+                        android:stateListAnimator="@null"
+                        android:text="@string/hub_btn_screen" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <!-- Full VR (headset) / Play (phone). Owns the connect flow. -->
+            <LinearLayout
+                android:id="@+id/hub_card_connection"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:layout_marginStart="10dp"
+                android:orientation="vertical"
+                android:background="@drawable/hub_card_bg">
+
+                <FrameLayout
+                    android:id="@+id/hub_art_vr_frame"
+                    android:layout_width="match_parent"
+                    android:layout_height="132dp"
+                    android:layout_margin="2dp"
+                    android:background="@color/hub_vr_art_bg">
+
+                    <ImageView
+                        android:layout_width="match_parent"
+                        android:layout_height="match_parent"
+                        android:importantForAccessibility="no"
+                        android:scaleType="fitCenter"
+                        android:src="@drawable/hub_art_vr" />
+
+                    <TextView
+                        android:id="@+id/hub_tag_vr"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_margin="12dp"
+                        android:paddingStart="10dp"
+                        android:paddingEnd="10dp"
+                        android:paddingTop="4dp"
+                        android:paddingBottom="4dp"
+                        android:background="@drawable/hub_tag_vr_bg"
+                        android:fontFamily="sans-serif-medium"
+                        android:letterSpacing="0.06"
+                        android:textAllCaps="true"
+                        android:textSize="11sp"
+                        android:textColor="@color/hub_panel_bg"
+                        android:text="@string/hub_last_used"
+                        android:visibility="gone" />
+                </FrameLayout>
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:orientation="vertical"
+                    android:padding="20dp">
+
+                    <TextView
+                        android:id="@+id/hub_card_title"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:fontFamily="sans-serif-medium"
+                        android:textSize="22sp"
+                        android:textColor="@color/hub_panel_fg"
+                        android:text="@string/hub_card_title" />
+
+                    <TextView
+                        android:id="@+id/hub_connect_note"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="4dp"
+                        android:textSize="15sp"
+                        android:textColor="@color/hub_panel_subtle"
+                        android:text="@string/hub_subtitle_companion_required" />
+
+                    <TextView
+                        android:id="@+id/hub_card_pc_status"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="14dp"
+                        android:drawableStart="@drawable/hub_dot_wait"
+                        android:drawablePadding="10dp"
+                        android:gravity="center_vertical"
+                        android:textSize="14sp"
+                        android:textColor="@color/hub_panel_fg"
+                        android:text="@string/hub_card_unpaired" />
+
+                    <TextView
+                        android:id="@+id/hub_card_pc_caveat"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="6dp"
+                        android:paddingStart="18dp"
+                        android:textSize="13sp"
+                        android:textColor="@color/hub_panel_faint"
+                        android:text="@string/hub_card_paired_caveat" />
+
+                    <!-- Inline phase pill. Hidden at rest. -->
+                    <TextView
+                        android:id="@+id/hub_card_phase"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="12dp"
+                        android:paddingStart="14dp"
+                        android:paddingEnd="14dp"
+                        android:paddingTop="10dp"
+                        android:paddingBottom="10dp"
+                        android:textSize="15sp"
+                        android:textColor="@color/hub_panel_fg"
+                        android:background="@drawable/hub_phase_pill_bg"
+                        android:visibility="gone" />
+
+                    <!-- Inline error block. Hidden at rest. -->
+                    <LinearLayout
+                        android:id="@+id/hub_card_error_row"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="12dp"
+                        android:orientation="vertical"
+                        android:paddingStart="14dp"
+                        android:paddingEnd="14dp"
+                        android:paddingTop="10dp"
+                        android:paddingBottom="12dp"
+                        android:background="@drawable/hub_phase_pill_bg"
+                        android:visibility="gone">
+
+                        <TextView
+                            android:id="@+id/hub_card_error"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:textSize="15sp"
+                            android:textColor="@color/hub_panel_error" />
+
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="10dp"
+                            android:orientation="horizontal">
+
+                            <Button
+                                android:id="@+id/hub_card_error_retry"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:minHeight="56dp"
+                                android:fontFamily="sans-serif-medium"
+                                android:textSize="15sp"
+                                android:textAllCaps="false"
+                                android:textColor="@color/hub_panel_accent"
+                                android:background="@drawable/hub_chip_retry_bg"
+                                android:stateListAnimator="@null"
+                                android:text="@string/hub_phase_retry"
+                                android:visibility="gone" />
+
+                            <Button
+                                android:id="@+id/hub_card_error_cancel"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:layout_marginStart="8dp"
+                                android:minHeight="56dp"
+                                android:textSize="15sp"
+                                android:textAllCaps="false"
+                                android:textColor="@color/hub_panel_subtle"
+                                android:background="@drawable/hub_btn_ghost_bg"
+                                android:stateListAnimator="@null"
+                                android:text="@string/hub_phase_cancel"
+                                android:visibility="gone" />
+                        </LinearLayout>
+                    </LinearLayout>
+
+                    <View
+                        android:layout_width="match_parent"
+                        android:layout_height="0dp"
+                        android:layout_weight="1"
+                        android:minHeight="16dp" />
+
+                    <Button
+                        android:id="@+id/hub_btn_connect"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:minHeight="60dp"
+                        android:fontFamily="sans-serif-medium"
+                        android:textSize="18sp"
+                        android:textAllCaps="false"
+                        android:textColor="@color/hub_vr_on"
+                        android:background="@drawable/hub_btn_vr_bg"
+                        android:stateListAnimator="@null"
+                        android:text="@string/hub_btn_connect" />
+
+                    <!-- Cancel the in-flight connect. Hidden at rest. -->
+                    <Button
+                        android:id="@+id/hub_btn_cancel_connection"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="10dp"
+                        android:minHeight="56dp"
+                        android:textSize="15sp"
+                        android:textAllCaps="false"
+                        android:textColor="@color/hub_panel_fg"
+                        android:background="@drawable/hub_btn_secondary_bg"
+                        android:stateListAnimator="@null"
+                        android:text="@string/hub_phase_cancel"
+                        android:visibility="gone" />
+                </LinearLayout>
+            </LinearLayout>
+        </LinearLayout>
+
+        <!-- Footer -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="14dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <!-- "Setup" (or "Change PC" once paired). Label set in code. -->
+            <Button
+                android:id="@+id/hub_btn_setup"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:minHeight="56dp"
+                android:minWidth="0dp"
+                android:paddingStart="14dp"
+                android:paddingEnd="14dp"
+                android:textSize="15sp"
+                android:textColor="@color/hub_panel_subtle"
+                android:background="@drawable/hub_btn_ghost_bg"
+                android:stateListAnimator="@null"
+                android:textAllCaps="false"
+                android:text="@string/hub_btn_setup" />
+
+            <View
+                android:layout_width="0dp"
+                android:layout_height="1dp"
+                android:layout_weight="1" />
+
+            <!-- True-state update line from the provider snapshot.
+                 Hidden when nothing is known yet so we never paint a
+                 fake "up to date" before a real check has run. -->
+            <TextView
+                android:id="@+id/hub_updates_badge"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="4dp"
+                android:textSize="13sp"
+                android:textColor="@color/hub_panel_faint"
+                android:visibility="gone"
+                android:text="@string/hub_updates_badge_default" />
+
+            <Button
+                android:id="@+id/hub_btn_updates"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:minHeight="48dp"
+                android:minWidth="0dp"
+                android:paddingStart="14dp"
+                android:paddingEnd="14dp"
+                android:textSize="15sp"
+                android:textColor="@color/hub_panel_subtle"
+                android:background="@drawable/hub_btn_ghost_bg"
+                android:stateListAnimator="@null"
+                android:textAllCaps="false"
+                android:text="@string/hub_btn_updates" />
+        </LinearLayout>
     </LinearLayout>
 </ScrollView>

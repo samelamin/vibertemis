@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Last used tag on the Full VR art. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <solid android:color="@color/hub_vr_tint" />
+    <corners android:radius="999dp" />
+</shape>

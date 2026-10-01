@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Vibertemis theme for the upstream settings screens (applied to
+  StreamSettings by patches/0005). Same tokens as the hub: ink ground,
+  raised surfaces, mint accent. Preference category titles pick up
+  colorAccent, switches and sliders pick up colorControlActivated.
+-->
+<resources>
+    <style name="Theme.Vibertemis.Settings" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/hub_panel_bg</item>
+        <item name="android:colorBackground">@color/hub_panel_bg</item>
+        <item name="android:colorPrimary">@color/hub_panel_card</item>
+        <item name="android:colorPrimaryDark">@color/hub_panel_bg</item>
+        <item name="android:colorAccent">@color/hub_panel_accent</item>
+        <item name="android:colorControlActivated">@color/hub_panel_accent</item>
+        <item name="android:colorControlHighlight">#335EE6CF</item>
+        <item name="android:textColorPrimary">@color/hub_panel_fg</item>
+        <item name="android:textColorSecondary">@color/hub_panel_subtle</item>
+        <item name="android:listDivider">@color/hub_panel_card_stroke</item>
+        <item name="android:navigationBarColor">@color/hub_panel_bg</item>
+        <item name="android:statusBarColor">@color/hub_panel_bg</item>
+        <item name="android:alertDialogTheme">@style/Theme.Vibertemis.Dialog</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+
+    <style name="Theme.Vibertemis.Dialog" parent="android:Theme.Material.Dialog.Alert">
+        <item name="android:colorBackground">@color/hub_panel_raised</item>
+        <item name="android:colorAccent">@color/hub_panel_accent</item>
+        <item name="android:colorControlActivated">@color/hub_panel_accent</item>
+        <item name="android:textColorPrimary">@color/hub_panel_fg</item>
+        <item name="android:textColorSecondary">@color/hub_panel_subtle</item>
+    </style>
+</resources>

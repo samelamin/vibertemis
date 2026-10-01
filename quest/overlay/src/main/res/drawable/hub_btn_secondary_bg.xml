@@ -1,48 +1,32 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!--
-  Secondary 56dp button. Transparent fill, subtle 1dp stroke so it
-  reads as a sibling to the primary card but stays subordinate.
-  Pressed/focused states tint the fill lightly so the focus ring is
-  visible on a headset without painting a "selected" look.
--->
+<!-- Quiet secondary button: raised fill, hairline stroke; focus/hover gets the mint ring. -->
 <selector xmlns:android="http://schemas.android.com/apk/res/android">
     <item android:state_pressed="true">
-        <layer-list>
-            <item>
-                <shape android:shape="rectangle">
-                    <solid android:color="@color/hub_panel_card_stroke" />
-                    <stroke
-                        android:width="1dp"
-                        android:color="@color/hub_panel_focus" />
-                    <corners android:radius="14dp" />
-                </shape>
-            </item>
-        </layer-list>
+        <shape android:shape="rectangle">
+            <solid android:color="@color/hub_panel_raised" />
+            <stroke android:width="2dp" android:color="@color/hub_panel_focus" />
+            <corners android:radius="14dp" />
+        </shape>
     </item>
     <item android:state_focused="true">
-        <layer-list>
-            <item>
-                <shape android:shape="rectangle">
-                    <solid android:color="@color/hub_panel_card" />
-                    <stroke
-                        android:width="2dp"
-                        android:color="@color/hub_panel_focus" />
-                    <corners android:radius="14dp" />
-                </shape>
-            </item>
-        </layer-list>
+        <shape android:shape="rectangle">
+            <solid android:color="@color/hub_panel_raised" />
+            <stroke android:width="2dp" android:color="@color/hub_panel_focus" />
+            <corners android:radius="14dp" />
+        </shape>
+    </item>
+    <item android:state_hovered="true">
+        <shape android:shape="rectangle">
+            <solid android:color="@color/hub_panel_raised" />
+            <stroke android:width="2dp" android:color="@color/hub_panel_focus" />
+            <corners android:radius="14dp" />
+        </shape>
     </item>
     <item>
-        <layer-list>
-            <item>
-                <shape android:shape="rectangle">
-                    <solid android:color="@android:color/transparent" />
-                    <stroke
-                        android:width="1dp"
-                        android:color="@color/hub_panel_card_stroke" />
-                    <corners android:radius="14dp" />
-                </shape>
-            </item>
-        </layer-list>
+        <shape android:shape="rectangle">
+            <solid android:color="@color/hub_panel_card" />
+            <stroke android:width="1dp" android:color="@color/hub_panel_card_stroke" />
+            <corners android:radius="14dp" />
+        </shape>
     </item>
 </selector>

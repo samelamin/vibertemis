@@ -51,8 +51,14 @@ import java.util.concurrent.atomic.AtomicReference;
  */
 public final class UpdateRepository {
 
-    /** Successful throttle: 6 hours between visible metadata checks. */
-    public static final long SUCCESS_INTERVAL_MS = 6L * 60L * 60L * 1000L;
+    /**
+     * Successful throttle: 30 minutes between metadata checks. The hub
+     * checks on every resume past this window, so a release published
+     * while the headset is on the shelf shows up the next time the app
+     * is opened instead of up to six hours later. One small GitHub API
+     * call per window stays well inside the unauthenticated rate limit.
+     */
+    public static final long SUCCESS_INTERVAL_MS = 30L * 60L * 1000L;
     /** Failure throttle: 15 minutes between retries after an error. */
     public static final long FAILURE_INTERVAL_MS = 15L * 60L * 1000L;
 
@@ -276,7 +282,7 @@ public final class UpdateRepository {
         // outcome was a failure, lastFailureAtMs equals or exceeds
         // lastSuccessAtMs AND lastError is non-null. We pick the
         // failure branch on a tie so a forced retry is not blocked
-        // for the rest of the 6-hour success window.
+        // for the rest of the success window.
         boolean failureIsLatestOrTie =
                 s.lastFailureAtMs >= s.lastSuccessAtMs && s.lastError != null;
         if (failureIsLatestOrTie) {

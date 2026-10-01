@@ -62,7 +62,7 @@ public class HubUpdatesBadgeResumeTest {
 
     /** Frozen wall clock: a successful check pins
      *  {@code lastSuccessAtMs} here, so the throttle keeps rejecting
-     *  the extra resume triggers for the full 6-hour window. */
+     *  the extra resume triggers for the full success window. */
     private static final long FIXED_NOW_MS = 1_700_000_000_000L;
 
     private File tmpRoot;

@@ -1,40 +1,56 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Overlay colours used by the hub + updates UI. Hub and updates panel share the
-  dark-ink + teal palette:
+  Overlay colours shared by the hub, updates and settings screens.
+  Tokens come from the Vibertemis Redesign canvas (Claude Design):
 
-    background  #0D1216    card        #141B21
-    text        #ECF2F5    secondary   #9BA8B2
-    teal primary#14616E    teal focus  #7FE0D2
+    ground      #0A0D11    surface  #11161C    raised  #171E26
+    line        #232C36    text     #EEF3F6    muted   #9AA7B3
+    accent mint #5EE6CF (ink #052520)
+    Big Screen  #7CB8FF (ink #06182E)   Full VR #FF9F6B (ink #FFD2B5 on #24170F)
 
   Only colours that are strictly new live here; the launcher icon background
   (ic_launcher_background) lives upstream.
 -->
 <resources>
     <!-- Hub -->
-    <color name="hub_panel_bg">#0D1216</color>
-    <color name="hub_panel_card">#141B21</color>
-    <color name="hub_panel_card_stroke">#1F2A33</color>
-    <color name="hub_panel_fg">#ECF2F5</color>
-    <color name="hub_panel_subtle">#9BA8B2</color>
-    <color name="hub_panel_warn">#E2A65A</color>
-    <color name="hub_panel_error">#E27A6A</color>
-    <color name="hub_panel_accent">#14616E</color>
-    <color name="hub_panel_accent_pressed">#0E4A55</color>
-    <color name="hub_panel_focus">#7FE0D2</color>
-    <color name="hub_panel_accent_on">#ECF2F5</color>
+    <color name="hub_panel_bg">#0A0D11</color>
+    <color name="hub_panel_card">#11161C</color>
+    <color name="hub_panel_raised">#171E26</color>
+    <color name="hub_panel_card_stroke">#232C36</color>
+    <color name="hub_panel_fg">#EEF3F6</color>
+    <color name="hub_panel_subtle">#9AA7B3</color>
+    <color name="hub_panel_faint">#7D8A97</color>
+    <color name="hub_panel_warn">#F5C451</color>
+    <color name="hub_panel_error">#FF8A7A</color>
+    <color name="hub_panel_ok">#5EE6A0</color>
+    <color name="hub_panel_accent">#5EE6CF</color>
+    <color name="hub_panel_accent_pressed">#3FC9B2</color>
+    <color name="hub_panel_focus">#5EE6CF</color>
+    <color name="hub_panel_accent_on">#052520</color>
+    <color name="hub_banner_bg">#0F2622</color>
+    <color name="hub_banner_stroke">#1F5A50</color>
+    <color name="hub_banner_subtle">#A9C9C3</color>
+    <color name="hub_screen_tint">#7CB8FF</color>
+    <color name="hub_screen_tint_pressed">#5C9FEF</color>
+    <color name="hub_screen_on">#06182E</color>
+    <color name="hub_screen_art_bg">#0D1520</color>
+    <color name="hub_vr_tint">#FF9F6B</color>
+    <color name="hub_vr_fill">#24170F</color>
+    <color name="hub_vr_fill_pressed">#3A2416</color>
+    <color name="hub_vr_on">#FFD2B5</color>
+    <color name="hub_vr_art_bg">#1A120D</color>
 
     <!-- Updates panel -->
-    <color name="upd_panel_bg">#0D1216</color>
-    <color name="upd_panel_card">#141B21</color>
-    <color name="upd_panel_fg">#ECF2F5</color>
-    <color name="upd_panel_subtle">#9BA8B2</color>
-    <color name="upd_panel_primary">#14616E</color>
-    <color name="upd_panel_primary_pressed">#0F4A55</color>
-    <color name="upd_panel_on_primary">#FFFFFF</color>
-    <color name="upd_panel_focus_ring">#7FE0D2</color>
-    <color name="upd_panel_warn">#F2A65A</color>
-    <color name="upd_panel_error">#E07F7F</color>
-    <color name="upd_panel_secondary_bg">#1A2229</color>
-    <color name="upd_panel_secondary_border">#2A323A</color>
+    <color name="upd_panel_bg">#0A0D11</color>
+    <color name="upd_panel_card">#11161C</color>
+    <color name="upd_panel_fg">#EEF3F6</color>
+    <color name="upd_panel_subtle">#9AA7B3</color>
+    <color name="upd_panel_primary">#5EE6CF</color>
+    <color name="upd_panel_primary_pressed">#3FC9B2</color>
+    <color name="upd_panel_on_primary">#052520</color>
+    <color name="upd_panel_focus_ring">#EEF3F6</color>
+    <color name="upd_panel_warn">#F5C451</color>
+    <color name="upd_panel_error">#FF8A7A</color>
+    <color name="upd_panel_secondary_bg">#171E26</color>
+    <color name="upd_panel_secondary_border">#232C36</color>
 </resources>

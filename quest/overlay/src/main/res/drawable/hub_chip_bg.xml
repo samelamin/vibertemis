@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Inline phase / error block inside the VR card. -->
+<!-- Version chip and small pills. -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
-    <solid android:color="@color/hub_panel_raised" />
+    <solid android:color="@android:color/transparent" />
     <stroke android:width="1dp" android:color="@color/hub_panel_card_stroke" />
-    <corners android:radius="14dp" />
+    <corners android:radius="999dp" />
 </shape>
