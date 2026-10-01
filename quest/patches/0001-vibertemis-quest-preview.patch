@@ -338,7 +338,7 @@ index 3bc8220e..05979eb5 100644
              }
  
              // Where the log actually is, which is the first thing anyone
-@@ -406,6 +422,30 @@ public class StreamSettings extends Activity {
+@@ -406,6 +422,52 @@ public class StreamSettings extends Activity {
                  category_gamepad_settings.removePreference(findPreference("seekbar_vibrate_fallback_strength"));
              }
  
@@ -366,10 +366,32 @@ index 3bc8220e..05979eb5 100644
 +                return true;
 +            });
 +
++            // Vibertemis XR Preview: codec and adaptive bitrate are the
++            // two PCVR rows that are genuinely local. They open the same
++            // PcvrSettingsActivity, passing the focus token so the screen
++            // lands on the row that was tapped.
++            Preference pcvrCodec = findPreference("vq_pcvr_codec");
++            if (pcvrCodec != null) pcvrCodec.setOnPreferenceClickListener(pref -> {
++                android.content.Intent focus = new android.content.Intent(getActivity(), com.vibertemis.quest.pcvr.PcvrSettingsActivity.class);
++                focus.putExtra(com.vibertemis.quest.pcvr.PcvrSettingsActivity.EXTRA_FOCUS,
++                        com.vibertemis.quest.pcvr.PcvrSettingsActivity.FOCUS_CODEC);
++                startActivity(focus);
++                return true;
++            });
++
++            Preference pcvrBitrate = findPreference("vq_pcvr_adaptive_bitrate");
++            if (pcvrBitrate != null) pcvrBitrate.setOnPreferenceClickListener(pref -> {
++                android.content.Intent focus = new android.content.Intent(getActivity(), com.vibertemis.quest.pcvr.PcvrSettingsActivity.class);
++                focus.putExtra(com.vibertemis.quest.pcvr.PcvrSettingsActivity.EXTRA_FOCUS,
++                        com.vibertemis.quest.pcvr.PcvrSettingsActivity.FOCUS_BITRATE);
++                startActivity(focus);
++                return true;
++            });
++
              Display display = getActivity().getWindowManager().getDefaultDisplay();
              float maxSupportedFps = display.getRefreshRate();
  
-@@ -732,6 +772,97 @@ public class StreamSettings extends Activity {
+@@ -732,6 +794,97 @@ public class StreamSettings extends Activity {
                      return true;
                  }
              });
@@ -563,7 +585,7 @@ index 1891f2c1..16ff284f 100644
              seekbar:step="500"
              seekbar:keyStep="1000"
              seekbar:divisor="1000"
-@@ -359,4 +391,107 @@
+@@ -359,4 +391,111 @@
              android:summary="@string/summary_privacy_policy"
              url="https://moonlight-stream.org/privacy.html"/>
      </PreferenceCategory-->
@@ -620,52 +642,56 @@ index 1891f2c1..16ff284f 100644
 +    </PreferenceScreen>
 +
 +    <!--
-+      Vibertemis XR Preview: PCVR (host-owned) settings.
++      Vibertemis XR Preview: PCVR settings.
 +
-+      PCVR quality, fixed foveated ENCODING, codec, refresh and resolution
-+      are owned by the ALVR server on the PC. We display read-only text so
-+      the user knows what to touch on the host dashboard. There are no
-+      working local sliders here.
++      Codec and bitrate limits are owned by the headset and are editable
++      here: tapping either row opens the PCVR settings screen focused on
++      that control. Everything in the Advanced category is decided by the
++      ALVR server on the PC, so those rows are read-only pointers to the
++      PC ALVR Dashboard.
 +    -->
 +    <PreferenceScreen
-+        android:title="@string/pcvr_host_section_title"
++        android:title="PCVR streaming"
 +        android:summary="@string/pcvr_host_section_summary"
 +        android:key="vq_screen_pcvr_host">
 +        <com.vibertemis.quest.hub.BackPreference
 +            android:key="vq_pcvr_back"
 +            android:title="@string/nested_back_row_title"
 +            android:summary="@string/nested_back_row_summary"/>
-+        <PreferenceCategory android:title="@string/pcvr_host_section_title"
++        <PreferenceCategory android:title="PCVR streaming"
 +            android:key="vq_pcvr_host">
 +            <Preference android:key="vq_pcvr_connection" android:title="PC pairing and codec" android:summary="Automatic SteamVR startup, standard codec and Travel mode" />
 +            <Preference
-+                android:title="@string/pcvr_host_item_adaptive_bitrate_title"
-+                android:summary="@string/pcvr_host_item_adaptive_bitrate_summary"
++                android:title="Codec"
++                android:summary="Auto, AV1 or HEVC"
++                android:key="vq_pcvr_codec"
++                android:selectable="true"/>
++            <Preference
++                android:title="Bitrate limits"
++                android:summary="Home and Travel streaming limits"
 +                android:key="vq_pcvr_adaptive_bitrate"
-+                android:selectable="false"/>
++                android:selectable="true"/>
++        </PreferenceCategory>
++        <PreferenceCategory android:title="Advanced: PC settings"
++            android:key="vq_pcvr_advanced">
 +            <Preference
 +                android:title="@string/pcvr_host_item_fixed_foveation_title"
-+                android:summary="@string/pcvr_host_item_fixed_foveation_summary"
++                android:summary="Foveated encoding: change in the PC ALVR Dashboard"
 +                android:key="vq_pcvr_fixed_foveation"
 +                android:selectable="false"/>
 +            <Preference
-+                android:title="@string/pcvr_host_item_codec_title"
-+                android:summary="@string/pcvr_host_item_codec_summary"
-+                android:key="vq_pcvr_codec"
-+                android:selectable="false"/>
-+            <Preference
 +                android:title="@string/pcvr_host_item_refresh_title"
-+                android:summary="@string/pcvr_host_item_refresh_summary"
++                android:summary="Refresh rate: change in the PC ALVR Dashboard"
 +                android:key="vq_pcvr_refresh"
 +                android:selectable="false"/>
 +            <Preference
 +                android:title="@string/pcvr_host_item_resolution_title"
-+                android:summary="@string/pcvr_host_item_resolution_summary"
++                android:summary="Resolution: change in the PC ALVR Dashboard"
 +                android:key="vq_pcvr_resolution"
 +                android:selectable="false"/>
 +            <Preference
 +                android:title="@string/pcvr_host_item_eye_tracking_title"
-+                android:summary="@string/pcvr_host_item_eye_tracking_summary"
++                android:summary="Eye tracking: unsupported on Quest 3, change in the PC ALVR Dashboard"
 +                android:key="vq_pcvr_eye_tracking"
 +                android:selectable="false"/>
 +        </PreferenceCategory>
