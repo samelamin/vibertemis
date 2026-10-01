@@ -143,14 +143,14 @@ foreach ($notice in $headerNotices) {
 
 # Pin the license generator so the dependency notice list stays reproducible.
 $about = Get-CargoAboutVersion
-if ($about -notmatch '0\.6\.4\b') {
+if ($about -notmatch '0\.9\.2\b') {
     Push-Location $alvr
     try {
-        Invoke-Checked cargo @('install', '--locked', 'cargo-about', '--version', '0.6.4')
+        Invoke-Checked cargo @('install', '--locked', 'cargo-about', '--version', '0.9.2', '--features', 'cli')
     } finally { Pop-Location }
     $about = Get-CargoAboutVersion
 }
-if ($about -notmatch '0\.6\.4\b') { throw "cargo-about 0.6.4 is required (found: $about)" }
+if ($about -notmatch '0\.9\.2\b') { throw "cargo-about 0.9.2 is required (found: $about)" }
 $template = 'alvr/xtask/licenses_template.hbs'
 if (-not (Test-Path -LiteralPath (Join-Path $alvr $template) -PathType Leaf)) { throw "ALVR license template missing: $template" }
 $dependencies = Join-Path $licenseDir 'dependencies.html'
