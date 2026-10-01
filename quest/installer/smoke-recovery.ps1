@@ -63,7 +63,7 @@ public static class RecoverySmokeUi {
  [DllImport("user32.dll")] public static extern bool EnumChildWindows(IntPtr parent, EnumProc p, IntPtr l);
  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
  [DllImport("user32.dll", EntryPoint="SendMessageTimeoutW", CharSet=CharSet.Unicode)] public static extern IntPtr ReadText(IntPtr h, uint m, IntPtr w, StringBuilder text, uint flags, uint timeout, out IntPtr result);
- [DllImport("user32.dll")] public static extern IntPtr SendMessageTimeout(IntPtr h, uint m, IntPtr w, IntPtr l, uint flags, uint timeout, out IntPtr result);
+  [DllImport("user32.dll", SetLastError=true)] public static extern IntPtr SendMessageTimeout(IntPtr h, uint m, IntPtr w, IntPtr l, uint flags, uint timeout, out IntPtr result);
  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
  [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr h, out RECT r);
  [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr h, ref POINT p);
@@ -136,14 +136,16 @@ public static class RecoverySmokeUi {
   if (!GetVisibleBounds(h, out l, out t, out r, out b)) return false;
   return (r-l) >= minWidth && (b-t) >= minHeight;
  }
- // BM_GETCHECK, so a checkbox is read the way a user reads it instead
- // of being toggled on a guess.
- public static int GetCheckState(IntPtr h) {
-  if (h==IntPtr.Zero) return -1;
-  IntPtr result;
-  var rc = SendMessageTimeout(h, 0xF0, IntPtr.Zero, IntPtr.Zero, 2, 2000, out result);
-  return rc == IntPtr.Zero ? -1 : (int)rc.ToInt64();
- }
+  // BM_GETCHECK, so a checkbox is read the way a user reads it instead
+  // of being toggled on a guess. SendMessageTimeout's own return value
+  // only says the message was delivered; the checkbox state is the out
+  // result, so that - and not rc - is what is reported.
+  public static int GetCheckState(IntPtr h) {
+   if (h==IntPtr.Zero) return -1;
+   IntPtr result;
+   var rc = SendMessageTimeout(h, 0xF0, IntPtr.Zero, IntPtr.Zero, 2, 2000, out result);
+   return rc == IntPtr.Zero ? -1 : (int)result.ToInt64();
+  }
  public static bool ResizeWindow(IntPtr h, int width, int height) {
   RECT r; if (!GetWindowRect(h, out r)) return false;
   return MoveWindow(h, r.Left, r.Top, width, height, true);
@@ -276,6 +278,7 @@ function Assert-NotOverlapping {
     }
 }
 function Save-SmokeScreenshot([string]$Name) {
+    if (-not (Test-Path $script:shotDir)) { New-Item -ItemType Directory -Path $script:shotDir -Force | Out-Null }
     $path = Join-Path $script:shotDir "smoke-$Name.png"
     if (Test-Path $path) { Remove-Item $path -Force }
     Capture-ManagerScreenshot -Hwnd (Get-ManagerWindow) -Path $path
@@ -296,18 +299,34 @@ function Assert-DisclosuresReachable([string]$Where) {
     Assert-NotOverlapping -First $advanced -FirstLabel 'Advanced disclosure' -Second $log -SecondLabel 'Activity log disclosure'
     return $advanced
 }
+# A BM_GETCHECK query that never completed is not "unchecked": the
+# native state is simply unknown, and -1 is the only way to tell those
+# apart. When the query fails, the class of the result and the Win32
+# error the call left behind are reported with it, so a broken query is
+# never mistaken for an unchecked box.
+function Get-NativeCheckState {
+    param([IntPtr]$Hwnd, [string]$Label)
+    $state = [RecoverySmokeUi]::GetCheckState($Hwnd)
+    if ($state -ne -1) { return $state }
+    $code = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+    $detail = [System.ComponentModel.Win32Exception]::new($code).Message
+    throw "Checkbox state query failed for '$Label': RecoverySmokeUi.GetCheckState returned -1 (no state), Win32 error $code ($detail)"
+}
 # Expands or collapses Advanced from its REAL checkbox state, so a
 # second call is a no-op instead of flipping a disclosure the test does
-# not own.
+# not own. A state this test cannot read is an error, never a reason to
+# click: a blind toggle is exactly what this avoids.
 function Set-Advanced([bool]$Expanded) {
     $toggle = [RecoverySmokeUi]::Find($script:managerProcess.Id, 'Advanced')
     Assert-FullyOnScreen -Hwnd $toggle -Label 'Advanced disclosure' -MinWidth 90 -MinHeight 24
     $want = if ($Expanded) { 1 } else { 0 }
-    if ([RecoverySmokeUi]::GetCheckState($toggle) -ne $want) {
+    $current = Get-NativeCheckState -Hwnd $toggle -Label 'Advanced disclosure'
+    if ($current -ne $want) {
         [RecoverySmokeUi]::Click($toggle)
         Wait-Until { [RecoverySmokeUi]::GetCheckState($toggle) -eq $want } "Advanced checkbox state $want"
     }
-    if ([RecoverySmokeUi]::GetCheckState($toggle) -ne $want) { throw "Advanced checkbox did not reach state $want" }
+    $seen = Get-NativeCheckState -Hwnd $toggle -Label 'Advanced disclosure'
+    if ($seen -ne $want) { throw "Advanced checkbox did not reach state $want (native check state $seen)" }
 }
 $settingsDir = Join-Path $env:LOCALAPPDATA 'VibertemisVRHostManager'
 $pairingDir = Join-Path $env:LOCALAPPDATA 'vibertemis/companion'
@@ -493,6 +512,14 @@ try {
             throw "Demoted control visible without Advanced: $label"
         }
     }
+    # State the geometry this test measures, so a click is always on a
+    # control a user could press. The app's own default is not assumed.
+    if (-not (Test-Path $script:shotDir)) { New-Item -ItemType Directory -Path $script:shotDir | Out-Null }
+    Set-ManagerWindowSize $script:defaultWindowSize
+    # Capture the default-ready state for CI review BEFORE the first
+    # assertion about that state can fail, so a default-state failure
+    # still leaves a picture of what it failed on.
+    Save-SmokeScreenshot 'ready'
     # A prior install that did not finish is the owner's most important
     # pending fact, and the activity log is collapsed, so it has to be on
     # the always-visible update footer - short and factual, pointing at
@@ -500,7 +527,7 @@ try {
     # installer paths into the window.
     $logToggle = [RecoverySmokeUi]::Find($script:managerProcess.Id, 'Activity log')
     Assert-FullyOnScreen -Hwnd $logToggle -Label 'Activity log disclosure' -MinWidth 90 -MinHeight 24
-    if ([RecoverySmokeUi]::GetCheckState($logToggle) -ne 0) { throw 'Activity log is not collapsed by default' }
+    if ((Get-NativeCheckState -Hwnd $logToggle -Label 'Activity log disclosure') -ne 0) { throw 'Activity log is not collapsed by default' }
     $priorNotice = [RecoverySmokeUi]::FindRegexVisible($script:managerProcess.Id, 'The last update to \S+ did not finish\.')
     Assert-FullyOnScreen -Hwnd $priorNotice -Label 'prior failed update notice in the update footer' -MinWidth 120 -MinHeight 24
     Assert-FullyOnScreen -Hwnd ([RecoverySmokeUi]::FindVisible($script:managerProcess.Id, 'Host ready: receiving pairing requests is OFF.')) -Label 'readiness header' -MinWidth 60 -MinHeight 16
@@ -520,12 +547,12 @@ try {
     # The detail the notice points at has to exist somewhere the owner
     # can open: the log body must become usable when its disclosure is
     # expanded from its real checkbox state, and hide again after.
-    $script:logExpanded = [RecoverySmokeUi]::GetCheckState($logToggle)
+    $script:logExpanded = Get-NativeCheckState -Hwnd $logToggle -Label 'Activity log disclosure'
     if ($script:logExpanded -eq 0) {
         [RecoverySmokeUi]::Click($logToggle)
         Wait-Until { [RecoverySmokeUi]::GetCheckState($logToggle) -ne 0 } 'activity log expanded'
-        $logBody = [RecoverySmokeUi]::GetCheckState($logToggle)
-        if ($logBody -eq 0) { throw 'Activity log did not expand' }
+        $logBody = Get-NativeCheckState -Hwnd $logToggle -Label 'Activity log disclosure (expanded)'
+        if ($logBody -eq 0) { throw "Activity log did not expand (native check state $logBody)" }
         [RecoverySmokeUi]::Click($logToggle)
         Wait-Until { [RecoverySmokeUi]::GetCheckState($logToggle) -eq 0 } 'activity log collapsed again'
     }
@@ -536,17 +563,10 @@ try {
     Assert-FullyOnScreen -Hwnd $afterCheck -Label 'prior update notice after the background check' -MinWidth 120 -MinHeight 24
     if (-not (Test-Path $script:priorOutcomePath)) { throw 'The incomplete prior update outcome was discarded by a background check' }
 
-    # State the geometry this test measures, so a click is always on a
-    # control a user could press. The app's own default is not assumed.
-    if (-not (Test-Path $script:shotDir)) { New-Item -ItemType Directory -Path $script:shotDir | Out-Null }
-    Set-ManagerWindowSize $script:defaultWindowSize
     # Both disclosures must be pressable in the default state.
     [void](Assert-DisclosuresReachable 'default window')
     [void](Assert-Actionable 'Set up VR')
     [void](Assert-Actionable 'Pair headset')
-    # Capture the default-ready state for CI review BEFORE the
-    # primary row action is exercised.
-    Save-SmokeScreenshot 'ready'
 
     # A window smaller than the default must keep both disclosures
     # usable: this is where a fixed-height layout used to push the
@@ -577,7 +597,7 @@ try {
     Save-SmokeScreenshot 'advanced'
     Set-Advanced $false
     Wait-Until { [RecoverySmokeUi]::FindVisible($script:managerProcess.Id, 'Export pairing file') -eq [IntPtr]::Zero } 'export control hidden again after Advanced collapsed'
-    if ([RecoverySmokeUi]::GetCheckState([RecoverySmokeUi]::Find($script:managerProcess.Id, 'Advanced')) -ne 0) { throw 'Advanced checkbox is still checked after collapsing' }
+    if ((Get-NativeCheckState -Hwnd ([RecoverySmokeUi]::Find($script:managerProcess.Id, 'Advanced')) -Label 'Advanced disclosure') -ne 0) { throw 'Advanced checkbox is still checked after collapsing' }
     # Pair headset path: enables persisted receiving immediately and
     # reveals the request card. Reachable on a runner with or without
     # Steam, so this step never depends on the fixture.
@@ -851,6 +871,17 @@ try {
     if ((Get-FileHash $identity).Hash -ne $identityHash) { throw 'Sign-in restart changed pairing identity' }
     if (Get-Process -Name vrserver,vrmonitor,vrcompositor -ErrorAction SilentlyContinue) { throw 'Host readiness unexpectedly started SteamVR' }
     Write-Host 'PASS: actual tray startup, registry command, crash recovery, Stop suppression, restart and pairing retention; no SteamVR launch; the request card surfaces a LAN begin and Approve delivers the approved state; receiving-mode preference persists across restarts; management controls (Pause / Resume) stay reachable after a successful approve; an incomplete prior update stays visible in the footer across a background check and a restart; both disclosures stay pressable at the default and a smaller window size'
+} catch {
+    # A failing step must not take the window down before CI has a
+    # picture of it, so capture here - while the teardown has not run
+    # yet. The capture is best effort: if it fails, or the window is
+    # already gone, the original failure is still what gets reported.
+    # $_ is rebound inside the nested catch below, so the original
+    # record is held first and rethrown explicitly.
+    $originalSmokeFailure = $_
+    try { Save-SmokeScreenshot 'failure' } catch { Write-Host "Failure screenshot unavailable: $($_.Exception.Message)" }
+    Write-Host "Smoke step failed: $($originalSmokeFailure.Exception.Message)"
+    throw $originalSmokeFailure
 } finally {
     try { Stop-TestProcesses } finally {
     Remove-ItemProperty -Path $runPath -Name $runName -ErrorAction SilentlyContinue
