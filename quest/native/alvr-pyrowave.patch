@@ -230,7 +230,7 @@ index 5b9dcfe..f2bea91 100644
          println!("cargo:rustc-link-lib=EGL");
          println!("cargo:rustc-link-lib=GLESv3");
 diff --git a/alvr/client_core/src/c_api.rs b/alvr/client_core/src/c_api.rs
-index b69f7e9..2b0d4ec 100644
+index b69f7e9..d7d6975 100644
 --- a/alvr/client_core/src/c_api.rs
 +++ b/alvr/client_core/src/c_api.rs
 @@ -57,6 +57,7 @@ pub struct AlvrClientCapabilities {
@@ -250,7 +250,22 @@ index b69f7e9..2b0d4ec 100644
          default_view_resolution,
          refresh_rates,
          foveated_encoding: capabilities.foveated_encoding,
-@@ -377,6 +380,7 @@ pub extern "C" fn alvr_poll_event(out_event: *mut AlvrEvent) -> bool {
+@@ -358,6 +361,14 @@ pub extern "C" fn alvr_poll_event(out_event: *mut AlvrEvent) -> bool {
+                     }
+                 }
+                 ClientCoreEvent::StreamingStopped => AlvrEvent::StreamingStopped,
++                ClientCoreEvent::PcvrConnectionIssue(reason) => {
++                    // Surfaced with the existing HUD message event, to avoid changing the ABI
++                    *HUD_MESSAGE.lock() = crate::connection::format_hud_message(
++                        crate::connection::connection_issue_message(&reason),
++                    );
++
++                    AlvrEvent::HudMessageUpdated
++                }
+                 ClientCoreEvent::Haptics {
+                     device_id,
+                     duration,
+@@ -377,6 +388,7 @@ pub extern "C" fn alvr_poll_event(out_event: *mut AlvrEvent) -> bool {
                              CodecType::H264 => AlvrCodec::H264,
                              CodecType::Hevc => AlvrCodec::Hevc,
                              CodecType::AV1 => AlvrCodec::AV1,
@@ -258,7 +273,7 @@ index b69f7e9..2b0d4ec 100644
                          },
                      }
                  }
-@@ -945,6 +949,7 @@ pub extern "C" fn alvr_create_decoder(config: AlvrDecoderConfig) {
+@@ -945,6 +957,7 @@ pub extern "C" fn alvr_create_decoder(config: AlvrDecoderConfig) {
              AlvrCodec::H264 => CodecType::H264,
              AlvrCodec::Hevc => CodecType::Hevc,
              AlvrCodec::AV1 => CodecType::AV1,
@@ -266,7 +281,7 @@ index b69f7e9..2b0d4ec 100644
          },
          force_software_decoder: config.force_software_decoder,
          max_buffering_frames: config.max_buffering_frames,
-@@ -989,16 +994,24 @@ pub extern "C" fn alvr_create_decoder(config: AlvrDecoderConfig) {
+@@ -989,16 +1002,24 @@ pub extern "C" fn alvr_create_decoder(config: AlvrDecoderConfig) {
          },
      };
  
@@ -300,10 +315,342 @@ index b69f7e9..2b0d4ec 100644
  
      if let Some(context) = &*CLIENT_CORE_CONTEXT.lock() {
 diff --git a/alvr/client_core/src/connection.rs b/alvr/client_core/src/connection.rs
-index 357bd43..49f83b8 100644
+index 357bd43..b23e0b4 100644
 --- a/alvr/client_core/src/connection.rs
 +++ b/alvr/client_core/src/connection.rs
-@@ -200,6 +200,17 @@ fn connection_pipeline(
+@@ -51,6 +51,7 @@ const LOCAL_TRY_MESSAGE: &str = "Trying to connect to localhost...";
+ //     "on the PC or on the headset",
+ // );
+ const STREAM_STARTING_MESSAGE: &str = "The stream will begin soon\nPlease wait...";
++const RESTART_PREPARING_MESSAGE: &str = "Applying the new streaming settings.\nSteamVR is restarting...";
+ const SERVER_RESTART_MESSAGE: &str = "The streamer is restarting\nPlease wait...";
+ const SERVER_DISCONNECTED_MESSAGE: &str = "The streamer has disconnected.";
+ const CONNECTION_TIMEOUT_MESSAGE: &str = "Connection timeout.";
+@@ -59,8 +60,24 @@ const DISCOVERY_RETRY_PAUSE: Duration = Duration::from_millis(500);
+ const RETRY_CONNECT_MIN_INTERVAL: Duration = Duration::from_secs(1);
+ const CONNECTION_RETRY_INTERVAL: Duration = Duration::from_secs(1);
+ const HANDSHAKE_ACTION_TIMEOUT: Duration = Duration::from_secs(2);
++/// The window the server is given to prove it claimed this connection's restart attempt and to
++/// report the outcome. The server sends the preparing marker before it starts the worker, whose
++/// .NET startup and hashing can take up to 10s, and the worker restart itself takes a few more.
++/// The window is used once and never extended again.
++const RESTART_PREPARING_TIMEOUT: Duration = Duration::from_secs(15);
++/// The window the streamer is given to come back after an authorized restart: SteamVR needs up to
++/// 45s to exit and up to 30s to start again, and it is unreachable for that whole time. The client
++/// waits for it at most this long, then reports the restart as failed instead of waiting forever.
++/// The window is monotonic, opened once and never extended.
++const RESTART_RECOVERY_TIMEOUT: Duration = Duration::from_secs(90);
+ const STREAMING_RECV_TIMEOUT: Duration = Duration::from_millis(500);
+ 
++/// Sent by the server right after it claimed an authorized restart attempt. Must match the server
++/// side.
++const RESTART_PREPARING_MARKER: &str = "vq_restart_preparing";
++const RESTART_CONSENT_REQUIRED_REASON: &str = "vq_restart_consent_required";
++const RESTART_FAILED_REASON: &str = "vq_restart_failed";
++
+ const MAX_UNREAD_PACKETS: usize = 10; // Applies per stream
+ 
+ pub type DecoderCallback = dyn FnMut(Duration, &[u8]) -> bool + Send;
+@@ -78,27 +95,254 @@ pub struct ConnectionContext {
+     pub last_good_head_pose: RwLock<Pose>,
+     pub view_params: RwLock<[ViewParams; 2]>,
+     pub uses_multimodal_protocol: RelaxedAtomic,
++    // Restart consent is one use per client context: once SteamVR has been told to restart, a
++    // reconnect must ask again instead of restarting in a loop.
++    pub restart_consumed: RelaxedAtomic,
++    // Reports are one shot per client context too, to avoid repeating the same issue on every
++    // reconnect.
++    pub pcvr_issue_reported: RelaxedAtomic,
++    // The window in which the streamer is expected to come back after an authorized restart. It is
++    // opened once, never extended, and only closed by actual streaming. While it is open the
++    // client is not allowed to wait for the streamer forever.
++    restart_recovery_deadline: Mutex<Option<Instant>>,
+     pub velocities_multiplier: RwLock<f32>,
+     pub max_prediction: RwLock<Duration>,
+ }
+ 
+-fn set_hud_message(event_queue: &Mutex<VecDeque<ClientCoreEvent>>, message: &str) {
+-    let message = format!(
++impl ConnectionContext {
++    /// Opens the recovery window for the restart this client context just authorized. A second
++    /// attempt while the window is still open, a repeated marker or a repeated reconnect packet
++    /// finds it open already and leaves it untouched: the streamer gets the same amount of time
++    /// as the first attempt, never more.
++    fn start_restart_recovery(&self, now: Instant) {
++        let mut deadline = self.restart_recovery_deadline.lock();
++        if deadline.is_none() {
++            *deadline = Some(now + RESTART_RECOVERY_TIMEOUT);
++        }
++    }
++
++    /// Only a stream that actually runs closes the window. A configuration packet is not proof that
++    /// the streamer is back, so a streamer that accepts connections and then disappears cannot hold
++    /// the client forever.
++    fn clear_restart_recovery(&self) {
++        *self.restart_recovery_deadline.lock() = None;
++    }
++
++    /// Consumes the window when its time is up. Consuming it is what makes the failure one shot: a
++    /// window can be reported as timed out exactly once, and a connection that never attempted a
++    /// restart has no window to consume at all.
++    fn take_expired_restart_recovery(&self, now: Instant) -> bool {
++        let mut deadline = self.restart_recovery_deadline.lock();
++        if deadline.is_some_and(|deadline| now >= deadline) {
++            *deadline = None;
++
++            true
++        } else {
++            false
++        }
++    }
++}
++
++/// Drops a connection attempt that ran out of restart recovery time, and reports the failed restart
++/// once. The restart is not retried by the client: the consent is spent, so the next connection
++/// has to ask the user again, exactly as for a preflight timeout.
++fn drop_expired_restart_recovery(
++    ctx: &ConnectionContext,
++    event_queue: &Mutex<VecDeque<ClientCoreEvent>>,
++    now: Instant,
++) -> bool {
++    if !ctx.take_expired_restart_recovery(now) {
++        return false;
++    }
++
++    info!("Streamer did not come back after the authorized restart");
++    report_pcvr_issue(ctx, event_queue, "restart_failed");
++
++    true
++}
++
++/// The text shown to the user for a PCVR connection issue.
++pub fn connection_issue_message(reason: &str) -> &'static str {
++    match reason {
++        "restart_required" => "Streaming settings changed.\n\
++            Return to the Vibertemis hub and connect again to approve the SteamVR settings restart.",
++        "restart_failed" => "Cannot restart SteamVR.\n\
++            Start SteamVR again from the PC, then reconnect.",
++        _ => "Streaming issue. Check the PC for more details.",
++    }
++}
++
++/// PcvrConnectionIssue is only queued once per client context.
++fn report_pcvr_issue(
++    ctx: &ConnectionContext,
++    event_queue: &Mutex<VecDeque<ClientCoreEvent>>,
++    reason: &'static str,
++) {
++    if ctx.pcvr_issue_reported.value() {
++        return;
++    }
++    ctx.pcvr_issue_reported.set(true);
++
++    set_hud_message(event_queue, connection_issue_message(reason));
++    event_queue
++        .lock()
++        .push_back(ClientCoreEvent::PcvrConnectionIssue(reason.into()));
++}
++
++/// The full HUD text for a message, with the connection header.
++pub fn format_hud_message(message: &str) -> String {
++    format!(
+         "ALVR v{}\nhostname: {}\nIP: {}\n\n{message}",
+         *ALVR_VERSION,
+         Config::load().hostname,
+         alvr_system_info::local_ip(),
+-    );
++    )
++}
+ 
++fn set_hud_message(event_queue: &Mutex<VecDeque<ClientCoreEvent>>, message: &str) {
+     event_queue
+         .lock()
+-        .push_back(ClientCoreEvent::UpdateHudMessage(message));
++        .push_back(ClientCoreEvent::UpdateHudMessage(format_hud_message(
++            message,
++        )));
+ }
+ 
+ fn is_streaming(ctx: &ConnectionContext) -> bool {
+     *ctx.state.read() == ConnectionState::Streaming
+ }
+ 
++/// Whether this handshake advertises an unspent restart permission. The server only claims a
++/// restart attempt when it received this from this very connection, so the preparing marker is only
++/// trusted when it is true here.
++fn restart_is_permitted(capabilities: &ClientCapabilities, ctx: &ConnectionContext) -> bool {
++    capabilities
++        .restart_deadline
++        .is_some_and(|deadline| Instant::now() < deadline)
++        // One use per client context: a spent consent must not restart again on the next
++        // reconnect.
++        && !ctx.restart_consumed.value()
++        && capabilities.pcvr_request.allow_restart
++}
++
++/// How the client reacts to one server packet while the handshake is still open.
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++enum HandshakeStep {
++    /// The wait continues. `preparing` is set only for the marker that opened the longer window,
++    /// so the user is told once that SteamVR is being prepared.
++    KeepWaiting { preparing: bool },
++    /// The handshake is over, with this outcome.
++    Done(HandshakeOutcome),
++}
++
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++enum HandshakeOutcome {
++    /// The stream can start.
++    StartStream,
++    /// SteamVR is restarting. The permission is spent.
++    Restarting,
++    /// A PCVR issue the user has to act on, as a stable reason code.
++    Issue(&'static str),
++    /// The server never answered inside the normal window. Nothing was started, so this is the
++    /// ordinary slow or gone server, not a restart problem.
++    Timeout,
++    /// The server claimed a restart attempt and then stopped answering. The attempt is not
++    /// repeated: reconnecting has to ask the user again.
++    RestartTimeout,
++    /// The server is gone.
++    Disconnected,
++    /// A packet that cannot be part of this handshake.
++    Unexpected,
++}
++
++/// The state of the wait between the stream config and the first server packet.
++///
++/// The deadline starts at the normal handshake timeout, so a connection that streams is decided
++/// exactly as before. It is extended once, by the preparing marker, and only when this handshake
++/// was allowed to authorize the attempt: an unauthorized or repeated marker cannot make the client
++/// wait longer.
++#[derive(Debug, Clone, Copy)]
++struct ServerHandshake {
++    /// This handshake advertised an unspent permission.
++    restart_permitted: bool,
++    /// The permission is spent, by the marker or by Restarting. One use per client context.
++    permission_spent: bool,
++    /// The marker was already accepted, so the window cannot grow again.
++    preparing_seen: bool,
++    deadline: Instant,
++}
++
++impl ServerHandshake {
++    fn new(restart_permitted: bool, now: Instant) -> Self {
++        Self {
++            restart_permitted,
++            // A handshake without a permission starts already spent, so no marker can be accepted.
++            permission_spent: !restart_permitted,
++            preparing_seen: false,
++            deadline: now + HANDSHAKE_ACTION_TIMEOUT,
++        }
++    }
++
++    fn remaining(&self, now: Instant) -> Duration {
++        self.deadline.saturating_duration_since(now)
++    }
++
++    fn is_expired(&self, now: Instant) -> bool {
++        now >= self.deadline
++    }
++
++    /// True while this handshake still holds the permission that the marker spends.
++    fn accepts_marker(&self) -> bool {
++        !self.permission_spent
++    }
++
++    fn on_packet(&mut self, packet: &ServerControlPacket, now: Instant) -> HandshakeStep {
++        match packet {
++            ServerControlPacket::StartStream => HandshakeStep::Done(HandshakeOutcome::StartStream),
++            ServerControlPacket::Restarting => {
++                // A server that skips the marker is still trusted here, for compatibility: the
++                // outcome is the same, and the permission must be spent either way.
++                self.permission_spent = true;
++
++                HandshakeStep::Done(HandshakeOutcome::Restarting)
++            }
++            ServerControlPacket::Reserved(reason) if reason == RESTART_PREPARING_MARKER => {
++                if !self.restart_permitted {
++                    // The server claims an attempt this handshake never authorized. It is a
++                    // cross-component violation, not a reason to wait.
++                    return HandshakeStep::Done(HandshakeOutcome::Unexpected);
++                }
++
++                if !self.accepts_marker() {
++                    if self.preparing_seen {
++                        // The permission is already spent by an earlier marker. The wait continues,
++                        // but the window is never extended again.
++                        return HandshakeStep::KeepWaiting { preparing: false };
++                    }
++
++                    // The permission was spent by something else, a legacy Restarting, so this
++                    // handshake has no attempt to prepare and the marker cannot be part of it.
++                    return HandshakeStep::Done(HandshakeOutcome::Unexpected);
++                }
++
++                // The permission is spent by the marker: the server owns the attempt from now on,
++                // and this client context must not authorize another one.
++                self.permission_spent = true;
++                self.preparing_seen = true;
++                self.deadline = now + RESTART_PREPARING_TIMEOUT;
++
++                HandshakeStep::KeepWaiting { preparing: true }
++            }
++            ServerControlPacket::Reserved(reason) if reason == RESTART_CONSENT_REQUIRED_REASON => {
++                HandshakeStep::Done(HandshakeOutcome::Issue("restart_required"))
++            }
++            ServerControlPacket::Reserved(reason) if reason == RESTART_FAILED_REASON => {
++                HandshakeStep::Done(HandshakeOutcome::Issue("restart_failed"))
++            }
++            _ => HandshakeStep::Done(HandshakeOutcome::Unexpected),
++        }
++    }
++}
++
+ pub fn connection_lifecycle_loop(
+     capabilities: ClientCapabilities,
+     ctx: Arc<ConnectionContext>,
+@@ -110,6 +354,17 @@ pub fn connection_lifecycle_loop(
+     set_hud_message(&event_queue, INITIAL_MESSAGE);
+ 
+     while *lifecycle_state.read() != LifecycleState::ShuttingDown {
++        // The streamer is unreachable for the whole exit and startup of an authorized restart. This
++        // loop retries forever, so the recovery window has to stop the wait at some point.
++        if drop_expired_restart_recovery(&ctx, &event_queue, Instant::now()) {
++            *ctx.state.write() = ConnectionState::Disconnected;
++            ctx.disconnected_notif.notify_all();
++
++            thread::sleep(CONNECTION_RETRY_INTERVAL);
++
++            continue;
++        }
++
+         if *lifecycle_state.read() == LifecycleState::Resumed {
+             if let Err(e) = connection_pipeline(
+                 capabilities.clone(),
+@@ -153,6 +408,13 @@ fn connection_pipeline(
+                 return Ok(());
+             }
+ 
++            // This discovery retry loop is unbounded: for the whole time SteamVR is restarting every
++            // attempt fails, because the server is simply not there yet. The recovery window bounds
++            // the wait instead of following it indefinitely.
++            if drop_expired_restart_recovery(&ctx, &event_queue, Instant::now()) {
++                return Ok(());
++            }
++
+             let mut is_broadcast_ok = false;
+             if let Err(e) = announcer_socket.announce_broadcast() {
+                 debug!("Couldn't announce to localhost, retrying on local... {e:}");
+@@ -193,6 +455,7 @@ fn connection_pipeline(
+         .to_con()?;
+ 
+     dbg_connection!("connection_pipeline: Send stream capabilities");
++    let restart_permitted = restart_is_permitted(&capabilities, &ctx);
+     proto_control_socket
+         .send(&ClientConnectionResult::ConnectionAccepted {
+             client_protocol_id: alvr_common::protocol_id_u64(),
+@@ -200,6 +463,15 @@ fn connection_pipeline(
              server_ip,
              streaming_capabilities: Some(
                  alvr_packets::encode_video_streaming_capabilities(&VideoStreamingCapabilities {
@@ -312,27 +659,113 @@ index 357bd43..49f83b8 100644
 +                        && !capabilities.pcvr_request.travel
 +                        && crate::video_decoder::pyrowave_supported(),
 +                    pcvr_request: alvr_packets::PcvrRequest {
-+                        allow_restart: capabilities
-+                            .restart_deadline
-+                            .is_some_and(|deadline| Instant::now() < deadline)
-+                            && capabilities.pcvr_request.allow_restart,
++                        // The exact same condition the server checks before claiming an attempt.
++                        allow_restart: restart_permitted,
 +                        ..capabilities.pcvr_request.clone()
 +                    },
                      default_view_resolution: capabilities.default_view_resolution,
                      supported_refresh_rates: capabilities.refresh_rates,
                      microphone_sample_rate,
-@@ -253,6 +264,10 @@ fn connection_pipeline(
+@@ -248,22 +520,85 @@ fn connection_pipeline(
+         .split(STREAMING_RECV_TIMEOUT)
+         .to_con()?;
+ 
+-    match control_receiver.recv(HANDSHAKE_ACTION_TIMEOUT) {
+-        Ok(ServerControlPacket::StartStream) => {
++    // The server either starts the stream or takes the connection into a restart. The wait is
++    // bounded: the normal handshake timeout applies to everything except an authorized restart
++    // attempt, which is announced by a marker and then gets one longer, non repeatable window.
++    let mut handshake = ServerHandshake::new(restart_permitted, Instant::now());
++    let outcome = loop {
++        let wait = handshake
++            .remaining(Instant::now())
++            .min(STREAMING_RECV_TIMEOUT);
++
++        match control_receiver.recv(wait) {
++            Ok(packet) => match handshake.on_packet(&packet, Instant::now()) {
++                HandshakeStep::KeepWaiting { preparing } => {
++                    if preparing {
++                        // The permission is spent from here on, whatever the outcome of this attempt
++                        // turns out to be: this context will not restart SteamVR again.
++                        ctx.restart_consumed.set(true);
++                        // The window that bounds the wait for the streamer to come back opens here
++                        // and survives the end of this handshake.
++                        ctx.start_restart_recovery(Instant::now());
++                        set_hud_message(&event_queue, RESTART_PREPARING_MESSAGE);
++                    }
++                }
++                HandshakeStep::Done(outcome) => break outcome,
++            },
++            Err(ConnectionError::TryAgain(_)) => {
++                if handshake.is_expired(Instant::now()) {
++                    // A timeout after the server claimed the attempt is a failed restart. Before
++                    // that it is the ordinary slow server, which is not a restart problem.
++                    break if handshake.preparing_seen {
++                        HandshakeOutcome::RestartTimeout
++                    } else {
++                        HandshakeOutcome::Timeout
++                    };
++                }
++            }
++            Err(e) => {
++                info!("Server disconnected. Cause: {e}");
++                break HandshakeOutcome::Disconnected;
++            }
++        }
++    };
++
++    match outcome {
++        HandshakeOutcome::StartStream => {
              info!("Stream starting");
              set_hud_message(&event_queue, STREAM_STARTING_MESSAGE);
          }
-+        Ok(ServerControlPacket::Reserved(reason)) if reason == "vq_restart_consent_required" => {
-+            set_hud_message(&event_queue, "Return to the Vibertemis hub and connect again to approve the SteamVR settings restart.");
+-        Ok(ServerControlPacket::Restarting) => {
++        HandshakeOutcome::Restarting => {
+             info!("Server restarting");
++            // The consent is spent: this context will not restart SteamVR again.
++            ctx.restart_consumed.set(true);
++            // A streamer that skips the marker claims the restart all the same, so the same window
++            // opens here. The search that follows is the unbounded part, so this is the only place
++            // that can tell the client when to stop waiting.
++            ctx.start_restart_recovery(Instant::now());
+             set_hud_message(&event_queue, SERVER_RESTART_MESSAGE);
+             return Ok(());
+         }
+-        Err(e) => {
+-            info!("Server disconnected. Cause: {e}");
++        HandshakeOutcome::Issue(reason) => {
++            report_pcvr_issue(&ctx, &event_queue, reason);
 +            return Ok(());
 +        }
-         Ok(ServerControlPacket::Restarting) => {
-             info!("Server restarting");
-             set_hud_message(&event_queue, SERVER_RESTART_MESSAGE);
-@@ -517,6 +532,11 @@ fn connection_pipeline(
++        HandshakeOutcome::Timeout => {
++            info!("Server did not answer the handshake in time");
+             set_hud_message(&event_queue, SERVER_DISCONNECTED_MESSAGE);
+             return Ok(());
+         }
+-        _ => {
++        HandshakeOutcome::RestartTimeout => {
++            // The attempt is not repeated by the client: the next connection has to ask the user
++            // again, and SteamVR was left alone.
++            info!("Streamer stopped answering while SteamVR was restarting");
++            report_pcvr_issue(&ctx, &event_queue, "restart_failed");
++            return Ok(());
++        }
++        HandshakeOutcome::Disconnected => {
++            set_hud_message(&event_queue, SERVER_DISCONNECTED_MESSAGE);
++            return Ok(());
++        }
++        HandshakeOutcome::Unexpected => {
+             info!("Unexpected packet");
+             set_hud_message(&event_queue, "Unexpected packet");
+             return Ok(());
+@@ -514,9 +849,18 @@ fn connection_pipeline(
+                     }
+                     Ok(ServerControlPacket::Restarting) => {
+                         info!("{SERVER_RESTART_MESSAGE}");
++                        ctx.restart_consumed.set(true);
++                        // The same window as in the handshake, for a streamer that restarts
++                        // SteamVR in the middle of a stream.
++                        ctx.start_restart_recovery(Instant::now());
                          set_hud_message(&event_queue, SERVER_RESTART_MESSAGE);
                          disconnect_notif.notify_one();
                      }
@@ -344,11 +777,288 @@ index 357bd43..49f83b8 100644
                      Ok(ServerControlPacket::ReservedBuffer(buffer)) => {
                          // NB: it's normal for deserialization to fail if server has different
                          // version
+@@ -581,6 +925,10 @@ fn connection_pipeline(
+ 
+     *connection_state_lock = ConnectionState::Streaming;
+ 
++    // The stream really runs, so the streamer did come back: the recovery window is over and the
++    // next restart has to open a new one.
++    ctx.clear_restart_recovery();
++
+     dbg_connection!("connection_pipeline: Unlock streams");
+ 
+     // Unlock CONNECTION_STATE and block thread
+@@ -614,3 +962,255 @@ fn connection_pipeline(
+ 
+     Ok(())
+ }
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    fn marker() -> ServerControlPacket {
++        ServerControlPacket::Reserved(RESTART_PREPARING_MARKER.into())
++    }
++
++    #[test]
++    fn a_normal_connect_is_decided_within_the_handshake_timeout() {
++        let start = Instant::now();
++        let handshake = ServerHandshake::new(false, start);
++
++        assert_eq!(handshake.remaining(start), HANDSHAKE_ACTION_TIMEOUT);
++        assert_eq!(
++            handshake.remaining(start + HANDSHAKE_ACTION_TIMEOUT - Duration::from_millis(1)),
++            Duration::from_millis(1)
++        );
++        assert!(!handshake.is_expired(
++            start + HANDSHAKE_ACTION_TIMEOUT - Duration::from_millis(1)
++        ));
++        assert!(handshake.is_expired(start + HANDSHAKE_ACTION_TIMEOUT));
++        // The wait never grows for a connection that cannot restart SteamVR.
++        assert_eq!(handshake.remaining(start + RESTART_PREPARING_TIMEOUT), Duration::ZERO);
++    }
++
++    #[test]
++    fn start_stream_is_accepted_with_and_without_a_permission() {
++        let start = Instant::now();
++
++        for restart_permitted in [false, true] {
++            let mut handshake = ServerHandshake::new(restart_permitted, start);
++
++            assert_eq!(
++                handshake.on_packet(&ServerControlPacket::StartStream, start),
++                HandshakeStep::Done(HandshakeOutcome::StartStream)
++            );
++        }
++    }
++
++    #[test]
++    fn an_authorized_marker_opens_one_longer_window() {
++        let start = Instant::now();
++        let mut handshake = ServerHandshake::new(true, start);
++        let marked_at = start + Duration::from_millis(1500);
++
++        assert_eq!(
++            handshake.on_packet(&marker(), marked_at),
++            HandshakeStep::KeepWaiting { preparing: true }
++        );
++        // The preparation is announced before the slow part, so the window covers the whole worker
++        // preflight and restart.
++        assert!(handshake.deadline > marked_at + Duration::from_secs(10));
++        // The permission is spent by the marker, so the user is asked only once.
++        assert!(handshake.permission_spent);
++        assert!(!handshake.accepts_marker());
++    }
++
++    #[test]
++    fn a_repeated_marker_never_extends_the_window() {
++        let start = Instant::now();
++        let mut handshake = ServerHandshake::new(true, start);
++        let marked_at = start + Duration::from_millis(100);
++        let deadline = marked_at + RESTART_PREPARING_TIMEOUT;
++
++        assert_eq!(
++            handshake.on_packet(&marker(), marked_at),
++            HandshakeStep::KeepWaiting { preparing: true }
++        );
++
++        // However many markers arrive, the wait is bounded by the first one.
++        for second in 1_u64..16 {
++            let at = marked_at + Duration::from_secs(second);
++
++            assert_eq!(
++                handshake.on_packet(&marker(), at),
++                HandshakeStep::KeepWaiting { preparing: false }
++            );
++            assert_eq!(handshake.deadline, deadline);
++        }
++
++        assert!(!handshake.is_expired(deadline - Duration::from_millis(1)));
++        assert!(handshake.is_expired(deadline));
++    }
++
++    #[test]
++    fn a_marker_for_an_unauthorized_attempt_is_refused() {
++        let start = Instant::now();
++
++        // This handshake never advertised a permission, e.g. because the consent was already spent
++        // by a previous connection.
++        let mut never_authorized = ServerHandshake::new(false, start);
++        assert!(never_authorized.permission_spent);
++
++        assert_eq!(
++            never_authorized.on_packet(&marker(), start),
++            HandshakeStep::Done(HandshakeOutcome::Unexpected)
++        );
++        // and it did not buy any extra waiting.
++        assert_eq!(never_authorized.deadline, start + HANDSHAKE_ACTION_TIMEOUT);
++
++        // The same after a legacy Restarting spent the permission.
++        let mut spent = ServerHandshake::new(true, start);
++        assert_eq!(
++            spent.on_packet(&ServerControlPacket::Restarting, start),
++            HandshakeStep::Done(HandshakeOutcome::Restarting)
++        );
++        assert!(spent.permission_spent);
++        assert_eq!(
++            spent.on_packet(&marker(), start),
++            HandshakeStep::Done(HandshakeOutcome::Unexpected)
++        );
++    }
++
++    #[test]
++    fn a_legacy_restarting_is_accepted_and_spends_the_permission() {
++        let start = Instant::now();
++        let mut handshake = ServerHandshake::new(true, start);
++
++        assert_eq!(
++            handshake.on_packet(&ServerControlPacket::Restarting, start),
++            HandshakeStep::Done(HandshakeOutcome::Restarting)
++        );
++        assert!(handshake.permission_spent);
++    }
++
++    #[test]
++    fn the_final_outcome_is_accepted_inside_the_preparing_window() {
++        let start = Instant::now();
++        let marked_at = start + Duration::from_millis(100);
++
++        for (packet, expected) in [
++            (
++                ServerControlPacket::Restarting,
++                HandshakeOutcome::Restarting,
++            ),
++            (
++                ServerControlPacket::Reserved(RESTART_FAILED_REASON.into()),
++                HandshakeOutcome::Issue("restart_failed"),
++            ),
++            (
++                ServerControlPacket::Reserved(RESTART_CONSENT_REQUIRED_REASON.into()),
++                HandshakeOutcome::Issue("restart_required"),
++            ),
++        ] {
++            let mut handshake = ServerHandshake::new(true, start);
++            assert_eq!(
++                handshake.on_packet(&marker(), marked_at),
++                HandshakeStep::KeepWaiting { preparing: true }
++            );
++
++            assert_eq!(
++                handshake.on_packet(
++                    &packet,
++                    marked_at + RESTART_PREPARING_TIMEOUT - Duration::from_millis(1)
++                ),
++                HandshakeStep::Done(expected)
++            );
++        }
++    }
++
++    #[test]
++    fn the_two_failure_codes_map_to_distinct_messages() {
++        let required = connection_issue_message("restart_required");
++        let failed = connection_issue_message("restart_failed");
++
++        assert_ne!(required, failed);
++        assert!(!required.is_empty() && !failed.is_empty());
++        // An unknown code never claims a restart problem.
++        assert_eq!(
++            connection_issue_message("anything else"),
++            "Streaming issue. Check the PC for more details."
++        );
++    }
++
++    #[test]
++    fn the_recovery_window_covers_the_steamvr_exit_and_startup() {
++        // SteamVR takes up to 45s to exit and up to 30s to start again, and the streamer answers
++        // nobody for that whole time.
++        assert!(RESTART_RECOVERY_TIMEOUT >= Duration::from_secs(45) + Duration::from_secs(30));
++    }
++
++    #[test]
++    fn the_window_opens_once_and_is_never_extended() {
++        let start = Instant::now();
++        let deadline = start + RESTART_RECOVERY_TIMEOUT;
++        let ctx = ConnectionContext::default();
++
++        ctx.start_restart_recovery(start);
++
++        // A repeated marker, or a reconnect claiming the same restart again, buys no extra time.
++        for second in 1_u64..16 {
++            ctx.start_restart_recovery(start + Duration::from_secs(second));
++
++            assert_eq!(*ctx.restart_recovery_deadline.lock(), Some(deadline));
++        }
++    }
++
++    #[test]
++    fn the_window_is_bounded_and_a_timeout_is_reported_once() {
++        let start = Instant::now();
++        let deadline = start + RESTART_RECOVERY_TIMEOUT;
++        let ctx = ConnectionContext::default();
++        ctx.start_restart_recovery(start);
++
++        assert!(!ctx.take_expired_restart_recovery(deadline - Duration::from_millis(1)));
++        // The timeout consumes the window, so the same failure is never reported twice.
++        assert!(ctx.take_expired_restart_recovery(deadline));
++        assert!(!ctx.take_expired_restart_recovery(deadline + Duration::from_secs(1)));
++    }
++
++    #[test]
++    fn only_a_stream_closes_the_window() {
++        let start = Instant::now();
++        let deadline = start + RESTART_RECOVERY_TIMEOUT;
++        let ctx = ConnectionContext::default();
++        ctx.start_restart_recovery(start);
++
++        // A configuration packet only proves the streamer accepted the connection, so the window is
++        // still open: a streamer that answers once and then disappears is caught as well.
++        assert!(!ctx.take_expired_restart_recovery(start + Duration::from_secs(1)));
++
++        ctx.clear_restart_recovery();
++
++        assert!(!ctx.take_expired_restart_recovery(deadline));
++    }
++
++    #[test]
++    fn a_closed_window_does_not_give_the_consent_back() {
++        let start = Instant::now();
++        let ctx = ConnectionContext::default();
++        ctx.restart_consumed.set(true);
++        ctx.start_restart_recovery(start);
++
++        ctx.clear_restart_recovery();
++
++        // Closing the window is not a consent reset: the next connection has to ask the user again.
++        assert!(ctx.restart_consumed.value());
++    }
++
++    #[test]
++    fn a_connection_without_a_restart_attempt_waits_as_before() {
++        let ctx = ConnectionContext::default();
++
++        // The ordinary search for the streamer is unbounded, as it always was: no window is open, so
++        // nothing times out.
++        assert!(!ctx.take_expired_restart_recovery(
++            Instant::now() + Duration::from_secs(24 * 60 * 60)
++        ));
++    }
++}
 diff --git a/alvr/client_core/src/lib.rs b/alvr/client_core/src/lib.rs
-index 7af1711..9f55d9f 100644
+index 7af1711..2237380 100644
 --- a/alvr/client_core/src/lib.rs
 +++ b/alvr/client_core/src/lib.rs
-@@ -61,6 +61,8 @@ pub enum ClientCoreEvent {
+@@ -44,6 +44,9 @@ pub enum ClientCoreEvent {
+     UpdateHudMessage(String),
+     StreamingStarted(Box<StreamConfig>),
+     StreamingStopped,
++    /// PCVR specific connection issue. The payload is a stable reason code:
++    /// "restart_required" or "restart_failed".
++    PcvrConnectionIssue(String),
+     Haptics {
+         device_id: u64,
+         duration: Duration,
+@@ -61,6 +64,8 @@ pub enum ClientCoreEvent {
  // Note: this struct may change without breaking network protocol changes
  #[derive(Clone)]
  pub struct ClientCapabilities {
@@ -825,8 +1535,624 @@ index 0000000..b46ad02
 +        assert!(parse_pyrowave_config(&data).is_err());
 +    }
 +}
+diff --git a/alvr/client_openxr/src/interaction.rs b/alvr/client_openxr/src/interaction.rs
+index 29ae735..218fe14 100644
+--- a/alvr/client_openxr/src/interaction.rs
++++ b/alvr/client_openxr/src/interaction.rs
+@@ -738,8 +738,134 @@ pub fn get_head_data(
+     Some((motion, view_params))
+ }
+ 
+-#[expect(clippy::too_many_arguments)]
+-pub fn get_hand_data(
++/// A pose is only usable when the runtime currently reports both components as valid. TRACKED is
++/// deliberately not required: inferred (VALID only) poses are legitimate runtime output.
++pub fn is_usable_location(location_flags: SpaceLocationFlags) -> bool {
++    location_flags.contains(
++        SpaceLocationFlags::POSITION_VALID | SpaceLocationFlags::ORIENTATION_VALID,
++    )
++}
++
++/// Velocity is only forwarded when the matching flag is set and the values are finite.
++fn valid_velocity(
++    flags: xr::SpaceVelocityFlags,
++    bit: xr::SpaceVelocityFlags,
++    velocity: Vec3,
++) -> Vec3 {
++    if flags.contains(bit) && velocity.is_finite() {
++        velocity
++    } else {
++        Vec3::ZERO
++    }
++}
++
++/// Unit-normalized rotation, refusing zero-length and non-finite quaternions: normalizing those
++/// would produce a rotation that is not a rotation.
++pub fn normalized_quat(quat: Quat) -> Option<Quat> {
++    if !(quat.x.is_finite() && quat.y.is_finite() && quat.z.is_finite() && quat.w.is_finite()) {
++        return None;
++    }
++
++    let length = quat.length();
++    if !length.is_finite() || length <= f32::EPSILON {
++        return None;
++    }
++
++    Some(Quat::from_xyzw(
++        quat.x / length,
++        quat.y / length,
++        quat.z / length,
++        quat.w / length,
++    ))
++}
++
++/// A pose is converted only when it is completely finite and carries a non-degenerate rotation.
++pub fn validated_pose(pose: Pose) -> Option<Pose> {
++    if !pose.position.is_finite() {
++        return None;
++    }
++
++    Some(Pose {
++        position: pose.position,
++        orientation: normalized_quat(pose.orientation)?,
++    })
++}
++
++const HAND_JOINT_COUNT: usize = 26;
++
++/// All the joints of a hand skeleton must be currently valid and finite, otherwise nothing is sent:
++/// a partially filled skeleton animates stale fingers.
++pub fn validated_hand_skeleton(joint_locations: &[xr::HandJointLocation]) -> Option<[Pose; 26]> {
++    if joint_locations.len() != HAND_JOINT_COUNT {
++        return None;
++    }
++
++    let mut joints: [Pose; HAND_JOINT_COUNT] = [Pose::default(); HAND_JOINT_COUNT];
++
++    for (joint, out) in joint_locations.iter().zip(joints.iter_mut()) {
++        if !is_usable_location(joint.location_flags) {
++            return None;
++        }
++
++        *out = validated_pose(crate::from_xr_pose(joint.pose))?;
++    }
++
++    Some(joints)
++}
++
++/// The velocity of a device between its current pose and its pose at a later time, derived from the
++/// two poses because some runtimes report velocities in the wrong frame of reference.
++///
++/// Both poses are validated, so a partially valid sample never produces a velocity. A zero relative
++/// rotation yields a zero angular velocity: `to_scaled_axis()` reports a zero vector for it, so no
++/// motion threshold is needed and a legitimate slow rotation is never dropped.
++fn pose_delta_velocity(current: Pose, future: Pose, time_offset_s: f32) -> Option<(Vec3, Vec3)> {
++    if !time_offset_s.is_finite() || time_offset_s <= 0.0 {
++        return None;
++    }
++
++    let current = validated_pose(current)?;
++    let future = validated_pose(future)?;
++
++    let linear = (future.position - current.position) / time_offset_s;
++    // The relative rotation is validated like any other rotation: a degenerate or non-finite
++    // quaternion has no axis.
++    let rotation = normalized_quat(future.orientation * current.orientation.inverse())?;
++    let angular = rotation.to_scaled_axis() / time_offset_s;
++
++    if !linear.is_finite() || !angular.is_finite() {
++        return None;
++    }
++
++    Some((linear, angular))
++}
++
++/// Some headsets use wrong frame of reference for linear and angular velocities, so for those the
++/// velocities are derived from the future pose. The derived values are used only when the future
++/// pose is valid and the result is finite.
++fn future_pose_velocity(
++    grip_space: &xr::Space,
++    reference_space: &xr::Space,
++    time: Duration,
++    future_time: Duration,
++    current: Pose,
++) -> Option<(Vec3, Vec3)> {
++    let future_location = grip_space
++        .locate(reference_space, crate::to_xr_time(future_time))
++        .ok()?;
++
++    if !is_usable_location(future_location.location_flags) {
++        return None;
++    }
++
++    pose_delta_velocity(
++        current,
++        crate::from_xr_pose(future_location.pose),
++        future_time.saturating_sub(time).as_secs_f32(),
++    )
++}
++
++fn get_controller_motion(
+     xr_session: &xr::Session<xr::OpenGlEs>,
+     platform: Platform,
+     reference_space: &xr::Space,
+@@ -747,118 +873,113 @@ pub fn get_hand_data(
+     future_time: Duration,
+     hand_source: &HandInteraction,
+     last_controller_pose: &mut Pose,
+-    last_palm_pose: &mut Pose,
+-) -> (Option<DeviceMotion>, Option<[Pose; 26]>) {
+-    let xr_time = crate::to_xr_time(time);
+-
+-    let controller_motion = if hand_source
++) -> Option<DeviceMotion> {
++    if !hand_source
+         .grip_action
+         .is_active(xr_session, xr::Path::NULL)
+         .unwrap_or(false)
+     {
+-        if let Ok((location, velocity)) = hand_source.grip_space.relate(reference_space, xr_time) {
+-            let orientation_valid = location
+-                .location_flags
+-                .contains(xr::SpaceLocationFlags::ORIENTATION_VALID);
+-            let position_valid = location
+-                .location_flags
+-                .contains(xr::SpaceLocationFlags::POSITION_VALID);
+-
+-            if orientation_valid {
+-                last_controller_pose.orientation = crate::from_xr_quat(location.pose.orientation);
+-            }
++        return None;
++    }
+ 
+-            if position_valid {
+-                last_controller_pose.position = crate::from_xr_vec3(location.pose.position);
+-            }
++    let (location, velocity) = hand_source
++        .grip_space
++        .relate(reference_space, crate::to_xr_time(time))
++        .ok()?;
+ 
+-            let pose = *last_controller_pose * hand_source.pose_offset;
+-
+-            let mut linear_velocity = crate::from_xr_vec3(velocity.linear_velocity);
+-            let mut angular_velocity = crate::from_xr_vec3(velocity.angular_velocity);
+-
+-            // Some headsets use wrong frame of reference for linear and angular velocities.
+-            if platform.is_pico() || platform.is_vive() {
+-                let xr_future_time = crate::to_xr_time(future_time);
+-
+-                let maybe_future_location = hand_source
+-                    .grip_space
+-                    .locate(reference_space, xr_future_time);
+-
+-                if let Ok(future_location) = maybe_future_location {
+-                    if future_location.location_flags.contains(
+-                        xr::SpaceLocationFlags::ORIENTATION_VALID
+-                            | xr::SpaceLocationFlags::POSITION_VALID,
+-                    ) {
+-                        let time_offset = future_time.saturating_sub(time);
+-
+-                        if !time_offset.is_zero() {
+-                            let time_offset_s = time_offset.as_secs_f32();
+-
+-                            linear_velocity = (crate::from_xr_vec3(future_location.pose.position)
+-                                - last_controller_pose.position)
+-                                / time_offset_s;
+-                            angular_velocity =
+-                                (crate::from_xr_quat(future_location.pose.orientation)
+-                                    * last_controller_pose.orientation.inverse())
+-                                .to_scaled_axis()
+-                                    / time_offset_s;
+-                        }
+-                    }
+-                }
+-            }
++    // The runtime did not report a usable pose right now. Emitting the default or the last known
++    // pose would move a controller in the game without any input.
++    if !is_usable_location(location.location_flags) {
++        return None;
++    }
+ 
+-            Some(DeviceMotion {
+-                pose,
+-                linear_velocity,
+-                angular_velocity,
+-            })
+-        } else {
+-            None
++    let pose = validated_pose(crate::from_xr_pose(location.pose))?;
++    *last_controller_pose = pose;
++
++    let mut linear_velocity = valid_velocity(
++        velocity.velocity_flags,
++        xr::SpaceVelocityFlags::LINEAR_VALID,
++        crate::from_xr_vec3(velocity.linear_velocity),
++    );
++    let mut angular_velocity = valid_velocity(
++        velocity.velocity_flags,
++        xr::SpaceVelocityFlags::ANGULAR_VALID,
++        crate::from_xr_vec3(velocity.angular_velocity),
++    );
++
++    if platform.is_pico() || platform.is_vive() {
++        if let Some((linear, angular)) = future_pose_velocity(
++            &hand_source.grip_space,
++            reference_space,
++            time,
++            future_time,
++            pose,
++        ) {
++            linear_velocity = linear;
++            angular_velocity = angular;
+         }
+-    } else {
+-        None
+-    };
++    }
+ 
+-    let hand_joints = if let Some(tracker) = &hand_source.skeleton_tracker {
+-        let xr_now = crate::xr_runtime_now(xr_session.instance()).unwrap_or(xr_time);
++    Some(DeviceMotion {
++        pose: validated_pose(pose * hand_source.pose_offset)?,
++        linear_velocity,
++        angular_velocity,
++    })
++}
+ 
+-        if let Some(joint_locations) = reference_space
+-            .locate_hand_joints(tracker, xr_now)
+-            .ok()
+-            .flatten()
+-        {
+-            if joint_locations[0]
+-                .location_flags
+-                .contains(xr::SpaceLocationFlags::ORIENTATION_VALID)
+-            {
+-                last_palm_pose.orientation =
+-                    crate::from_xr_quat(joint_locations[0].pose.orientation);
+-            }
++fn get_hand_skeleton(
++    xr_session: &xr::Session<xr::OpenGlEs>,
++    reference_space: &xr::Space,
++    time: Duration,
++    hand_source: &HandInteraction,
++    last_palm_pose: &mut Pose,
++) -> Option<[Pose; 26]> {
++    let tracker = hand_source.skeleton_tracker.as_ref()?;
+ 
+-            if joint_locations[0]
+-                .location_flags
+-                .contains(xr::SpaceLocationFlags::POSITION_VALID)
+-            {
+-                last_palm_pose.position = crate::from_xr_vec3(joint_locations[0].pose.position);
+-            }
++    let xr_now = crate::xr_runtime_now(xr_session.instance())
++        .unwrap_or_else(|| crate::to_xr_time(time));
+ 
+-            let mut joints: [_; 26] = joint_locations
+-                .iter()
+-                .map(|j| crate::from_xr_pose(j.pose))
+-                .collect::<Vec<_>>()
+-                .try_into()
+-                .unwrap();
++    let joint_locations = reference_space
++        .locate_hand_joints(tracker, xr_now)
++        .ok()
++        .flatten()?;
+ 
+-            joints[0] = *last_palm_pose;
++    let joints = validated_hand_skeleton(&joint_locations)?;
+ 
+-            Some(joints)
+-        } else {
+-            None
+-        }
+-    } else {
+-        None
+-    };
++    // The palm is joint 0 of the same poll: the skeleton is never completed with a stale palm.
++    *last_palm_pose = joints[0];
++
++    Some(joints)
++}
++
++#[expect(clippy::too_many_arguments)]
++pub fn get_hand_data(
++    xr_session: &xr::Session<xr::OpenGlEs>,
++    platform: Platform,
++    reference_space: &xr::Space,
++    time: Duration,
++    future_time: Duration,
++    hand_source: &HandInteraction,
++    last_controller_pose: &mut Pose,
++    last_palm_pose: &mut Pose,
++) -> (Option<DeviceMotion>, Option<[Pose; 26]>) {
++    let controller_motion = get_controller_motion(
++        xr_session,
++        platform,
++        reference_space,
++        time,
++        future_time,
++        hand_source,
++        last_controller_pose,
++    );
++
++    let hand_joints = get_hand_skeleton(
++        xr_session,
++        reference_space,
++        time,
++        hand_source,
++        last_palm_pose,
++    );
+ 
+     (controller_motion, hand_joints)
+ }
+@@ -1325,3 +1446,262 @@ pub fn get_bd_body_tracking_points(
+ 
+     Vec::new()
+ }
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use xr::{HandJointLocation, SpaceVelocityFlags};
++
++    fn valid_flags() -> SpaceLocationFlags {
++        SpaceLocationFlags::POSITION_VALID | SpaceLocationFlags::ORIENTATION_VALID
++    }
++
++    fn joint(flags: SpaceLocationFlags) -> HandJointLocation {
++        HandJointLocation {
++            location_flags: flags,
++            pose: xr::Posef {
++                orientation: xr::Quaternionf {
++                    x: 0.0,
++                    y: 0.0,
++                    z: 0.0,
++                    w: 1.0,
++                },
++                position: xr::Vector3f {
++                    x: 0.01,
++                    y: 0.02,
++                    z: 0.03,
++                },
++            },
++            radius: 0.01,
++        }
++    }
++
++    #[test]
++    fn inferred_pose_is_usable() {
++        // VALID without TRACKED is a legitimate runtime output and must be kept.
++        assert!(!valid_flags().contains(SpaceLocationFlags::POSITION_TRACKED));
++        assert!(is_usable_location(valid_flags()));
++    }
++
++    #[test]
++    fn incomplete_location_is_rejected() {
++        assert!(!is_usable_location(SpaceLocationFlags::POSITION_VALID));
++        assert!(!is_usable_location(SpaceLocationFlags::ORIENTATION_VALID));
++        assert!(!is_usable_location(SpaceLocationFlags::POSITION_TRACKED));
++        assert!(!is_usable_location(SpaceLocationFlags::from_raw(0)));
++    }
++
++    #[test]
++    fn velocity_needs_flag_and_finite_values() {
++        let velocity = Vec3::new(1.0, 2.0, 3.0);
++
++        assert_eq!(
++            valid_velocity(
++                SpaceVelocityFlags::LINEAR_VALID,
++                SpaceVelocityFlags::LINEAR_VALID,
++                velocity
++            ),
++            velocity
++        );
++        // missing flag
++        assert_eq!(
++            valid_velocity(
++                SpaceVelocityFlags::from_raw(0),
++                SpaceVelocityFlags::LINEAR_VALID,
++                velocity
++            ),
++            Vec3::ZERO
++        );
++        // wrong bit
++        assert_eq!(
++            valid_velocity(
++                SpaceVelocityFlags::ANGULAR_VALID,
++                SpaceVelocityFlags::LINEAR_VALID,
++                velocity
++            ),
++            Vec3::ZERO
++        );
++        // not finite
++        assert_eq!(
++            valid_velocity(
++                SpaceVelocityFlags::LINEAR_VALID,
++                SpaceVelocityFlags::LINEAR_VALID,
++                Vec3::new(f32::NAN, 0.0, 0.0)
++            ),
++            Vec3::ZERO
++        );
++        assert_eq!(
++            valid_velocity(
++                SpaceVelocityFlags::ANGULAR_VALID,
++                SpaceVelocityFlags::ANGULAR_VALID,
++                Vec3::new(0.0, f32::INFINITY, 0.0)
++            ),
++            Vec3::ZERO
++        );
++    }
++
++    #[test]
++    fn pose_validation_rejects_garbage() {
++        assert!(validated_pose(Pose {
++            position: Vec3::new(f32::NAN, 0.0, 0.0),
++            orientation: Quat::IDENTITY,
++        })
++        .is_none());
++        // a zero-length quaternion cannot be normalized into a rotation
++        assert!(normalized_quat(Quat::from_xyzw(0.0, 0.0, 0.0, 0.0)).is_none());
++        assert!(normalized_quat(Quat::from_xyzw(f32::NAN, 0.0, 0.0, 1.0)).is_none());
++    }
++
++    #[test]
++    fn pose_validation_normalizes_rotation() {
++        let pose = validated_pose(Pose {
++            position: Vec3::new(0.1, 0.2, 0.3),
++            orientation: Quat::from_xyzw(2.0, 0.0, 0.0, 2.0),
++        })
++        .unwrap();
++
++        assert!((pose.orientation.length() - 1.0).abs() < 1e-5);
++        assert_eq!(pose.position, Vec3::new(0.1, 0.2, 0.3));
++    }
++
++    #[test]
++    fn skeleton_needs_every_joint_valid() {
++        let joints: Vec<_> = (0..HAND_JOINT_COUNT)
++            .map(|_| joint(valid_flags()))
++            .collect();
++
++        let skeleton = validated_hand_skeleton(&joints).unwrap();
++        assert_eq!(skeleton.len(), HAND_JOINT_COUNT);
++        assert_eq!(skeleton[0].position, Vec3::new(0.01, 0.02, 0.03));
++
++        // one invalid joint among 26 valid ones invalidates the whole skeleton
++        for index in [0, 13, HAND_JOINT_COUNT - 1] {
++            let mut joints = joints.clone();
++            joints[index] = joint(SpaceLocationFlags::POSITION_VALID);
++
++            assert!(validated_hand_skeleton(&joints).is_none());
++        }
++    }
++
++    #[test]
++    fn skeleton_rejects_non_finite_joint() {
++        let mut joints: Vec<_> = (0..HAND_JOINT_COUNT)
++            .map(|_| joint(valid_flags()))
++            .collect();
++        joints[7].pose.position.x = f32::NAN;
++
++        assert!(validated_hand_skeleton(&joints).is_none());
++    }
++
++    fn identity_pose() -> Pose {
++        Pose {
++            position: Vec3::ZERO,
++            orientation: Quat::IDENTITY,
++        }
++    }
++
++    #[test]
++    fn an_unchanged_future_pose_gives_no_spin() {
++        // to_scaled_axis() reports a zero vector for a zero rotation, so this is not a constant
++        // spin and no motion threshold is needed to get here.
++        let (linear, angular) = pose_delta_velocity(identity_pose(), identity_pose(), 0.01).unwrap();
++
++        assert_eq!(linear, Vec3::ZERO);
++        assert_eq!(angular, Vec3::ZERO);
++    }
++
++    #[test]
++    fn a_slow_rotation_is_kept() {
++        // Half a degree in 10ms: a real rotation, slow enough that a motion threshold would have
++        // reported no motion at all.
++        let step = 0.5_f32.to_radians();
++        let time_offset_s = 0.01;
++
++        let (_, angular) = pose_delta_velocity(
++            identity_pose(),
++            Pose {
++                position: Vec3::ZERO,
++                orientation: Quat::from_rotation_y(step),
++            },
++            time_offset_s,
++        )
++        .unwrap();
++
++        assert!((angular.length() - step / time_offset_s).abs() < 1e-3);
++        assert!((angular.normalize() - Vec3::Y).length() < 1e-3);
++    }
++
++    #[test]
++    fn a_fast_rotation_reports_its_own_magnitude() {
++        let step = 90_f32.to_radians();
++        let time_offset_s = 0.02;
++
++        let (_, angular) = pose_delta_velocity(
++            identity_pose(),
++            Pose {
++                position: Vec3::ZERO,
++                orientation: Quat::from_rotation_z(step),
++            },
++            time_offset_s,
++        )
++        .unwrap();
++
++        assert!((angular.length() - step / time_offset_s).abs() < 1e-2);
++        assert!((angular.normalize() - Vec3::Z).length() < 1e-3);
++    }
++
++    #[test]
++    fn the_linear_velocity_comes_from_the_future_pose() {
++        let future = Pose {
++            position: Vec3::new(0.02, 0.0, 0.0),
++            orientation: Quat::IDENTITY,
++        };
++
++        let (linear, _) = pose_delta_velocity(identity_pose(), future, 0.02).unwrap();
++
++        assert!((linear - Vec3::X).length() < 1e-5);
++    }
++
++    #[test]
++    fn no_velocity_without_a_usable_pair_of_poses() {
++        let current = identity_pose();
++
++        // a non-finite future position
++        assert!(pose_delta_velocity(
++            current,
++            Pose {
++                position: Vec3::new(f32::NAN, 0.0, 0.0),
++                orientation: Quat::IDENTITY,
++            },
++            0.01
++        )
++        .is_none());
++
++        // a degenerate future rotation
++        assert!(pose_delta_velocity(
++            current,
++            Pose {
++                position: Vec3::ZERO,
++                orientation: Quat::from_xyzw(0.0, 0.0, 0.0, 0.0),
++            },
++            0.01
++        )
++        .is_none());
++
++        // a non-finite current rotation
++        assert!(pose_delta_velocity(
++            Pose {
++                position: Vec3::ZERO,
++                orientation: Quat::from_xyzw(f32::INFINITY, 0.0, 0.0, 1.0),
++            },
++            current,
++            0.01
++        )
++        .is_none());
++
++        // an offset that is not a duration
++        assert!(pose_delta_velocity(current, current, 0.0).is_none());
++        assert!(pose_delta_velocity(current, current, -0.01).is_none());
++        assert!(pose_delta_velocity(current, current, f32::NAN).is_none());
++    }
++}
 diff --git a/alvr/client_openxr/src/lib.rs b/alvr/client_openxr/src/lib.rs
-index 3e35add..4271c70 100644
+index 3e35add..20765e5 100644
 --- a/alvr/client_openxr/src/lib.rs
 +++ b/alvr/client_openxr/src/lib.rs
 @@ -4,6 +4,7 @@ mod graphics;
@@ -848,12 +2174,22 @@ index 3e35add..4271c70 100644
              default_view_resolution,
              refresh_rates,
              foveated_encoding: platform != Platform::Unknown,
+@@ -416,6 +420,9 @@ pub fn entry_point() {
+ 
+                         stream_context = None;
+                     }
++                    ClientCoreEvent::PcvrConnectionIssue(reason) => {
++                        pcvr_request::report_connection_issue(&reason);
++                    }
+                     ClientCoreEvent::Haptics {
+                         device_id,
+                         duration,
 diff --git a/alvr/client_openxr/src/pcvr_request.rs b/alvr/client_openxr/src/pcvr_request.rs
 new file mode 100644
-index 0000000..71631e7
+index 0000000..5a91e21
 --- /dev/null
 +++ b/alvr/client_openxr/src/pcvr_request.rs
-@@ -0,0 +1,139 @@
+@@ -0,0 +1,172 @@
 +use alvr_packets::PcvrRequest;
 +#[cfg(target_os = "android")]
 +fn android_request() -> alvr_common::anyhow::Result<(PcvrRequest, Option<std::time::Instant>)> {
@@ -993,6 +2329,39 @@ index 0000000..71631e7
 +        }
 +    }
 +}
++
++// Called only when the server asks for a SteamVR settings restart, or reports that the managed
++// restart could not be prepared. Never called from a preference.
++pub fn report_connection_issue(reason: &str) {
++    #[cfg(target_os = "android")]
++    {
++        use jni::{
++            objects::{JObject, JValue},
++            JavaVM,
++        };
++        let context = ndk_context::android_context();
++        let result = (|| -> alvr_common::anyhow::Result<()> {
++            let vm = unsafe { JavaVM::from_raw(context.vm().cast())? };
++            let mut env = vm.attach_current_thread()?;
++            let activity = unsafe { JObject::from_raw(context.context().cast()) };
++            let text = env.new_string(reason)?;
++            let result = env.call_method(
++                &activity,
++                "onPcvrConnectionIssue",
++                "(Ljava/lang/String;)V",
++                &[JValue::Object(&text)],
++            );
++            if result.is_err() {
++                let _ = env.exception_clear();
++            }
++            result?;
++            Ok(())
++        })();
++        if let Err(error) = result {
++            alvr_common::warn!("Could not report connection issue: {error}");
++        }
++    }
++}
 diff --git a/alvr/client_openxr/src/stream.rs b/alvr/client_openxr/src/stream.rs
 index ca32945..20c6ff0 100644
 --- a/alvr/client_openxr/src/stream.rs
@@ -1106,10 +2475,174 @@ index 995888e..50a2099 100644
              refresh_rate_hint,
              game_audio_sample_rate,
 diff --git a/alvr/server_core/src/connection.rs b/alvr/server_core/src/connection.rs
-index 3144dfe..eb02f91 100644
+index 3144dfe..3931c4a 100644
 --- a/alvr/server_core/src/connection.rs
 +++ b/alvr/server_core/src/connection.rs
-@@ -691,7 +691,7 @@ fn connection_pipeline(
+@@ -14,7 +14,7 @@ use alvr_common::{
+     info,
+     parking_lot::{Condvar, Mutex, RwLock},
+     settings_schema::Switch,
+-    warn, AnyhowToCon, ConResult, ConnectionError, ConnectionState, LifecycleState, Pose,
++    warn, AnyhowToCon, ConResult, ConnectionError, ConnectionState, LifecycleState, Pose, ToCon,
+     BUTTON_INFO, CONTROLLER_PROFILE_INFO, QUEST_CONTROLLER_PROFILE_PATH,
+ };
+ use alvr_events::{AdbEvent, ButtonEvent, EventType};
+@@ -45,6 +45,12 @@ const HANDSHAKE_ACTION_TIMEOUT: Duration = Duration::from_secs(2);
+ pub const STREAMING_RECV_TIMEOUT: Duration = Duration::from_millis(500);
+ const REAL_TIME_UPDATE_INTERVAL: Duration = Duration::from_secs(1);
+ 
++/// Sent as soon as a restart attempt is claimed and before the slow preparation, so the client
++/// stops expecting StartStream within the handshake timeout. Must match the client side.
++const RESTART_PREPARING_MARKER: &str = "vq_restart_preparing";
++const RESTART_FAILED_REASON: &str = "vq_restart_failed";
++const RESTART_CONSENT_REQUIRED_REASON: &str = "vq_restart_consent_required";
++
+ const MAX_UNREAD_PACKETS: usize = 10; // Applies per stream
+ 
+ pub struct VideoPacket {
+@@ -167,7 +173,8 @@ pub fn contruct_openvr_config(session: &SessionConfig) -> OpenvrConfig {
+         enable_vive_tracker_proxy: settings.headset.enable_vive_tracker_proxy,
+         minimum_idr_interval_ms: settings.connection.minimum_idr_interval_ms,
+         adapter_index: settings.video.adapter_index,
+-        codec: settings.video.preferred_codec as _,
++        // Note: the codec is negotiated per connection, it is applied by `NegotiatedOpenvrFields`
++        // and must not be overwritten with the dashboard preference here.
+         h264_profile: settings.video.encoder_config.h264_profile as u32,
+         rate_control_mode: settings.video.encoder_config.rate_control_mode as u32,
+         filler_data: settings.video.encoder_config.filler_data,
+@@ -242,6 +249,131 @@ pub fn contruct_openvr_config(session: &SessionConfig) -> OpenvrConfig {
+     }
+ }
+ 
++/// The parts of `OpenvrConfig` that are negotiated with the client for a stream. They are the only
++/// ones that must be preserved verbatim when the static settings are rebuilt, because they are the
++/// values the driver is actually running with.
++#[derive(Clone, Copy, Debug, PartialEq)]
++pub struct NegotiatedOpenvrFields {
++    pub codec: u8,
++    pub eye_resolution_width: u32,
++    pub eye_resolution_height: u32,
++    pub target_eye_resolution_width: u32,
++    pub target_eye_resolution_height: u32,
++    pub refresh_rate: u32,
++    pub enable_foveated_encoding: bool,
++    pub h264_profile: u32,
++    pub use_10bit_encoder: bool,
++    pub use_full_range_encoding: bool,
++    pub enable_hdr: bool,
++    pub encoding_gamma: f32,
++}
++
++impl NegotiatedOpenvrFields {
++    pub fn apply(self, config: &mut OpenvrConfig) {
++        config.eye_resolution_width = self.eye_resolution_width;
++        config.eye_resolution_height = self.eye_resolution_height;
++        config.target_eye_resolution_width = self.target_eye_resolution_width;
++        config.target_eye_resolution_height = self.target_eye_resolution_height;
++        config.refresh_rate = self.refresh_rate;
++        config.enable_foveated_encoding = self.enable_foveated_encoding;
++        config.h264_profile = self.h264_profile;
++        config.use_10bit_encoder = self.use_10bit_encoder;
++        config.use_full_range_encoding = self.use_full_range_encoding;
++        config.enable_hdr = self.enable_hdr;
++        config.encoding_gamma = self.encoding_gamma;
++        config.codec = self.codec;
++    }
++}
++
++/// The config the shutdown path writes to disk: the static settings rebuilt from the dashboard, with
++/// the fields that were actually negotiated on top of them.
++///
++/// `negotiated` is None when no stream ever started, so a refused request or a failed restart
++/// preparation can never change what the next SteamVR boot reads.
++pub fn config_for_next_boot(
++    session: &SessionConfig,
++    negotiated: Option<&NegotiatedOpenvrFields>,
++) -> OpenvrConfig {
++    let mut config = contruct_openvr_config(session);
++
++    if let Some(fields) = negotiated {
++        fields.apply(&mut config);
++    }
++
++    config
++}
++
++/// What the handshake may do with the negotiated config. Streaming is allowed only when the config
++/// is exactly the one the driver booted with: a session.json that already holds the desired config
++/// (a previous handshake or shutdown) says nothing about the running SteamVR instance.
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub enum StreamAction {
++    Start,
++    ConsentRequired,
++    Restart,
++}
++
++pub fn boot_config_matches(
++    boot_config: Option<&OpenvrConfig>,
++    negotiated_config: &OpenvrConfig,
++) -> bool {
++    boot_config.is_some_and(|boot| boot == negotiated_config)
++}
++
++pub fn decide_stream_action(boot_matches: bool, client_allows_restart: bool) -> StreamAction {
++    if boot_matches {
++        StreamAction::Start
++    } else if client_allows_restart {
++        StreamAction::Restart
++    } else {
++        StreamAction::ConsentRequired
++    }
++}
++
++/// `Settings` derives `Serialize` but not `PartialEq`, so the settings a restart was decided from
++/// are compared as the JSON they serialize to.
++///
++/// A snapshot that cannot be read back proves nothing, so it counts as changed: nothing is ever
++/// written over settings this handshake never saw. Only the settings are fingerprinted, because the
++/// rest of the session holds the statistics and the client states, which change on their own and
++/// would invalidate the restart for no reason.
++pub fn settings_snapshot_unchanged(
++    at_prepare: &serde_json::Value,
++    now: serde_json::Result<serde_json::Value>,
++) -> bool {
++    now.is_ok_and(|now| at_prepare == &now)
++}
++
++pub fn snapshot_lifecycle(state: &LifecycleState) -> LifecycleState {
++    match state {
++        LifecycleState::StartingUp => LifecycleState::StartingUp,
++        LifecycleState::Idle => LifecycleState::Idle,
++        LifecycleState::Resumed => LifecycleState::Resumed,
++        LifecycleState::ShuttingDown => LifecycleState::ShuttingDown,
++    }
++}
++
++/// Whether the state a SteamVR restart was decided from survived the worker preflight.
++///
++/// Every condition is required: the settings and the pending config are the ones the desired config
++/// was built from, the session must still be the resumed one it was, and the client that gave the
++/// consent must still be there. Anything that could not be revalidated counts as changed, so a
++/// restart that cannot prove the session is unchanged fails closed: it persists nothing and leaves
++/// the running SteamVR alone.
++pub fn restart_preconditions_hold(
++    settings_unchanged: bool,
++    pending_config_unchanged: bool,
++    lifecycle_unchanged: bool,
++    lifecycle: LifecycleState,
++    client_still_eligible: bool,
++) -> bool {
++    settings_unchanged
++        && pending_config_unchanged
++        && lifecycle_unchanged
++        && lifecycle == LifecycleState::Resumed
++        && client_still_eligible
++}
++
+ // Alternate connection trials with manual IPs and clients discovered on the local network
+ pub fn handshake_loop(ctx: Arc<ConnectionContext>, lifecycle_state: Arc<RwLock<LifecycleState>>) {
+     dbg_connection!("handshake_loop: Begin");
+@@ -691,7 +823,7 @@ fn connection_pipeline(
          streaming_caps.prefer_full_range
      };
  
@@ -1118,7 +2651,7 @@ index 3144dfe..eb02f91 100644
          .video
          .encoder_config
          .hdr
-@@ -712,21 +712,19 @@ fn connection_pipeline(
+@@ -712,21 +844,19 @@ fn connection_pipeline(
          streaming_caps.preferred_encoding_gamma
      };
  
@@ -1153,7 +2686,7 @@ index 3144dfe..eb02f91 100644
  
      #[cfg_attr(target_os = "linux", allow(unused_variables))]
      let game_audio_sample_rate = if let Switch::Enabled(game_audio_config) =
-@@ -773,6 +771,7 @@ fn connection_pipeline(
+@@ -773,6 +903,7 @@ fn connection_pipeline(
      let stream_config_packet = alvr_packets::encode_stream_config(
          session_manager_lock.session(),
          &NegotiatedStreamingConfig {
@@ -1161,22 +2694,190 @@ index 3144dfe..eb02f91 100644
              view_resolution: stream_view_resolution,
              refresh_rate_hint: fps,
              game_audio_sample_rate,
-@@ -805,6 +804,14 @@ fn connection_pipeline(
-     new_openvr_config.codec = codec as _;
+@@ -791,27 +922,167 @@ fn connection_pipeline(
+         proto_socket.split(STREAMING_RECV_TIMEOUT).to_con()?;
  
-     if session_manager_lock.session().openvr_config != new_openvr_config {
-+        if !streaming_caps.pcvr_request.allow_restart {
+     let mut new_openvr_config = contruct_openvr_config(session_manager_lock.session());
+-    new_openvr_config.eye_resolution_width = stream_view_resolution.x;
+-    new_openvr_config.eye_resolution_height = stream_view_resolution.y;
+-    new_openvr_config.target_eye_resolution_width = target_view_resolution.x;
+-    new_openvr_config.target_eye_resolution_height = target_view_resolution.y;
+-    new_openvr_config.refresh_rate = fps as _;
+-    new_openvr_config.enable_foveated_encoding = enable_foveated_encoding;
+-    new_openvr_config.h264_profile = encoder_profile as _;
+-    new_openvr_config.use_10bit_encoder = enable_10_bits_encoding;
+-    new_openvr_config.use_full_range_encoding = use_full_range;
+-    new_openvr_config.enable_hdr = enable_hdr;
+-    new_openvr_config.encoding_gamma = encoding_gamma;
+-    new_openvr_config.codec = codec as _;
+-
+-    if session_manager_lock.session().openvr_config != new_openvr_config {
++    let negotiated_fields = NegotiatedOpenvrFields {
++        codec: codec as _,
++        eye_resolution_width: stream_view_resolution.x,
++        eye_resolution_height: stream_view_resolution.y,
++        target_eye_resolution_width: target_view_resolution.x,
++        target_eye_resolution_height: target_view_resolution.y,
++        refresh_rate: fps as _,
++        enable_foveated_encoding,
++        h264_profile: encoder_profile as _,
++        use_10bit_encoder: enable_10_bits_encoding,
++        use_full_range_encoding: use_full_range,
++        enable_hdr,
++        encoding_gamma,
++    };
++    negotiated_fields.apply(&mut new_openvr_config);
++
++    let stream_action = decide_stream_action(
++        boot_config_matches(ctx.boot_openvr_config.as_ref(), &new_openvr_config),
++        streaming_caps.pcvr_request.allow_restart,
++    );
++
++    if stream_action != StreamAction::Start {
++        // The running SteamVR instance still uses the config it booted with, so this handshake
++        // never reaches StartStream.
++        if stream_action == StreamAction::ConsentRequired {
++            drop(session_manager_lock);
 +            control_sender
 +                .send(&ServerControlPacket::Reserved(
-+                    "vq_restart_consent_required".into(),
++                    RESTART_CONSENT_REQUIRED_REASON.into(),
 +                ))
 +                .ok();
 +            con_bail!("PCVR settings require SteamVR restart. Reconnect from the headset and confirm the restart prompt.");
 +        }
++
++        let Some(attempt) = crate::managed_restart::try_begin_attempt() else {
++            drop(session_manager_lock);
++            control_sender
++                .send(&ServerControlPacket::Reserved(RESTART_FAILED_REASON.into()))
++                .ok();
++            con_bail!("A SteamVR restart is already in progress for this streamer.");
++        };
++
++        // The worker preflight alone can take up to READY_TIMEOUT, and the dashboard and every other
++        // handshake need the session lock while it runs, so it is not held across it. The state
++        // this restart was decided from is captured here instead, and revalidated below before
++        // anything is written: the settings as JSON, the pending config the desired one is built on
++        // top of, and the lifecycle state.
++        let settings_at_prepare = serde_json::to_value(session_manager_lock.settings()).to_con()?;
++        let pending_config_at_prepare = session_manager_lock.session().openvr_config.clone();
++        let lifecycle_at_prepare = snapshot_lifecycle(&lifecycle_state.read());
++
++        drop(session_manager_lock);
++
++        // The client is told before the slow part, not after: the worker preflight alone can take
++        // up to READY_TIMEOUT, so a client still waiting for StartStream with the handshake
++        // timeout would disconnect and never spend the consent it just gave.
++        if control_sender
++            .send(&ServerControlPacket::Reserved(RESTART_PREPARING_MARKER.into()))
++            .is_err()
++        {
++            // The client is gone, so SteamVR must not be cycled for nobody. The guard gives the
++            // claim back, and a client that comes back has to ask for the consent again.
++            warn!("Abandoned the SteamVR restart: the client stopped listening");
++            drop(attempt);
++
++            con_bail!("SteamVR restart abandoned: the client is no longer listening.");
++        }
++
++        let worker = match crate::managed_restart::prepare(attempt) {
++            Ok(worker) => worker,
++            Err(e) => {
++                // The claim went into the preparation, so its own drop gave it back, exactly once:
++                // a later explicit attempt can retry, and a claim made in the meantime is untouched.
++                error!("{e}");
++
++                control_sender
++                    .send(&ServerControlPacket::Reserved(RESTART_FAILED_REASON.into()))
++                    .ok();
++                con_bail!("SteamVR restart could not be prepared: {e}");
++            }
++        };
++
++        // Everything the restart depends on is revalidated under the session lock again, so the
++        // config is persisted and the commit happen against the state it was actually built from.
++        let mut session_manager_lock = SESSION_MANAGER.write();
++        let current_settings = serde_json::to_value(session_manager_lock.settings());
++        if let Err(e) = &current_settings {
++            error!("Could not revalidate the session settings: {e}");
++        }
++        let settings_unchanged =
++            settings_snapshot_unchanged(&settings_at_prepare, current_settings);
++
++        // The client is still the one that gave the consent: it must not have been removed or
++        // untrusted while the helper preflighted.
++        let client_still_eligible = session_manager_lock
++            .client_list()
++            .get(&client_hostname)
++            .is_some_and(|client| client.trusted);
++        let pending_config_unchanged =
++            session_manager_lock.session().openvr_config == pending_config_at_prepare;
++
++        let lifecycle_now = snapshot_lifecycle(&lifecycle_state.read());
++        if !restart_preconditions_hold(
++            settings_unchanged,
++            pending_config_unchanged,
++            lifecycle_now == lifecycle_at_prepare,
++            lifecycle_now,
++            client_still_eligible,
++        ) {
++            // Only the helper spawned for this attempt stops: the running SteamVR instance and the
++            // config on disk are left exactly as they are.
++            drop(worker);
++            error!("Aborting the SteamVR restart: the session changed while it was prepared");
++
++            control_sender
++                .send(&ServerControlPacket::Reserved(RESTART_FAILED_REASON.into()))
++                .ok();
++            con_bail!("SteamVR restart aborted: the session changed while it was prepared.");
++        }
++
++        // The worker restarts SteamVR right after the commit, and the new instance reads this
++        // file: the pending config must be on disk before the commit.
          session_manager_lock.session_mut().openvr_config = new_openvr_config;
  
++        // Only now, with an approved attempt and the pending config persisted, are these the
++        // fields the next SteamVR instance boots with. A refused request, an abandoned attempt, a
++        // failed preparation and a session that changed never reach this point, so the shutdown
++        // path cannot write a config SteamVR never ran.
++        *ctx.negotiated_openvr_fields.lock() = Some(negotiated_fields);
++
++        // Released before notifying: RestartPending drops the server context, which joins this
++        // thread.
++        drop(session_manager_lock);
++
++        let outcome = match worker.commit() {
++            Ok(outcome) => outcome,
++            Err(e) => {
++                error!("{e}");
++
++                control_sender
++                    .send(&ServerControlPacket::Reserved(RESTART_FAILED_REASON.into()))
++                    .ok();
++                con_bail!("SteamVR restart could not be committed: {e}");
++            }
++        };
++
          control_sender.send(&ServerControlPacket::Restarting).ok();
-@@ -833,6 +840,17 @@ fn connection_pipeline(
+ 
+-        crate::notify_restart_driver();
++        // The manager worker cycles SteamVR but cannot unload the driver, so only there does the
++        // driver still have to exit. The dashboard fallback that was just notified performs the
++        // exit itself, and a second request would compete with it.
++        if outcome.needs_managed_quit() {
++            ctx.events_sender.send(ServerCoreEvent::RestartPending).ok();
++        }
++
++        con_bail!("PCVR settings applied. Waiting for the SteamVR restart to complete.");
+     }
+ 
++    // The stream is actually starting with these fields, so the shutdown path may preserve them.
++    *ctx.negotiated_openvr_fields.lock() = Some(negotiated_fields);
++
+     dbg_connection!("connection_pipeline: Send StartStream packet");
+     control_sender
+         .send(&ServerControlPacket::StartStream)
+@@ -833,6 +1104,17 @@ fn connection_pipeline(
          },
      ));
  
@@ -1194,7 +2895,7 @@ index 3144dfe..eb02f91 100644
      *ctx.bitrate_manager.lock() =
          BitrateManager::new(initial_settings.video.bitrate.history_size, fps);
  
-@@ -1071,7 +1089,11 @@ fn connection_pipeline(
+@@ -1071,7 +1353,11 @@ fn connection_pipeline(
  
                      let session_manager_lock = SESSION_MANAGER.read();
                      ctx.bitrate_manager.lock().report_frame_latencies(
@@ -1207,7 +2908,7 @@ index 3144dfe..eb02f91 100644
                          timestamp,
                          network_latency,
                          decoder_latency,
-@@ -1110,6 +1132,14 @@ fn connection_pipeline(
+@@ -1110,6 +1396,14 @@ fn connection_pipeline(
          let client_hostname = client_hostname.clone();
          move || {
              while is_streaming(&client_hostname) {
@@ -1222,27 +2923,322 @@ index 3144dfe..eb02f91 100644
                  if let Err(e) = control_sender.lock().send(&ServerControlPacket::KeepAlive) {
                      info!("Client disconnected. Cause: {e:?}");
  
+@@ -1478,3 +1772,250 @@ fn connection_pipeline(
+ 
+     Ok(())
+ }
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    fn negotiated_fields() -> NegotiatedOpenvrFields {
++        NegotiatedOpenvrFields {
++            codec: 2,
++            eye_resolution_width: 2880,
++            eye_resolution_height: 1600,
++            target_eye_resolution_width: 2880,
++            target_eye_resolution_height: 1600,
++            refresh_rate: 90,
++            enable_foveated_encoding: true,
++            h264_profile: 1,
++            use_10bit_encoder: true,
++            use_full_range_encoding: true,
++            enable_hdr: true,
++            encoding_gamma: 2.2,
++        }
++    }
++
++    #[test]
++    fn a_newer_dashboard_write_invalidates_the_settings_snapshot() {
++        let session = SessionConfig::default();
++        let at_prepare = serde_json::to_value(session.to_settings()).unwrap();
++        let same = serde_json::to_value(session.to_settings()).unwrap();
++        assert!(settings_snapshot_unchanged(&at_prepare, Ok(same)));
++
++        // A setting the dashboard changed while the helper preflighted.
++        let mut newer_settings = session.to_settings();
++        newer_settings.video.preferred_fps = 111.0;
++        let newer = serde_json::to_value(newer_settings).unwrap();
++        assert!(!settings_snapshot_unchanged(&at_prepare, Ok(newer)));
++
++        // A snapshot that cannot be read back is no proof at all, so it fails closed.
++        let unreadable: serde_json::Result<serde_json::Value> =
++            Err(serde_json::from_str::<serde_json::Value>("{").unwrap_err());
++        assert!(!settings_snapshot_unchanged(&at_prepare, unreadable));
++    }
++
++    #[test]
++    fn the_restart_needs_every_precondition_to_still_hold() {
++        // Nothing changed: the restart goes ahead.
++        assert!(restart_preconditions_hold(
++            true,
++            true,
++            true,
++            LifecycleState::Resumed,
++            true
++        ));
++
++        // Each single failure aborts it, so no stale config is ever persisted.
++        assert!(!restart_preconditions_hold(
++            false,
++            true,
++            true,
++            LifecycleState::Resumed,
++            true
++        ));
++        assert!(!restart_preconditions_hold(
++            true,
++            false,
++            true,
++            LifecycleState::Resumed,
++            true
++        ));
++        assert!(!restart_preconditions_hold(
++            true,
++            true,
++            false,
++            LifecycleState::Resumed,
++            true
++        ));
++        assert!(!restart_preconditions_hold(
++            true,
++            true,
++            true,
++            LifecycleState::ShuttingDown,
++            true
++        ));
++        assert!(!restart_preconditions_hold(
++            true,
++            true,
++            true,
++            LifecycleState::Resumed,
++            false
++        ));
++    }
++
++    #[test]
++    fn unchanged_boot_state_streams() {
++        let boot = SessionConfig::default().openvr_config;
++
++        assert!(boot_config_matches(Some(&boot), &boot));
++        assert_eq!(
++            decide_stream_action(boot_config_matches(Some(&boot), &boot), true),
++            StreamAction::Start
++        );
++    }
++
++    #[test]
++    fn pending_disk_config_never_permits_streaming() {
++        // The session was already written by a previous handshake, so the desired config equals
++        // the pending disk config, while the driver booted with something else.
++        let mut boot = SessionConfig::default().openvr_config;
++        boot.codec = 0;
++        boot.eye_resolution_width = 2880;
++
++        let mut pending_disk = boot.clone();
++        pending_disk.codec = 2;
++        pending_disk.eye_resolution_width = 3200;
++
++        assert!(!boot_config_matches(Some(&boot), &pending_disk));
++        assert_eq!(
++            decide_stream_action(
++                boot_config_matches(Some(&boot), &pending_disk),
++                false
++            ),
++            StreamAction::ConsentRequired
++        );
++        assert_eq!(
++            decide_stream_action(boot_config_matches(Some(&boot), &pending_disk), true),
++            StreamAction::Restart
++        );
++    }
++
++    #[test]
++    fn unknown_boot_state_never_streams() {
++        let config = SessionConfig::default().openvr_config;
++
++        assert!(!boot_config_matches(None, &config));
++        assert_eq!(decide_stream_action(false, true), StreamAction::Restart);
++    }
++
++    #[test]
++    fn static_settings_do_not_override_the_negotiated_codec() {
++        let mut session = SessionConfig::default();
++        // PyroWave, negotiated on a previous connection
++        session.openvr_config.codec = 3;
++
++        assert_eq!(contruct_openvr_config(&session).codec, 3);
++    }
++
++    #[test]
++    fn shutdown_preserves_negotiated_fields_over_static_settings() {
++        let mut config = SessionConfig::default().openvr_config;
++        // static settings that are not negotiated and must still be applied
++        config.sw_thread_count = 7;
++        config.brightness = 0.25;
++        config.gop_length = 11;
++
++        let fields = negotiated_fields();
++        fields.apply(&mut config);
++
++        assert_eq!(config.codec, fields.codec);
++        assert_eq!(config.eye_resolution_width, fields.eye_resolution_width);
++        assert_eq!(config.eye_resolution_height, fields.eye_resolution_height);
++        assert_eq!(
++            config.target_eye_resolution_width,
++            fields.target_eye_resolution_width
++        );
++        assert_eq!(
++            config.target_eye_resolution_height,
++            fields.target_eye_resolution_height
++        );
++        assert_eq!(config.refresh_rate, fields.refresh_rate);
++        assert_eq!(config.enable_foveated_encoding, fields.enable_foveated_encoding);
++        assert_eq!(config.h264_profile, fields.h264_profile);
++        assert_eq!(config.use_10bit_encoder, fields.use_10bit_encoder);
++        assert_eq!(config.use_full_range_encoding, fields.use_full_range_encoding);
++        assert_eq!(config.enable_hdr, fields.enable_hdr);
++        assert_eq!(config.encoding_gamma, fields.encoding_gamma);
++
++        assert_eq!(config.sw_thread_count, 7);
++        assert_eq!(config.brightness, 0.25);
++        assert_eq!(config.gop_length, 11);
++    }
++
++    #[test]
++    fn refused_request_cannot_change_the_config_written_on_shutdown() {
++        let mut session = SessionConfig::default();
++        // What SteamVR is running with right now.
++        session.openvr_config.refresh_rate = 72;
++        session.openvr_config.eye_resolution_width = 2112;
++        session.openvr_config.codec = 0;
++
++        // What the refused handshake computed for the client. A refused or unconsented request, and
++        // a failed helper preparation, both leave the negotiated fields unset.
++        let requested = negotiated_fields();
++
++        let written = config_for_next_boot(&session, None);
++
++        assert_eq!(written.refresh_rate, 72);
++        assert_eq!(written.eye_resolution_width, 2112);
++        assert_eq!(written.codec, 0);
++        // Those are the fields the request wanted and must never reach the disk.
++        assert_ne!(written.refresh_rate, requested.refresh_rate);
++        assert_ne!(written.eye_resolution_width, requested.eye_resolution_width);
++        assert_ne!(written.codec, requested.codec);
++    }
++
++    #[test]
++    fn approved_restart_keeps_the_negotiated_fields_on_shutdown() {
++        let fields = negotiated_fields();
++
++        let mut session = SessionConfig::default();
++        session.openvr_config.refresh_rate = 72;
++        // A stale value for a field the dashboard owns, to prove it is still rebuilt.
++        session.openvr_config.brightness = 0.75;
++
++        // The approved handshake: the pending config is persisted with the negotiated fields, and
++        // only then are those fields remembered for the shutdown path.
++        session.openvr_config = {
++            let mut pending = config_for_next_boot(&session, None);
++            fields.apply(&mut pending);
++            pending
++        };
++
++        let written = config_for_next_boot(&session, Some(&fields));
++
++        assert_eq!(written.refresh_rate, fields.refresh_rate);
++        assert_eq!(written.eye_resolution_width, fields.eye_resolution_width);
++        assert_eq!(written.eye_resolution_height, fields.eye_resolution_height);
++        assert_eq!(
++            written.target_eye_resolution_width,
++            fields.target_eye_resolution_width
++        );
++        assert_eq!(
++            written.target_eye_resolution_height,
++            fields.target_eye_resolution_height
++        );
++        assert_eq!(written.codec, fields.codec);
++        assert_eq!(written.encoding_gamma, fields.encoding_gamma);
++        // The static settings are still rebuilt from the dashboard, so the stale value of a
++        // dashboard owned field does not survive.
++        assert_eq!(
++            written.brightness,
++            session
++                .to_settings()
++                .video
++                .color_correction
++                .as_option()
++                .map_or(0.0, |config| config.brightness)
++        );
++    }
++}
 diff --git a/alvr/server_core/src/lib.rs b/alvr/server_core/src/lib.rs
-index a102320..1fdca71 100644
+index a102320..5228a15 100644
 --- a/alvr/server_core/src/lib.rs
 +++ b/alvr/server_core/src/lib.rs
-@@ -5,6 +5,7 @@ mod hand_gestures;
+@@ -5,6 +5,8 @@ mod hand_gestures;
  mod haptics;
  mod input_mapping;
  mod logging_backend;
++mod managed_restart;
 +pub mod pcvr_codec;
  mod sockets;
  mod statistics;
  mod tracking;
-@@ -103,6 +104,7 @@ pub struct ConnectionContext {
+@@ -31,7 +33,7 @@ use alvr_packets::{
+     VideoPacketHeader,
+ };
+ use alvr_server_io::ServerSessionManager;
+-use alvr_session::{CodecType, OpenvrProperty, Settings};
++use alvr_session::{CodecType, OpenvrConfig, OpenvrProperty, Settings};
+ use alvr_sockets::StreamSender;
+ use bitrate::{BitrateManager, DynamicEncoderParams};
+ use statistics::StatisticsManager;
+@@ -64,11 +66,25 @@ static SESSION_MANAGER: Lazy<RwLock<ServerSessionManager>> = Lazy::new(|| {
+     ))
+ });
+ 
++// Immutable snapshot of the config the driver is booting with. CppInit() reads this very same
++// session.json value, so a config that only exists in the mutable in-memory session (a pending
++// handshake or a previous shutdown) says nothing about the running SteamVR instance.
++static BOOT_OPENVR_CONFIG: OnceLock<OpenvrConfig> = OnceLock::new();
++
++pub fn boot_openvr_config() -> Option<OpenvrConfig> {
++    BOOT_OPENVR_CONFIG.get().cloned()
++}
++
+ pub fn initialize_environment(layout: afs::Layout) {
+     FILESYSTEM_LAYOUT.set(layout).unwrap();
+ 
+     // This ensures that the session is written to disk
+     SESSION_MANAGER.write().session_mut();
++
++    // Captured here, before any handshake or settings change can touch the session.
++    BOOT_OPENVR_CONFIG
++        .set(SESSION_MANAGER.read().session().openvr_config.clone())
++        .ok();
+ }
+ 
+ // todo: use this as the network packet
+@@ -101,8 +117,15 @@ pub enum ServerCoreEvent {
+ 
+ pub struct ConnectionContext {
      events_sender: mpsc::Sender<ServerCoreEvent>,
++    // The config the driver booted with. Streaming is only allowed while the negotiated config
++    // still matches it.
++    boot_openvr_config: Option<OpenvrConfig>,
++    // The fields negotiated for the current stream. They are re-applied on top of the static
++    // settings on shutdown, so the next boot keeps what was actually streamed.
++    negotiated_openvr_fields: Mutex<Option<connection::NegotiatedOpenvrFields>>,
      statistics_manager: RwLock<Option<StatisticsManager>>,
      bitrate_manager: Mutex<BitrateManager>,
 +    pcvr_bitrate_ceiling: RwLock<Option<u64>>,
      tracking_manager: RwLock<TrackingManager>,
      decoder_config: Mutex<Option<DecoderInitializationConfig>>,
      video_mirror_sender: Mutex<Option<broadcast::Sender<Vec<u8>>>>,
-@@ -119,6 +121,7 @@ pub fn create_recording_file(connection_context: &ConnectionContext, settings: &
+@@ -119,6 +142,7 @@ pub fn create_recording_file(connection_context: &ConnectionContext, settings: &
          CodecType::H264 => "h264",
          CodecType::Hevc => "h265",
          CodecType::AV1 => "av1",
@@ -1250,15 +3246,19 @@ index a102320..1fdca71 100644
      };
  
      let path = FILESYSTEM_LAYOUT.get().unwrap().log_dir.join(format!(
-@@ -212,6 +215,7 @@ impl ServerCoreContext {
+@@ -210,8 +234,11 @@ impl ServerCoreContext {
+ 
+         let connection_context = Arc::new(ConnectionContext {
              events_sender,
++            boot_openvr_config: boot_openvr_config(),
++            negotiated_openvr_fields: Mutex::new(None),
              statistics_manager: RwLock::new(Some(stats)),
              bitrate_manager: Mutex::new(BitrateManager::new(256, 60.0)),
 +            pcvr_bitrate_ceiling: RwLock::new(None),
              tracking_manager: RwLock::new(TrackingManager::new(
                  initial_settings.connection.statistics_history_size,
              )),
-@@ -451,10 +455,14 @@ impl ServerCoreContext {
+@@ -451,10 +478,14 @@ impl ServerCoreContext {
  
          let pair = {
              let session_manager_lock = SESSION_MANAGER.read();
@@ -1274,6 +3274,559 @@ index a102320..1fdca71 100644
          };
  
          if let Some((params, stats)) = pair {
+@@ -554,9 +585,24 @@ impl Drop for ServerCoreContext {
+         // apply openvr config for the next launch
+         dbg_server_core!("Setting restart settings chache");
+         {
++            // None unless a stream actually started, so a refused or failed restart request cannot
++            // write a config SteamVR never ran.
++            let negotiated_fields = self
++                .connection_context
++                .negotiated_openvr_fields
++                .lock()
++                .clone();
++
+             let mut session_manager_lock = SESSION_MANAGER.write();
+-            session_manager_lock.session_mut().openvr_config =
+-                connection::contruct_openvr_config(session_manager_lock.session());
++
++            // Static settings are rebuilt from the dashboard, but the fields that were negotiated
++            // for the stream must survive: they are the values the driver is actually running with.
++            let next_config = connection::config_for_next_boot(
++                session_manager_lock.session(),
++                negotiated_fields.as_ref(),
++            );
++
++            session_manager_lock.session_mut().openvr_config = next_config;
+         }
+ 
+         // todo: check if this is still needed
+diff --git a/alvr/server_core/src/managed_restart.rs b/alvr/server_core/src/managed_restart.rs
+new file mode 100644
+index 0000000..2d347a4
+--- /dev/null
++++ b/alvr/server_core/src/managed_restart.rs
+@@ -0,0 +1,520 @@
++//! Native SteamVR restart for the Vibertemis driver.
++//!
++//! A short-lived Vibertemis manager worker performs the restart: it preflights its own identity and
++//! hashes, prints `VIBERTEMIS_VR_RESTART_READY` and then waits. Nothing happens until the driver
++//! writes `VIBERTEMIS_VR_RESTART_COMMIT` on the worker stdin, so a broken worker can never take
++//! SteamVR down. The driver never kills vrserver: a failed preflight only kills the helper this
++//! module spawned.
++use alvr_common::{
++    anyhow::{anyhow, bail, Result},
++    info,
++};
++use std::{
++    io::{BufRead, Read, Write},
++    process::{Child, ChildStdin},
++    sync::atomic::{AtomicBool, Ordering},
++    time::Duration,
++};
++
++/// Ack line written by the manager worker, only after its preflight succeeded.
++pub const READY_TOKEN: &str = "VIBERTEMIS_VR_RESTART_READY";
++/// Commit line: the only thing that lets the worker proceed to restart SteamVR.
++pub const COMMIT_TOKEN: &str = "VIBERTEMIS_VR_RESTART_COMMIT";
++/// Protocol line bound, terminator included. Anything longer is refused instead of buffered.
++const MAX_LINE_BYTES: usize = 128;
++/// A slower worker is considered stuck and gets killed.
++pub const READY_TIMEOUT: Duration = Duration::from_secs(10);
++
++/// At most one restart per server process. It is given back when the preparation fails, so a later
++/// explicit attempt is still possible, and kept once the restart was committed.
++static RESTART_ATTEMPTED: AtomicBool = AtomicBool::new(false);
++
++/// The ownership of one claimed attempt.
++///
++/// The claim is given back by dropping this guard and by nothing else, so exactly one release
++/// happens per claim: a preparation that already gave its claim back cannot clear a claim made in
++/// the meantime. Once a commit spends the claim it stays held, which is what makes the restart
++/// one-shot per server process.
++pub struct RestartAttemptGuard {
++    /// `None` once the claim was spent. The flag is a static, so holding or giving back the
++    /// reference to it frees nothing.
++    flag: Option<&'static AtomicBool>,
++}
++
++impl RestartAttemptGuard {
++    /// The one allowed restart is spent: the flag stays claimed and no later attempt may start.
++    fn spend(mut self) {
++        self.flag = None;
++    }
++}
++
++impl Drop for RestartAttemptGuard {
++    fn drop(&mut self) {
++        // An unspent claim goes back with its owner, and only once.
++        if let Some(flag) = self.flag.take() {
++            flag.store(false, Ordering::SeqCst);
++        }
++    }
++}
++
++/// Claims the single restart of this server process, if it is still available.
++///
++/// The returned guard owns the claim and must be handed to [`prepare`], which keeps it alive for
++/// as long as the restart can still be abandoned. Dropping it any other way, without handing it
++/// over, is what gives the claim back.
++pub fn try_begin_attempt() -> Option<RestartAttemptGuard> {
++    claim_attempt(&RESTART_ATTEMPTED)
++}
++
++fn claim_attempt(flag: &'static AtomicBool) -> Option<RestartAttemptGuard> {
++    if flag.swap(true, Ordering::SeqCst) {
++        None
++    } else {
++        Some(RestartAttemptGuard { flag: Some(flag) })
++    }
++}
++
++/// Reads a single protocol line and returns it without its terminator.
++///
++/// The line is bounded to MAX_LINE_BYTES bytes, terminator included, and must be terminated by LF.
++/// A CR directly before that LF is accepted, because Windows workers write CRLF; nothing else is
++/// removed, so a padded, decorated or non-ASCII line never reaches the token comparison.
++pub fn read_protocol_line<R: Read>(reader: R) -> Result<String> {
++    let mut reader = std::io::BufReader::new(reader).take((MAX_LINE_BYTES + 1) as u64);
++
++    let mut line = Vec::new();
++    reader.read_until(b'\n', &mut line)?;
++
++    // The one extra byte of the bound is the only witness of an over-long line: read_until cannot
++    // tell a line that is exactly at the limit from a truncated read.
++    if line.len() > MAX_LINE_BYTES {
++        bail!("restart protocol line exceeds {MAX_LINE_BYTES} bytes");
++    }
++
++    // An EOF without LF is a partial line: the peer is not speaking the protocol.
++    if !line.ends_with(b"\n") {
++        bail!("restart protocol line is not terminated");
++    }
++    line.pop();
++
++    if line.ends_with(b"\r") {
++        line.pop();
++    }
++
++    if !line.is_ascii() {
++        bail!("invalid restart protocol line: expected ASCII");
++    }
++
++    String::from_utf8(line).map_err(|e| anyhow!("invalid restart protocol line: {e}"))
++}
++
++/// The ack is the exact token. Nothing is trimmed, so a line that merely contains or is padded with
++/// the token is not an ack.
++pub fn is_ready(line: &str) -> bool {
++    line == READY_TOKEN
++}
++
++// The helper variant is only constructed where a manager worker exists.
++#[allow(dead_code)]
++enum Backend {
++    /// The retained manager worker. Killed unless the restart is committed.
++    Helper { child: Child, stdin: ChildStdin },
++    /// No manager worker on this platform: the running dashboard performs the restart.
++    Dashboard,
++}
++
++/// What the caller must do after a successful commit. Each variant exists only on the platform that
++/// produces it, so both are platform conditional.
++#[allow(dead_code)]
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub enum CommitOutcome {
++    /// The retained manager worker now cycles SteamVR on its own, so the driver still has to exit
++    /// for the new driver instance to be loaded.
++    ManagedQuit,
++    /// The running dashboard was notified and it performs the SteamVR exit itself. The driver must
++    /// not ask for a second, competing restart.
++    DashboardHandlesExit,
++}
++
++impl CommitOutcome {
++    pub fn needs_managed_quit(self) -> bool {
++        matches!(self, Self::ManagedQuit)
++    }
++}
++
++/// A prepared restart that is still under the driver's control. Dropping it without committing
++/// kills the spawned worker and leaves SteamVR alone.
++pub struct RestartWorker {
++    backend: Option<Backend>,
++    /// The claimed attempt, owned for as long as the restart can still be abandoned. A successful
++    /// commit spends it, and the drop of this handle gives it back otherwise.
++    attempt: Option<RestartAttemptGuard>,
++}
++
++impl RestartWorker {
++    fn new(backend: Backend, attempt: RestartAttemptGuard) -> Self {
++        Self {
++            backend: Some(backend),
++            attempt: Some(attempt),
++        }
++    }
++
++    /// Hands the restart over to the worker. After this the handle is detached, so the worker
++    /// outlives the driver process and cycles SteamVR on its own.
++    ///
++    /// Nothing is detached before the commit is known to have succeeded: on error this handle is
++    /// dropped, which kills and reaps only the helper spawned here and gives the one-shot attempt
++    /// back.
++    pub fn commit(mut self) -> Result<CommitOutcome> {
++        let Some(backend) = self.backend.as_mut() else {
++            bail!("restart worker already used");
++        };
++
++        let outcome = match backend {
++            Backend::Helper { stdin, .. } => {
++                // The fallible writes happen while the worker is still owned, so a broken pipe
++                // still reaches the cleanup below instead of orphaning the helper.
++                stdin.write_all(COMMIT_TOKEN.as_bytes())?;
++                stdin.write_all(b"\n")?;
++                stdin.flush()?;
++
++                CommitOutcome::ManagedQuit
++            }
++            Backend::Dashboard => {
++                crate::notify_restart_driver();
++
++                CommitOutcome::DashboardHandlesExit
++            }
++        };
++
++        // The single restart of this server process is spent, and the worker is detached.
++        self.detach();
++
++        info!("Committed the managed SteamVR restart");
++
++        Ok(outcome)
++    }
++
++    /// The restart belongs to the worker now: the claim is spent and the worker is detached, so this
++    /// handle holds neither of them anymore.
++    fn detach(&mut self) {
++        // The flag is static, so letting go of the claim here frees nothing and leaves it claimed.
++        if let Some(attempt) = self.attempt.take() {
++            attempt.spend();
++        }
++        // Dropping a Child does not kill it: the worker keeps running.
++        self.backend = None;
++    }
++}
++
++impl Drop for RestartWorker {
++    fn drop(&mut self) {
++        // Only the helper spawned here is ever killed. vrserver and SteamVR are not touched.
++        if let Some(Backend::Helper { mut child, .. }) = self.backend.take() {
++            let _ = child.kill();
++            let _ = child.wait();
++        }
++
++        // An unspent claim goes back with its owner, so a later explicit attempt is possible. The
++        // claim is released by this drop only, so nothing that already happened during the
++        // preparation can clear a claim made in the meantime.
++        drop(self.attempt.take());
++    }
++}
++
++#[cfg(windows)]
++mod imp {
++    use super::{Backend, RestartAttemptGuard, RestartWorker};
++    use crate::FILESYSTEM_LAYOUT;
++    use alvr_common::{
++        anyhow::{anyhow, bail, Result},
++        info,
++    };
++    use std::{
++        io::Read,
++        os::windows::process::CommandExt,
++        path::PathBuf,
++        process::{Command, Stdio},
++        sync::mpsc,
++        thread,
++    };
++
++    /// Keeps a console window from flashing for the worker.
++    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
++    const VRSERVER_EXE: &str = "vrserver.exe";
++
++    /// The manager shipped with this exact driver installation. No PATH lookup, no shell.
++    pub(super) fn manager_exe() -> Result<PathBuf> {
++        let layout = FILESYSTEM_LAYOUT
++            .get()
++            .ok_or_else(|| anyhow!("filesystem layout is not initialized"))?;
++
++        let exe = layout
++            .openvr_driver_root_dir
++            .parent()
++            .ok_or_else(|| {
++                anyhow!(
++                    "cannot locate the manager next to the driver root: {}",
++                    layout.openvr_driver_root_dir.display()
++                )
++            })?
++            .join("manager")
++            .join(alvr_filesystem::exec_fname("VibertemisManager.App"));
++
++        if !exe.is_file() {
++            bail!(
++                "Vibertemis manager worker is missing: {}. SteamVR cannot be restarted from the driver.",
++                exe.display()
++            );
++        }
++
++        Ok(exe)
++    }
++
++    /// The driver is loaded by the very vrserver instance it runs inside, so that process is the
++    /// one to cycle. Looking it up by name would pick the first vrserver of any user session,
++    /// which can be another user's SteamVR, and the manager's own parent validation would then
++    /// refuse the restart for the wrong reason, or cycle the wrong SteamVR.
++    fn vrserver_pid() -> u32 {
++        std::process::id()
++    }
++
++    /// Waits for the preflight ack on a background thread, so a stuck helper cannot block the
++    /// handshake forever.
++    fn await_ready(stdout: impl Read + Send + 'static) -> Result<()> {
++        let (sender, receiver) = mpsc::channel();
++        thread::spawn(move || {
++            let _ = sender.send(super::read_protocol_line(stdout));
++        });
++
++        match receiver.recv_timeout(super::READY_TIMEOUT) {
++            Ok(Ok(line)) if super::is_ready(&line) => Ok(()),
++            Ok(Ok(line)) => bail!("Vibertemis manager refused the SteamVR restart: {line:?}"),
++            Ok(Err(e)) => Err(e),
++            Err(mpsc::RecvTimeoutError::Timeout) => bail!(
++                "Vibertemis manager did not confirm the restart within {:?}",
++                super::READY_TIMEOUT
++            ),
++            Err(mpsc::RecvTimeoutError::Disconnected) => {
++                bail!("Vibertemis manager preflight channel closed")
++            }
++        }
++    }
++
++    pub(super) fn prepare(attempt: RestartAttemptGuard) -> Result<RestartWorker> {
++        let exe = manager_exe()?;
++        let pid = vrserver_pid();
++
++        info!(
++            "Preparing SteamVR restart with {} for this driver's {VRSERVER_EXE} pid {pid}",
++            exe.display()
++        );
++
++        let mut child = Command::new(&exe)
++            .arg("--restart-vr")
++            .arg(pid.to_string())
++            .stdin(Stdio::piped())
++            .stdout(Stdio::piped())
++            .stderr(Stdio::null())
++            .creation_flags(CREATE_NO_WINDOW)
++            .spawn()
++            .map_err(|e| anyhow!("failed to start the Vibertemis manager worker: {e}"))?;
++
++        let Some(stdin) = child.stdin.take() else {
++            let _ = child.kill();
++            let _ = child.wait();
++            bail!("Vibertemis manager worker has no stdin pipe");
++        };
++        let Some(stdout) = child.stdout.take() else {
++            let _ = child.kill();
++            let _ = child.wait();
++            bail!("Vibertemis manager worker has no stdout pipe");
++        };
++
++        let worker = RestartWorker::new(Backend::Helper { child, stdin }, attempt);
++
++        // On failure the worker is dropped here, which kills and reaps only that helper and gives
++        // the claim back exactly once.
++        await_ready(stdout)?;
++        info!("Vibertemis manager preflight succeeded");
++
++        Ok(worker)
++    }
++}
++
++#[cfg(not(windows))]
++mod imp {
++    use super::{Backend, RestartAttemptGuard, RestartWorker};
++    use alvr_common::{
++        anyhow::{bail, Result},
++        info,
++    };
++    use std::ffi::OsStr;
++
++    /// No manager worker on this platform: the running dashboard is the only supported restart
++    /// path. Without it the restart fails, and the client is told so instead of SteamVR quitting.
++    pub(super) fn prepare(attempt: RestartAttemptGuard) -> Result<RestartWorker> {
++        if sysinfo::System::new_all()
++            .processes_by_name(OsStr::new(alvr_filesystem::dashboard_fname()))
++            .next()
++            .is_some()
++        {
++            info!("No manager worker on this platform: asking the running dashboard to restart SteamVR");
++
++            Ok(RestartWorker::new(Backend::Dashboard, attempt))
++        } else {
++            bail!("Cannot restart SteamVR. No dashboard process found on local device.")
++        }
++    }
++}
++
++/// Starts a restart worker for a claimed attempt. An error means SteamVR was left untouched, and
++/// the claim is given back by the drop, so a later explicit attempt can start again.
++pub fn prepare(attempt: RestartAttemptGuard) -> Result<RestartWorker> {
++    imp::prepare(attempt)
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    /// A flag owned by the test, leaked so a claim can refer to it for the whole test.
++    fn test_flag() -> &'static AtomicBool {
++        Box::leak(Box::new(AtomicBool::new(false)))
++    }
++
++    #[test]
++    fn ready_line_is_parsed() {
++        let line = format!("{READY_TOKEN}\n");
++
++        // The contract: the terminator is consumed, the token is not.
++        assert_eq!(read_protocol_line(line.as_bytes()).unwrap(), READY_TOKEN);
++        assert!(is_ready(&read_protocol_line(line.as_bytes()).unwrap()));
++    }
++
++    #[test]
++    fn windows_line_ending_is_accepted() {
++        let line = format!("{READY_TOKEN}\r\n");
++
++        assert_eq!(read_protocol_line(line.as_bytes()).unwrap(), READY_TOKEN);
++        assert!(is_ready(&read_protocol_line(line.as_bytes()).unwrap()));
++    }
++
++    #[test]
++    fn only_the_exact_token_is_ready() {
++        assert!(is_ready(READY_TOKEN));
++
++        for line in [
++            String::new(),
++            "VIBERTEMIS_VR_RESTART_COMMIT".to_owned(),
++            "VIBERTEMIS_VR_RESTART_READY_MAYBE".to_owned(),
++            // whitespace is not trimmed: a padded line is not the ack
++            format!("{READY_TOKEN} "),
++            format!(" {READY_TOKEN}"),
++            format!("{READY_TOKEN}\t"),
++        ] {
++            assert!(!is_ready(&line), "{line:?} must not be an ack");
++        }
++    }
++
++    #[test]
++    fn protocol_line_is_bounded_including_the_terminator() {
++        // MAX_LINE_BYTES counts the terminator, so this one is exactly at the bound.
++        let at_bound = format!("{}\n", "A".repeat(MAX_LINE_BYTES - 1));
++        assert_eq!(
++            read_protocol_line(at_bound.as_bytes()).unwrap().len(),
++            MAX_LINE_BYTES - 1
++        );
++
++        let over_bound = format!("{}\n", "A".repeat(MAX_LINE_BYTES));
++        assert!(read_protocol_line(over_bound.as_bytes()).is_err());
++
++        // CRLF costs one more byte, so the same payload is now over the bound.
++        let crlf_over_bound = format!("{}\r\n", "A".repeat(MAX_LINE_BYTES - 1));
++        assert!(read_protocol_line(crlf_over_bound.as_bytes()).is_err());
++    }
++
++    #[test]
++    fn eof_without_newline_is_rejected() {
++        // A partial line is a broken protocol, not an ack.
++        assert!(read_protocol_line(READY_TOKEN.as_bytes()).is_err());
++        assert!(read_protocol_line(&b""[..]).is_err());
++    }
++
++    #[test]
++    fn non_ascii_line_is_rejected() {
++        let line = "VIBERTEMIS_VR_RESTART_REA\u{e9}Y\n";
++
++        assert!(read_protocol_line(line.as_bytes()).is_err());
++    }
++
++    #[test]
++    fn a_claim_has_exactly_one_owner() {
++        let flag = test_flag();
++
++        let attempt = claim_attempt(flag).expect("the first claim wins");
++        // While the claim is owned, no second attempt can claim the restart.
++        assert!(claim_attempt(flag).is_none());
++
++        // Dropping the owner gives the claim back, once.
++        drop(attempt);
++        assert!(claim_attempt(flag).is_some());
++    }
++
++    #[test]
++    fn a_spent_claim_is_never_given_back() {
++        let flag = test_flag();
++
++        claim_attempt(flag).unwrap().spend();
++
++        // The owner is gone and the flag stays claimed: the one restart of this process is spent.
++        assert!(claim_attempt(flag).is_none());
++    }
++
++    // The one-shot guard is process wide, so the whole contract is asserted in a single test: these
++    // steps cannot run in parallel.
++    #[test]
++    fn an_abandoned_attempt_never_clears_a_newer_claim() {
++        // A claimed attempt is owned, so nothing else claims the restart while it is being prepared.
++        let first = try_begin_attempt().expect("the first attempt claims the restart");
++        assert!(try_begin_attempt().is_none());
++
++        // A failed preparation: the claim went into the worker, and dropping it without a commit
++        // gives it back exactly once.
++        drop(RestartWorker {
++            backend: None,
++            attempt: Some(first),
++        });
++
++        // A newer claim, made after that failure. The abandoned attempt has no claim left, so
++        // nothing it does afterwards can clear this one.
++        let second = try_begin_attempt().expect("the failed preparation gave the claim back");
++        assert!(try_begin_attempt().is_none());
++
++        // A commit that never happened, because the handle was already used, gives it back too.
++        assert!(RestartWorker {
++            backend: None,
++            attempt: Some(second),
++        }
++        .commit()
++        .is_err());
++        let third = try_begin_attempt().expect("the failed commit gave the claim back");
++
++        // A committed restart spends the claim, so the single allowed restart of this server
++        // process is used up and stays used up.
++        RestartWorker {
++            backend: None,
++            attempt: Some(third),
++        }
++        .detach();
++        assert!(try_begin_attempt().is_none());
++    }
++
++    #[test]
++    fn only_the_helper_outcome_needs_a_managed_quit() {
++        // The manager worker cycles SteamVR but cannot unload the driver, so the driver must exit.
++        // The dashboard fallback performs the exit itself.
++        assert!(CommitOutcome::ManagedQuit.needs_managed_quit());
++        assert!(!CommitOutcome::DashboardHandlesExit.needs_managed_quit());
++    }
++}
 diff --git a/alvr/server_core/src/pcvr_codec.rs b/alvr/server_core/src/pcvr_codec.rs
 new file mode 100644
 index 0000000..1c39dab
