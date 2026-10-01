@@ -1,0 +1,1528 @@
+diff --git a/app/src/main/java/com/limelight/Game.java b/app/src/main/java/com/limelight/Game.java
+index 9e72b8e8..e73db2e9 100644
+--- a/app/src/main/java/com/limelight/Game.java
++++ b/app/src/main/java/com/limelight/Game.java
+@@ -167,31 +167,6 @@ public class Game extends Activity implements SurfaceHolder.Callback,
+     private int lastVrPointerX = -1;
+     private int lastVrPointerY = -1;
+ 
+-    // A host tests position as well as timing before it calls two clicks a
+-    // double, and a hand held pointer drifts a few pixels between the taps.
+-    // The moves carrying that drift are what break the test. Correcting it
+-    // with a position packet on the second tap does not work either, since
+-    // the host batches mouse moves but not button events, so the correction
+-    // can land after the click it was meant to lead. Nothing is sent instead:
+-    // the first tap anchors the cursor and drift near that anchor is dropped,
+-    // which leaves the host on the pixel it already has.
+-    private static final long VR_CLICK_HOLD_MS = 500;
+-    // Tight while the button is held, so a drag or a text selection still
+-    // moves the cursor, and wider once it is up, to cover the 5 to 27 px of
+-    // drift measured between the taps of a natural pair
+-    private static final int VR_HOLD_DIV_DOWN = 200;
+-    private static final int VR_HOLD_DIV_UP = 72;
+-    private long vrLastLeftDownTime;
+-    private long vrLastLeftUpTime;
+-    private int vrHoldX;
+-    private int vrHoldY;
+-    private boolean vrHoldActive;
+-    private boolean vrLeftDown;
+-
+-    // Click timings go out under the renderer's tag, so one logcat filter
+-    // catches these and the native side together
+-    private static final String VR_CLICK_TAG = "moonlight-xr";
+-
+     private WifiManager.WifiLock highPerfWifiLock;
+     private WifiManager.WifiLock lowLatencyWifiLock;
+ 
+@@ -2299,6 +2274,12 @@ public class Game extends Activity implements SurfaceHolder.Callback,
+             connecting = connected = false;
+             updatePipAutoEnter();
+ 
++            // Forget the pointer position the host was last left on, so the
++            // first position of the next session goes out even if the new
++            // pointer starts on the pixel the old one ended on
++            lastVrPointerX = -1;
++            lastVrPointerY = -1;
++
+             controllerHandler.stop();
+ 
+             // Update GameManager state to indicate we're no longer in game
+@@ -2729,42 +2710,42 @@ public class Game extends Activity implements SurfaceHolder.Callback,
+     // Controller pointer out of the VR session, on the renderer's frame loop
+     // thread. The hit point is in 0..1 across the streamed picture, so it maps
+     // straight onto an absolute mouse position the host already understands.
++    // Every position the pointer reaches goes out as it happens, button state
++    // or not, so a drag and a text selection behave the same as they do with
++    // a real mouse.
+     @Override
+     public void onVrPointerMove(float u, float v) {
+         if (!connected) {
+             return;
+         }
+ 
+-        int x = (int)(u * prefConfig.width);
+-        int y = (int)(v * prefConfig.height);
+-        x = Math.max(0, Math.min(prefConfig.width - 1, x));
+-        y = Math.max(0, Math.min(prefConfig.height - 1, y));
+-
+-        // Just clicked, so small drift is dropped rather than sent on. The
+-        // host stays on the pixel the click landed at, which is what a second
+-        // tap needs to find. lastVrPointer is left alone with it.
+-        if (vrHoldActive) {
+-            long since = SystemClock.uptimeMillis() - vrLastLeftDownTime;
+-            int radius = vrHoldRadius();
+-            int dx = x - vrHoldX;
+-            int dy = y - vrHoldY;
+-            if (since < VR_CLICK_HOLD_MS && dx * dx + dy * dy <= radius * radius) {
+-                return;
+-            }
++        // A ray that misses the picture, or a bad matrix, can produce a value
++        // the host would map to a meaningless pixel
++        if (Float.isNaN(u) || Float.isNaN(v) || Float.isInfinite(u) || Float.isInfinite(v)) {
++            return;
++        }
+ 
+-            vrHoldActive = false;
+-            Log.i(VR_CLICK_TAG, "click: hold ended by " + (since >= VR_CLICK_HOLD_MS
+-                    ? "timeout" : "escape " + (int)Math.sqrt(dx * dx + dy * dy) + "px"));
++        int width = prefConfig.width;
++        int height = prefConfig.height;
++        if (width <= 0 || height <= 0) {
++            return;
+         }
+ 
++        // We may get a value slightly outside the picture, so clamp it into
++        // range before it becomes an integer
++        float pixelX = Math.max(0f, Math.min(width - 1f, u * width));
++        float pixelY = Math.max(0f, Math.min(height - 1f, v * height));
++
++        int x = (int)pixelX;
++        int y = (int)pixelY;
++
+         if (x == lastVrPointerX && y == lastVrPointerY) {
+             return;
+         }
+         lastVrPointerX = x;
+         lastVrPointerY = y;
+ 
+-        conn.sendMousePosition((short)x, (short)y,
+-                (short)prefConfig.width, (short)prefConfig.height);
++        conn.sendMousePosition((short)x, (short)y, (short)width, (short)height);
+     }
+ 
+     @Override
+@@ -2788,66 +2769,12 @@ public class Game extends Activity implements SurfaceHolder.Callback,
+ 
+         if (down) {
+             conn.sendMouseButtonDown(code);
+-
+-            if (code == MouseButtonPacket.BUTTON_LEFT) {
+-                long now = SystemClock.uptimeMillis();
+-                int atX = lastVrPointerX;
+-                int atY = lastVrPointerY;
+-                String hold;
+-
+-                if (vrHoldActive) {
+-                    // Nothing has gone out since the first tap, so the host is
+-                    // still on the anchor and a chain needs no position work
+-                    hold = "held on anchor " + vrHoldX + "," + vrHoldY;
+-                }
+-                else if (atX < 0) {
+-                    hold = "no hold (no pointer yet)";
+-                }
+-                else {
+-                    vrHoldX = atX;
+-                    vrHoldY = atY;
+-                    vrHoldActive = true;
+-                    hold = "hold from " + atX + "," + atY;
+-                }
+-
+-                Log.i(VR_CLICK_TAG, "click: down " + sinceVrClick(now, vrLastLeftDownTime)
+-                        + "ms since down, " + sinceVrClick(now, vrLastLeftUpTime)
+-                        + "ms since up, at " + atX + "," + atY + ", " + hold);
+-
+-                // The window runs from the most recent tap, so a chain of them
+-                // keeps the cursor on the first one's pixel
+-                vrLastLeftDownTime = now;
+-                vrLeftDown = true;
+-            }
+         }
+         else {
+             conn.sendMouseButtonUp(code);
+-
+-            if (code == MouseButtonPacket.BUTTON_LEFT) {
+-                long now = SystemClock.uptimeMillis();
+-                Log.i(VR_CLICK_TAG, "click: up after "
+-                        + sinceVrClick(now, vrLastLeftDownTime) + "ms held");
+-                vrLastLeftUpTime = now;
+-
+-                // The hold itself carries on, only its radius opens up
+-                vrLeftDown = false;
+-            }
+         }
+     }
+ 
+-    // -1 for the first click of the session, where there is nothing to measure
+-    // back to
+-    private static long sinceVrClick(long now, long then) {
+-        return then == 0 ? -1 : now - then;
+-    }
+-
+-    // Half a percent of the frame width with the button down, about 13 px at
+-    // 2560 wide, and one part in 72 with it up, about 35 px
+-    private int vrHoldRadius() {
+-        int div = vrLeftDown ? VR_HOLD_DIV_DOWN : VR_HOLD_DIV_UP;
+-        return Math.max(1, prefConfig.width / div);
+-    }
+-
+     @Override
+     public void onVrScroll(int clicks) {
+         if (!connected) {
+diff --git a/app/src/main/java/com/limelight/binding/video/XrRenderer.java b/app/src/main/java/com/limelight/binding/video/XrRenderer.java
+index 575b4341..283d171d 100644
+--- a/app/src/main/java/com/limelight/binding/video/XrRenderer.java
++++ b/app/src/main/java/com/limelight/binding/video/XrRenderer.java
+@@ -513,16 +513,30 @@ public class XrRenderer implements SurfaceTexture.OnFrameAvailableListener {
+                 initOk[0] = true;
+                 initLatch.countDown();
+ 
+-                runFrameLoop(prefs);
+-
+-                stopDepthThread();
+-
+-                // Tear down on the same thread that owns the GL context.
+-                // The SurfaceTexture and Surface stay alive for the codec
+-                // until cleanup().
+-                long ctx = nativeCtx;
+-                nativeCtx = 0;
+-                nativeDestroy(ctx);
++                try {
++                    runFrameLoop(prefs);
++                } finally {
++                    // Whatever ended the loop, a normal exit, a stop request or
++                    // something thrown out of a frame, the host is still holding
++                    // whatever the pointer had down. Released here rather than
++                    // where the loop finishes, since this is the only thread
++                    // that sends input and the app's stop path cannot wait on it
++                    // any longer than it already does.
++                    try {
++                        releaseHeldInput();
++                    } finally {
++                        // Teardown is the same either way, and a listener that
++                        // throws on the way out must not cost us the GL context
++                        stopDepthThread();
++
++                        // Torn down on the same thread that owns the GL context.
++                        // The SurfaceTexture and Surface stay alive for the
++                        // codec until cleanup().
++                        long ctx = nativeCtx;
++                        nativeCtx = 0;
++                        nativeDestroy(ctx);
++                    }
++                }
+             }
+         };
+         renderThread.setName("Video - XR Renderer");
+@@ -695,6 +709,11 @@ public class XrRenderer implements SurfaceTexture.OnFrameAvailableListener {
+                 break;
+             }
+             if (r == FRAME_IDLE) {
++                // Nothing is reading the buttons while the session is not
++                // running, so a press from the frame before would otherwise
++                // never be released. Idempotent, so an idle frame costs
++                // nothing and the exit path can lean on it too
++                releaseHeldInput();
+                 // Native side slept already while the session is not running
+                 continue;
+             }
+@@ -2118,6 +2137,38 @@ public class XrRenderer implements SurfaceTexture.OnFrameAvailableListener {
+         }
+     }
+ 
++    /**
++     * Lets go of every button the host thinks is down. A press is a host side
++     * latch until the matching release arrives, and the frame loop is the only
++     * thing that sends those, so a session that goes idle or ends while the
++     * pointer is over a button leaves the host holding it: a stuck right click
++     * that nothing since has been able to clear.
++     *
++     * Only the buttons are released. The rest of the input state belongs to the
++     * frame that filled it, and sending that again would move a pointer and
++     * scroll on a session that is no longer there.
++     *
++     * Frame loop thread only, like the rest of the dispatch.
++     */
++    private void releaseHeldInput() {
++        int held = heldButtons;
++        // Before the callbacks rather than after: a listener that reaches back
++        // in here, or an exception out of one, must not leave the mask set and
++        // have the same release sent twice
++        heldButtons = 0;
++
++        InputListener listener = inputListener;
++        if (held == 0 || listener == null) {
++            return;
++        }
++
++        for (int i = 0; i < 3; i++) {
++            if ((held & (1 << i)) != 0) {
++                listener.onVrButton(i, false);
++            }
++        }
++    }
++
+     /**
+      * A row on the panel's display or 3D tab was pressed. The native side has
+      * already applied it to the running session, this end only has to make it
+diff --git a/app/src/main/jni/xr-renderer/xr_renderer.c b/app/src/main/jni/xr-renderer/xr_renderer.c
+index c125ee14..5d8cb389 100644
+--- a/app/src/main/jni/xr-renderer/xr_renderer.c
++++ b/app/src/main/jni/xr-renderer/xr_renderer.c
+@@ -627,6 +627,22 @@ typedef struct XrCompositionLayerSettingsFB {
+ #define XR_META_VIRTUAL_KEYBOARD_EXTENSION_NAME "XR_META_virtual_keyboard"
+ #endif
+ 
++// Meta's hand aim, which the runtime would rather compute itself than have us
++// guess at. Probed and enabled like the rest, and only where the pinned headers
++// declare the state: it is a struct the runtime fills in, so a stand-in of our
++// own would be the wrong size and it would write past the end of it.
++#ifndef XR_FB_HAND_TRACKING_AIM_EXTENSION_NAME
++#define XR_FB_HAND_TRACKING_AIM_EXTENSION_NAME "XR_FB_hand_tracking_aim"
++#endif
++// Guarded on the extension's own guard macro, which is the only thing the
++// preprocessor can see here. XR_TYPE_HAND_TRACKING_AIM_STATE_FB is an
++// enumerator and XR_HAND_TRACKING_AIM_COMPUTED_BIT_FB a static const, so a
++// defined() on either is false in every build and would switch the extension off
++// for good rather than only where the headers lack it.
++#ifdef XR_FB_hand_tracking_aim
++#define HAVE_FB_HAND_TRACKING_AIM 1
++#endif
++
+ // setprop this to any new value to dump one frame's worth of warp inputs and
+ // outputs, so shader changes can be tried on captured frames off device
+ #define CAPTURE_PROP "debug.moonlight.capture"
+@@ -997,8 +1013,15 @@ typedef struct {
+     XrPath msftHandProfile;
+     int handTracking;
+     int handClickOk;
+-    // Looking at something instead of pointing at it. Lowest priority of the
+-    // three, so a controller or a hand always wins when one is aiming.
++// Which of the two kinds of thing is in a hand slot. Read fresh every frame
++// rather than latched off the profile event, since a runtime that tracks hands
++// without ever hinting a hand profile is a real case.
++#define SRC_NONE       0
++#define SRC_HAND       1
++#define SRC_CONTROLLER 2
++
++// Looking at something instead of pointing at it. Lowest priority of the
++// three, so a controller or a hand always wins when one is aiming.
+     int eyeGaze;
+     int gazeEnabled;
+     XrAction gazeAction;
+@@ -1014,6 +1037,28 @@ typedef struct {
+     // offer a pointer pose of their own
+     XrPosef handRay[HAND_COUNT];
+     int handRayValid[HAND_COUNT];
++    // Meta's aim extension, where the runtime offers it. It works out the ray
++    // and the pinch itself and hands both over ready made, which is the only
++    // aiming these headsets do that a real controller is measured against.
++    int handAim;
++    // Whether the bound aim action is reporting a live pose for each hand this
++    // frame. A pose action that is not active must not be located at all.
++    int aimActive[HAND_COUNT];
++    // What is in each hand slot: a controller, a hand, or nothing at all. The
++    // interaction profile is the only thing that says which, and it is not
++    // always a hand profile even when the joints are being tracked.
++    int controllerSource[HAND_COUNT];
++    // What it was last frame, so the change is logged once rather than every
++    // frame, and starts at a value that is not a source so the first frame says
++    int lastSource[HAND_COUNT];
++    // Whether the joints answered for this hand this frame, which is what says
++    // a hand is being tracked on a runtime that never currents a hand profile
++    int handTracked[HAND_COUNT];
++    // What the hand itself is saying this frame, and whether the runtime has
++    // taken the hand over for one of its own gestures, in which case the click
++    // belongs to the system and neither the pinch nor a shoulder ray may fire
++    int handClick[HAND_COUNT];
++    int handClickBlocked[HAND_COUNT];
+     PFN_xrCreateHandTrackerEXT pfnCreateHandTracker;
+     PFN_xrDestroyHandTrackerEXT pfnDestroyHandTracker;
+     PFN_xrLocateHandJointsEXT pfnLocateHandJoints;
+@@ -1059,6 +1104,11 @@ typedef struct {
+     // absolute positions fight any game that does its own mouse look
+     int pointerOn;
+     int togglePrev;
++    // Whether each hand is trusted to report a press. Armed by the first frame
++    // with a valid pose and nothing held, and dropped by a source change, a
++    // tracking gap or a reset, so a press the user could not see is never
++    // passed on as one they made
++    int inputArmed[HAND_COUNT];
+     int triggerDown[SRC_COUNT];
+     // Rising edges, so a button already held when the ray wanders onto a handle
+     // does not grab it. Dragging a window on the host desktop past the edge of
+@@ -1089,6 +1139,18 @@ typedef struct {
+     int gripEdge[SRC_COUNT];
+     int grabByTrigger;
+     int buttonsDown;
++    // Which source the host buttons belong to, -1 for nobody. A press is taken
++    // by the hand doing the pointing and stays with it until every button it
++    // holds is up, so the other hand cannot click, or drag, underneath a drag
++    // already in progress. Zero is a real hand, so it has to be said that no
++    // owner is set rather than left at the memset.
++    int hostOwner;
++    // Set on the frame the host buttons were taken off the host by something
++    // other than their own release, and spent at the end of that frame. Java
++    // only learns the buttons through the mask this side hands back, so a frame
++    // that let another source claim them in the same breath reads as one press
++    // that never ended
++    int hostReleasePending;
+     float scrollCarry;
+     long lastInputNs;
+ 
+@@ -1823,6 +1885,7 @@ static int initXrInstance(XrCtx* ctx) {
+         if (!strcmp(exts[i].extensionName, XR_EXT_HAND_INTERACTION_EXTENSION_NAME)) ctx->handInteraction = 1;
+         if (!strcmp(exts[i].extensionName, XR_MSFT_HAND_INTERACTION_EXTENSION_NAME)) ctx->msftHandInteraction = 1;
+         if (!strcmp(exts[i].extensionName, XR_EXT_HAND_TRACKING_EXTENSION_NAME)) ctx->handTracking = 1;
++        if (!strcmp(exts[i].extensionName, XR_FB_HAND_TRACKING_AIM_EXTENSION_NAME)) ctx->handAim = 1;
+         if (!strcmp(exts[i].extensionName, XR_EXT_EYE_GAZE_INTERACTION_EXTENSION_NAME)) ctx->eyeGaze = 1;
+         if (!strcmp(exts[i].extensionName, XR_FB_COMPOSITION_LAYER_SETTINGS_EXTENSION_NAME)) ctx->layerSettingsSupported = 1;
+         if (!strcmp(exts[i].extensionName, XR_META_VIRTUAL_KEYBOARD_EXTENSION_NAME)) ctx->virtualKeyboardSupported = 1;
+@@ -1836,44 +1899,67 @@ static int initXrInstance(XrCtx* ctx) {
+         ctx->handInteraction = 0;
+         ctx->msftHandInteraction = 0;
+         ctx->handTracking = 0;
++        ctx->handAim = 0;
+         LOGI("hand tracking off by preference");
+     }
++#ifdef HAVE_FB_HAND_TRACKING_AIM
++    if (ctx->handAim && !ctx->handTracking) {
++        ctx->handAim = 0;
++    }
++#else
++    ctx->handAim = 0;
++#endif
+ 
+     if (!haveGles || !haveAndroidCreate) {
+         LOGE("required OpenXR extensions missing (gles=%d androidCreate=%d)", haveGles, haveAndroidCreate);
+         return 0;
+     }
+ 
+-    const char* enabledExts[10];
++    // One slot per extension that can be turned on below, with room to spare,
++    // and every push goes through the guard rather than an index write, so
++    // adding one cannot quietly overrun the array
++    const char* enabledExts[16];
+     uint32_t enabledCount = 0;
+-    enabledExts[enabledCount++] = XR_KHR_OPENGL_ES_ENABLE_EXTENSION_NAME;
+-    enabledExts[enabledCount++] = XR_KHR_ANDROID_CREATE_INSTANCE_EXTENSION_NAME;
++#define ENABLE_EXT(name) do { \
++        if (enabledCount < sizeof(enabledExts) / sizeof(enabledExts[0])) { \
++            enabledExts[enabledCount++] = (name); \
++        } \
++    } while (0)
++
++    ENABLE_EXT(XR_KHR_OPENGL_ES_ENABLE_EXTENSION_NAME);
++    ENABLE_EXT(XR_KHR_ANDROID_CREATE_INSTANCE_EXTENSION_NAME);
+     if (ctx->cylinderSupported) {
+-        enabledExts[enabledCount++] = XR_KHR_COMPOSITION_LAYER_CYLINDER_EXTENSION_NAME;
++        ENABLE_EXT(XR_KHR_COMPOSITION_LAYER_CYLINDER_EXTENSION_NAME);
+     }
+     if (ctx->picoInteraction) {
+-        enabledExts[enabledCount++] = XR_BD_CONTROLLER_INTERACTION_EXTENSION_NAME;
++        ENABLE_EXT(XR_BD_CONTROLLER_INTERACTION_EXTENSION_NAME);
+     }
+     if (ctx->equirectSupported) {
+-        enabledExts[enabledCount++] = XR_KHR_COMPOSITION_LAYER_EQUIRECT2_EXTENSION_NAME;
++        ENABLE_EXT(XR_KHR_COMPOSITION_LAYER_EQUIRECT2_EXTENSION_NAME);
+     }
+     if (ctx->handInteraction) {
+-        enabledExts[enabledCount++] = XR_EXT_HAND_INTERACTION_EXTENSION_NAME;
++        ENABLE_EXT(XR_EXT_HAND_INTERACTION_EXTENSION_NAME);
+     }
+     // Some runtimes will not honour the hand interaction profile unless the
+     // tracking extension is enabled next to it
+     if (ctx->handTracking) {
+-        enabledExts[enabledCount++] = XR_EXT_HAND_TRACKING_EXTENSION_NAME;
++        ENABLE_EXT(XR_EXT_HAND_TRACKING_EXTENSION_NAME);
++    }
++    // Asked for only alongside the joints it rides on, and only where the
++    // headers declare the state it returns
++    if (ctx->handAim) {
++        ENABLE_EXT(XR_FB_HAND_TRACKING_AIM_EXTENSION_NAME);
+     }
+     if (ctx->eyeGaze) {
+-        enabledExts[enabledCount++] = XR_EXT_EYE_GAZE_INTERACTION_EXTENSION_NAME;
++        ENABLE_EXT(XR_EXT_EYE_GAZE_INTERACTION_EXTENSION_NAME);
+     }
+     if (ctx->msftHandInteraction) {
+-        enabledExts[enabledCount++] = XR_MSFT_HAND_INTERACTION_EXTENSION_NAME;
++        ENABLE_EXT(XR_MSFT_HAND_INTERACTION_EXTENSION_NAME);
+     }
+     if (ctx->layerSettingsSupported) {
+-        enabledExts[enabledCount++] = XR_FB_COMPOSITION_LAYER_SETTINGS_EXTENSION_NAME;
++        ENABLE_EXT(XR_FB_COMPOSITION_LAYER_SETTINGS_EXTENSION_NAME);
+     }
++#undef ENABLE_EXT
+ 
+     XrInstanceCreateInfoAndroidKHR androidInfo = { XR_TYPE_INSTANCE_CREATE_INFO_ANDROID_KHR };
+     androidInfo.applicationVM = ctx->vm;
+@@ -1930,6 +2016,8 @@ static int initXrInstance(XrCtx* ctx) {
+           ? "available (XR_FB_composition_layer_settings)" : "not offered by this runtime");
+     LOGEV("virtual keyboard extension %s", ctx->virtualKeyboardSupported
+           ? "available (XR_META_virtual_keyboard)" : "not offered by this runtime");
++    LOGEV("runtime hand aim %s", ctx->handAim
++          ? "available (XR_FB_hand_tracking_aim)" : "not offered by this runtime");
+ 
+     // How many layers a frame may carry. The furniture, the panel and the glow
+     // all come and go on their own, so the ceiling is worth knowing rather than
+@@ -2561,9 +2649,12 @@ static void initJointTracking(XrCtx* ctx) {
+     LOGI("reading hand joints for pinch");
+ }
+ 
+-// Which kind of thing is driving each hand. Hands are never still enough for
+-// the movement gate to mean anything, so they wake the pointer a different way
+-// and need to be told apart from controllers.
++// Logs which kind of thing has arrived in each hand. The value itself is not
++// decided here: the profile event fires when a controller is picked up or put
++// down, which is not the same moment as the joints starting or stopping
++// answering, and a runtime that never hints a hand profile at all reports
++// nothing for this to read. nativeUpdateInput works the source out per frame
++// and owns usingHands; this only reports the profile for the log.
+ static void refreshInputSource(XrCtx* ctx) {
+     if (ctx->session == XR_NULL_HANDLE || !ctx->inputReady) {
+         return;
+@@ -2573,15 +2664,15 @@ static void refreshInputSource(XrCtx* ctx) {
+         if (XR_FAILED(xrGetCurrentInteractionProfile(ctx->session, ctx->handPaths[h], &state))) {
+             continue;
+         }
+-        // Without a pinch bound there is nothing to wake the pointer with, so
+-        // those hands stay on the movement gate rather than becoming unusable
+-        int hands = ctx->handClickOk && state.interactionProfile != XR_NULL_PATH
+-                && (state.interactionProfile == ctx->handProfile
+-                    || state.interactionProfile == ctx->msftHandProfile);
+-        if (hands != ctx->usingHands[h]) {
+-            LOGI("hand %d is now driven by %s", h, hands ? "hand tracking" : "a controller");
++        if (state.interactionProfile == XR_NULL_PATH) {
++            LOGI("hand %d has no interaction profile", h);
++        }
++        else {
++            LOGEV("hand %d interaction profile %llu (hand=%d msft=%d)",
++                  h, (unsigned long long)state.interactionProfile,
++                  state.interactionProfile == ctx->handProfile,
++                  state.interactionProfile == ctx->msftHandProfile);
+         }
+-        ctx->usingHands[h] = hands;
+     }
+ }
+ 
+@@ -3357,9 +3448,10 @@ static int initXrInput(XrCtx* ctx) {
+     ctx->pointerOn = 1;
+     initJointTracking(ctx);
+     refreshInputSource(ctx);
+-    LOGI("controller input ready (pico bindings %s, hand pinch %s)",
++    LOGI("controller input ready (pico bindings %s, hand pinch %s%s)",
+          ctx->picoInteraction ? "offered" : "not offered by this runtime",
+-         ctx->handClickOk ? "bound" : (ctx->jointTracking ? "from joints" : "unavailable"));
++         ctx->handClickOk ? "bound" : (ctx->jointTracking ? "from joints" : "unavailable"),
++         ctx->handAim ? ", aim from XR_FB_hand_tracking_aim" : "");
+     return 1;
+ }
+ 
+@@ -3409,6 +3501,26 @@ static XrVector2f actionVec2(XrCtx* ctx, XrAction action, int hand) {
+     return state.currentState;
+ }
+ 
++// Whether a pose action has anything to say this frame. Locating a space whose
++// action is not active returns a location with no valid bits, but a runtime is
++// within its rights to hand back a stale or zeroed pose instead, and a pose
++// action that is not active is not a source of a pose at all. So the question
++// is asked before the space is located rather than inferred from the result.
++static int actionPoseActive(XrCtx* ctx, XrAction action, int hand) {
++    if (action == XR_NULL_HANDLE) {
++        return 0;
++    }
++    XrActionStateGetInfo get = { XR_TYPE_ACTION_STATE_GET_INFO };
++    get.action = action;
++    get.subactionPath = hand < 0 ? XR_NULL_PATH : ctx->handPaths[hand];
++
++    XrActionStatePose state = { XR_TYPE_ACTION_STATE_POSE };
++    if (XR_FAILED(xrGetActionStatePose(ctx->session, &get, &state))) {
++        return 0;
++    }
++    return state.isActive != XR_FALSE;
++}
++
+ // Where the aim ray lands on the screen, in 0..1 texture coordinates with v
+ // running down the picture. Handles the cylinder as well, since the surface
+ // bulges toward the viewer and a flat approximation is wrong at the edges by
+@@ -3469,6 +3581,43 @@ static int screenProject(XrPosef aim, XrPosef screen, float width, float height,
+     *outV = 0.5f - hy;
+     return 1;
+ }
++
++// Whether a pose is worth acting on, and put it on the unit sphere while it
++// is here. The runtime says a pose is valid in its location flags and then
++// hands back numbers that are not finite, or a zero quaternion where a rotation
++// should be, and a projection of any of those poisons everything downstream of
++// it: the filters fill with NaN and never come back. So the flags are necessary
++// but not sufficient.
++static int poseUsable(XrPosef* pose) {
++    XrQuaternionf q = pose->orientation;
++    // Read as named members rather than as float pointer arithmetic off the
++    // position: the position is three floats and the orientation follows it, so
++    // the arithmetic would be reaching across the end of one struct member and
++    // into the next, which is only a coincidence of layout rather than anything
++    // the type promises
++    if (!isfinite(pose->position.x) || !isfinite(pose->position.y)
++            || !isfinite(pose->position.z)
++            || !isfinite(q.x) || !isfinite(q.y) || !isfinite(q.z) || !isfinite(q.w)) {
++        return 0;
++    }
++    float len = sqrtf(q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w);
++    // The components being finite is not the length being usable: squaring four
++    // finite but enormous floats overflows to infinity, and every division below
++    // would then be an infinity over an infinity, which is a NaN quaternion
++    // handed straight to the compositor
++    if (!isfinite(len) || len < 1e-6f) {
++        // Not a rotation. Identity would be a guess about where the hand is
++        // pointing, and a guess here is a ray fired at the wall behind you
++        return 0;
++    }
++    q.x /= len;
++    q.y /= len;
++    q.z /= len;
++    q.w /= len;
++    pose->orientation = q;
++    return 1;
++}
++
+ // A pointer ray from the joints, for runtimes that track hands but never offer
+ // a pointer pose. Cast from a shoulder rather than from the hand itself: a ray
+ // along the finger swings wildly with small movements of the wrist, while one
+@@ -3477,10 +3626,26 @@ static int screenProject(XrPosef aim, XrPosef screen, float width, float height,
+ static void buildHandRay(XrCtx* ctx, int hand, const XrPosef* head,
+                          const XrHandJointLocationEXT* joints) {
+     const XrHandJointLocationEXT* knuckle = &joints[XR_HAND_JOINT_INDEX_PROXIMAL_EXT];
+-    if (!(knuckle->locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT)) {
++    // The shoulder is taken from the head pose, which needs its orientation and
++    // not merely its position: a head pose with no rotation has no shoulders
++    // under it, and casting from the origin would throw the ray across the
++    // room rather than down the arm.
++    XrPosef shoulders = *head;
++    if (!(knuckle->locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT)
++            // The knuckle is the ray origin and the direction, so its numbers
++            // are load bearing here in a way the head's are not. The flag is the
++            // runtime's word for it and has been asked for below through
++            // poseUsable only for the head, so a joint that arrives with the bit
++            // set and a non finite position in it would turn the direction into
++            // a NaN that no later check can name
++            || !isfinite(knuckle->pose.position.x)
++            || !isfinite(knuckle->pose.position.y)
++            || !isfinite(knuckle->pose.position.z)
++            || !poseUsable(&shoulders)) {
+         ctx->handRayValid[hand] = 0;
+         return;
+     }
++    head = &shoulders;
+ 
+     Vec3 offset = { hand == HAND_RIGHT ? 0.17f : -0.17f, -0.20f, 0.05f };
+     Vec3 shoulder = quatRotate(head->orientation, offset);
+@@ -3510,15 +3675,51 @@ static void buildHandRay(XrCtx* ctx, int hand, const XrPosef* head,
+     rayX = vecNorm(rayX);
+     Vec3 rayY = vecCross(rayZ, rayX);
+ 
+-    ctx->handRay[hand].orientation = quatFromBasis(rayX, rayY, rayZ);
+-    ctx->handRay[hand].position = knuckle->pose.position;
++    XrPosef ray;
++    ray.position = knuckle->pose.position;
++    ray.orientation = quatFromBasis(rayX, rayY, rayZ);
++    // The direction came out of two poses that were each checked, but the
++    // arithmetic between them is ours and a degenerate basis or a joint at the
++    // world origin can still leave something unusable
++    if (!poseUsable(&ray)) {
++        ctx->handRayValid[hand] = 0;
++        return;
++    }
++    ctx->handRay[hand] = ray;
+     ctx->handRayValid[hand] = 1;
+ }
+ 
+-static int jointPinching(XrCtx* ctx, int hand, XrSpace space, const XrPosef* head,
+-                         int headValid) {
++// One hand, sampled once, every frame, on its own. The joints and the ray used
++// to be a side effect of the trigger read, which meant a hand that was already
++// pinched short circuited the sampling and kept reporting last frame's pose
++// and last frame's pinch for as long as the pinch was held. That is the whole
++// of why a flat hand stopped tracking: nothing about this function ran while
++// the button was down.
++//
++// The click the hand wants this frame is left in handClick rather than being
++// returned, because whether it is acted on depends on what else is in that
++// hand, which is a question for the caller. handClickBlocked says the runtime
++// has taken the hand over for a system gesture, where the click is not ours to
++// make at all.
++static int sampleHand(XrCtx* ctx, int hand, XrSpace space, const XrPosef* head,
++                      int headValid) {
++    // Cleared on the way in, so a frame the runtime says nothing about cannot
++    // leave the previous frame's ray and pinch standing as though they were
++    // current
++    ctx->handRayValid[hand] = 0;
++    ctx->pinchPointValid[hand] = 0;
++    ctx->handClick[hand] = 0;
++    ctx->handClickBlocked[hand] = 0;
++    ctx->handTracked[hand] = 0;
++    // jointPinch is left alone here on purpose: it carries the hysteresis, and
++    // it is cleared by the paths below that have no measurement to compare
++    // against rather than by the mere fact of a new frame arriving
++
+     if (!ctx->jointTracking || ctx->handTrackers[hand] == XR_NULL_HANDLE) {
+-        ctx->handRayValid[hand] = 0;
++        // No joints, so no pinch either. The hysteresis state goes with it,
++        // since a hand that comes back has to cross the closing threshold
++        // again rather than opening on the distance it was last seen at.
++        ctx->jointPinch[hand] = 0;
+         return 0;
+     }
+ 
+@@ -3527,27 +3728,124 @@ static int jointPinching(XrCtx* ctx, int hand, XrSpace space, const XrPosef* hea
+     locations.jointCount = XR_HAND_JOINT_COUNT_EXT;
+     locations.jointLocations = joints;
+ 
++#ifdef HAVE_FB_HAND_TRACKING_AIM
++    // Chained onto the joint locate itself: the aim state is a struct the
++    // runtime fills in as part of the same call, and it rides in the locations
++    // chain rather than behind an entry point of its own. Chained only once the
++    // instance enabled the extension, since a structure the runtime does not
++    // know is not ours to put in a chain. Initialised here rather than declared
++    // and filled separately so the same state object is what is asked about
++    // below.
++    XrHandTrackingAimStateFB aimState;
++    int wantAim = ctx->handAim;
++    if (wantAim) {
++        memset(&aimState, 0, sizeof(aimState));
++        aimState.type = XR_TYPE_HAND_TRACKING_AIM_STATE_FB;
++        // The locate is made on locations, so locations heads the chain and the
++        // aim state hangs off the end of it. The link runs one way only: a next
++        // pointing back at the head is a cycle, and the runtime is the one that
++        // walks this chain, so it would either loop on it or reject the call
++        // outright. The memset above leaves aimState.next null, which is what
++        // the tail of a chain has to be.
++        locations.next = &aimState;
++    }
++#endif
++
+     XrHandJointsLocateInfoEXT locate = { XR_TYPE_HAND_JOINTS_LOCATE_INFO_EXT };
+     locate.baseSpace = space;
+     locate.time = ctx->predictedDisplayTime;
+     if (XR_FAILED(ctx->pfnLocateHandJoints(ctx->handTrackers[hand], &locate, &locations))
+             || !locations.isActive) {
+         ctx->jointPinch[hand] = 0;
+-        ctx->pinchPointValid[hand] = 0;
+-        ctx->handRayValid[hand] = 0;
+         return 0;
+     }
++    ctx->handTracked[hand] = 1;
++
++    // The pinch point is the midpoint of two valid fingertips, whether or not
++    // anything else this frame is usable, since a drag follows the point the
++    // pinch was made at rather than wherever the ray ended up.
++    const XrHandJointLocationEXT* thumb = &joints[XR_HAND_JOINT_THUMB_TIP_EXT];
++    const XrHandJointLocationEXT* index = &joints[XR_HAND_JOINT_INDEX_TIP_EXT];
++    // The flags are necessary but not sufficient. Both the midpoint below and
++    // the gap further down are arithmetic on these two joints, and a tip can
++    // arrive with the valid bit set and non finite numbers in it, so each
++    // coordinate is asked about before either of them is touched
++    int tipsValid = (thumb->locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT)
++            && (index->locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT)
++            && isfinite(thumb->pose.position.x) && isfinite(thumb->pose.position.y)
++            && isfinite(thumb->pose.position.z)
++            && isfinite(index->pose.position.x) && isfinite(index->pose.position.y)
++            && isfinite(index->pose.position.z);
++    if (tipsValid) {
++        // Halved before adding rather than after. Two finite coordinates of
++        // large and opposite sign sum to an infinity, and halving that infinity
++        // afterwards is still an infinity, whereas halving first cannot
++        // overflow at all
++        float mx = 0.5f * thumb->pose.position.x + 0.5f * index->pose.position.x;
++        float my = 0.5f * thumb->pose.position.y + 0.5f * index->pose.position.y;
++        float mz = 0.5f * thumb->pose.position.z + 0.5f * index->pose.position.z;
++        if (!isfinite(mx) || !isfinite(my) || !isfinite(mz)) {
++            tipsValid = 0;
++        }
++        else {
++            ctx->pinchPoint[hand].x = mx;
++            ctx->pinchPoint[hand].y = my;
++            ctx->pinchPoint[hand].z = mz;
++            ctx->pinchPointValid[hand] = 1;
++        }
++    }
++
++#ifdef HAVE_FB_HAND_TRACKING_AIM
++    if (ctx->handAim) {
++        // The flags are the state's own status, filled in by the locate above
++        // and only meaningful when the runtime says it ran. Both COMPUTED and
++        // VALID are wanted: computed says the runtime has run the solver for
++        // this hand, valid says the pose it produced is one to point along.
++        XrHandTrackingAimFlagsFB status = aimState.status;
++        const XrHandTrackingAimFlagsFB needed = XR_HAND_TRACKING_AIM_COMPUTED_BIT_FB
++                | XR_HAND_TRACKING_AIM_VALID_BIT_FB;
++        if ((status & needed) != needed) {
++            // The runtime is not offering an aim pose this frame. Nothing is
++            // substituted for it: a ray guessed out of the joints and a click
++            // guessed out of a finger gap would both be acting on a hand the
++            // runtime has said it cannot place, and the user is better served
++            // by the pointer going quiet for the frame.
++            ctx->handClickBlocked[hand] = 1;
++            ctx->jointPinch[hand] = 0;
++            return 0;
++        }
++        if (status & XR_HAND_TRACKING_AIM_SYSTEM_GESTURE_BIT_FB) {
++            // The OS is running a gesture over the top, so it owns the hand.
++            // The click and the ray are both cleared, since anything we draw
++            // here would be a second, competing copy of the same gesture.
++            ctx->handClickBlocked[hand] = 1;
++            ctx->jointPinch[hand] = 0;
++            return 0;
++        }
++
++        XrPosef aim = aimState.aimPose;
++        if (!poseUsable(&aim)) {
++            ctx->handClickBlocked[hand] = 1;
++            ctx->jointPinch[hand] = 0;
++            return 0;
++        }
++        ctx->handRay[hand] = aim;
++        ctx->handRayValid[hand] = 1;
++        // The index pinch is the one the system uses for a far pointer click,
++        // so it is the one that means "click" here
++        ctx->handClick[hand] = (status & XR_HAND_TRACKING_AIM_INDEX_PINCHING_BIT_FB) ? 1 : 0;
++        ctx->jointPinch[hand] = ctx->handClick[hand];
++        return ctx->handClick[hand];
++    }
++#endif
+ 
++    // No aim extension: the ray is our own, and so is the pinch.
+     if (headValid) {
+         buildHandRay(ctx, hand, head, joints);
+     }
+ 
+-    const XrHandJointLocationEXT* thumb = &joints[XR_HAND_JOINT_THUMB_TIP_EXT];
+-    const XrHandJointLocationEXT* index = &joints[XR_HAND_JOINT_INDEX_TIP_EXT];
+-    if (!(thumb->locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT)
+-            || !(index->locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT)) {
++    if (!tipsValid) {
+         ctx->jointPinch[hand] = 0;
+-        ctx->pinchPointValid[hand] = 0;
+         return 0;
+     }
+ 
+@@ -3555,15 +3853,22 @@ static int jointPinching(XrCtx* ctx, int hand, XrSpace space, const XrPosef* hea
+     float dy = thumb->pose.position.y - index->pose.position.y;
+     float dz = thumb->pose.position.z - index->pose.position.z;
+     float gap = sqrtf(dx * dx + dy * dy + dz * dz);
++    // The components were each finite on the way in, but squaring and adding
++    // them can still overflow. A gap of infinity or NaN compares false against
++    // both thresholds below, so it would read as an opening hand and carry the
++    // previous frame's pinch on as though the fingers were still together. A
++    // distance that could not be measured is a hand that has gone, so the
++    // hysteresis is dropped with it
++    if (!isfinite(gap)) {
++        ctx->jointPinch[hand] = 0;
++        return 0;
++    }
+ 
+-    // Where the pinch happened, which is what a drag follows
+-    ctx->pinchPoint[hand].x = (thumb->pose.position.x + index->pose.position.x) * 0.5f;
+-    ctx->pinchPoint[hand].y = (thumb->pose.position.y + index->pose.position.y) * 0.5f;
+-    ctx->pinchPoint[hand].z = (thumb->pose.position.z + index->pose.position.z) * 0.5f;
+-    ctx->pinchPointValid[hand] = 1;
+-
++    // Hysteresis on the measured distance, kept from the previous frame's
++    // state so a hand resting near the threshold does not chatter
+     ctx->jointPinch[hand] = gap < (ctx->jointPinch[hand] ? PINCH_OFF_M : PINCH_ON_M);
+-    return ctx->jointPinch[hand];
++    ctx->handClick[hand] = ctx->jointPinch[hand];
++    return ctx->handClick[hand];
+ }
+ 
+ 
+@@ -5019,6 +5324,106 @@ static void swallowTrigger(XrCtx* ctx, int src) {
+     }
+ }
+ 
++// The host buttons one source is holding itself, and nothing else. This used to
++// be the OR of both hands with right and middle read without a subaction, so a
++// hand that was not the one doing the pointing could put a button down at the
++// host, and either controller's face button counted as both of them. Gaze is
++// not a source of host mouse buttons at all, and no other source can own one.
++static int hostButtonMask(XrCtx* ctx, int src) {
++    if (src < 0 || src >= HAND_COUNT) {
++        return 0;
++    }
++    int mask = 0;
++    if (ctx->triggerDown[src] && !ctx->triggerSwallowed[src]) {
++        mask |= VR_BUTTON_LEFT;
++    }
++    if (actionBool(ctx, ctx->rightClickAction, src)) {
++        mask |= VR_BUTTON_RIGHT;
++    }
++    if (actionBool(ctx, ctx->middleClickAction, src)) {
++        mask |= VR_BUTTON_MIDDLE;
++    }
++    return mask;
++}
++
++// Whatever the host buttons were doing, they stop. For wherever they are being
++// taken off the host by something other than their own release: a source
++// change, a tracking gap, or focus going away, where a button left down would
++// sit there until a release the user never makes.
++static void releaseHostButtons(XrCtx* ctx, int src) {
++    if (ctx->hostOwner != src) {
++        return;
++    }
++    ctx->hostOwner = -1;
++    ctx->buttonsDown = 0;
++    // Java is one frame behind this write, so the frame the buttons came up
++    // has to be the frame nobody else may claim them in
++    ctx->hostReleasePending = 1;
++}
++
++// One hand stops being trusted to press: what it was holding belonged to the
++// other thing in the slot, or to a frame nobody could see. The press and the
++// pose history both go, since a ray filtered from a pose the hand is no longer
++// in is how the cursor slides in from where it used to be.
++static void disarmHand(XrCtx* ctx, int hand) {
++    releaseHostButtons(ctx, hand);
++    ctx->inputArmed[hand] = 0;
++    ctx->triggerDown[hand] = 0;
++    ctx->triggerEdge[hand] = 0;
++    ctx->poseSeen[hand] = 0;
++    ctx->aimFilterPos[hand][0].valid = 0;
++    ctx->aimFilterPos[hand][1].valid = 0;
++    ctx->aimFilterPos[hand][2].valid = 0;
++    ctx->aimFilterRot[hand].valid = 0;
++    memset(&ctx->lastAim[hand], 0, sizeof(ctx->lastAim[hand]));
++}
++
++// Every bit of input state, dropped at once, for whenever the pointer stops
++// being read: focus lost, pointing switched off, the session not running, or
++// the actions refusing to sync. A press the user could not see must not survive
++// into the frame the pointer comes back on, and neither must the pose history
++// the ray would be filtered from. The settings and the panels are not input
++// state and are left exactly where they are.
++static void resetInputState(XrCtx* ctx) {
++    for (int h = 0; h < SRC_COUNT; h++) {
++        ctx->triggerDown[h] = 0;
++        ctx->triggerEdge[h] = 0;
++        ctx->triggerSwallowed[h] = 0;
++        ctx->pinchSwallowed[h] = 0;
++        ctx->lockArmed[h] = 0;
++        ctx->gripEdge[h] = 0;
++        ctx->grabDown[h] = 0;
++        ctx->poseSeen[h] = 0;
++        memset(&ctx->lastAim[h], 0, sizeof(ctx->lastAim[h]));
++    }
++    for (int h = 0; h < HAND_COUNT; h++) {
++        disarmHand(ctx, h);
++        ctx->jointPinch[h] = 0;
++        ctx->handClick[h] = 0;
++        ctx->handClickBlocked[h] = 0;
++        ctx->handTracked[h] = 0;
++        ctx->handRayValid[h] = 0;
++        ctx->pinchPointValid[h] = 0;
++    }
++    // The cursor's own filter, since which hand fed it is unknown now
++    ctx->filterU.valid = 0;
++    ctx->filterV.valid = 0;
++    ctx->buttonsDown = 0;
++    // And the owner, so the press that was in progress is not still in progress
++    // on the other side of the gap
++    ctx->hostOwner = -1;
++    ctx->scrollCarry = 0.0f;
++    // The clock as well, so the first frame back is not measured across a gap
++    ctx->lastInputNs = 0;
++    ctx->kbKeyDown = 0;
++    if (ctx->grabMode != GRAB_NONE) {
++        // Letting go of the screen has to count as ending the grab, or the
++        // anchor is stale when the pointer comes back and the picture jumps
++        ctx->grabMode = GRAB_NONE;
++        ctx->poseDirty = 1;
++    }
++}
++
+ // Where the ray lands on furniture rather than on the picture. The grid has a
+ // plane of its own, everything else sits on the screen.
+ static Vec3 furniturePoint(XrCtx* ctx, int hover, float u, float v, XrPosef screenPose,
+@@ -5228,6 +5633,11 @@ Java_com_limelight_binding_video_XrRenderer_nativeInit(JNIEnv* env, jobject thiz
+                                                        jint envResTier) {
+     XrCtx* ctx = calloc(1, sizeof(XrCtx));
+     ctx->handsEnabled = handTracking;
++    // Off the end of the source list, so the first frame that settles on a
++    // source logs the change rather than reading as though nothing moved
++    for (int h = 0; h < HAND_COUNT; h++) {
++        ctx->lastSource[h] = -1;
++    }
+     // EnvResTier: 0 low, 1 standard, 2 high, 3 ultra
+     ctx->envResTier = envResTier;
+     ctx->videoWidth = width;
+@@ -5262,6 +5672,8 @@ Java_com_limelight_binding_video_XrRenderer_nativeInit(JNIEnv* env, jobject thiz
+     ctx->cogDragSlider = -1;
+     ctx->cogDragHand = -1;
+     ctx->cogHoverSlider = -1;
++    // No host buttons are held, and nobody owns them
++    ctx->hostOwner = -1;
+     // No key under the ray, and zero is a real key
+     ctx->kbHoverKey = -1;
+     ctx->pointerMinCutoff = POINTER_MIN_CUTOFF;
+@@ -5690,6 +6102,11 @@ Java_com_limelight_binding_video_XrRenderer_nativeWaitBeginFrame(JNIEnv* env, jo
+     }
+ 
+     if (!ctx->sessionRunning) {
++        // Nothing is reading input this frame, so nothing is holding a button.
++        // Say so here rather than waiting for the next sync to say it: Java's
++        // idle path lets go of the host mouse on its own account, and the two
++        // have to agree or the button comes back down still held.
++        resetInputState(ctx);
+         usleep(10000);
+         return FRAME_IDLE;
+     }
+@@ -5724,6 +6141,9 @@ Java_com_limelight_binding_video_XrRenderer_nativeUpdateInput(JNIEnv* env, jobje
+     if (ctx != NULL) {
+         ctx->gazeEnabled = gazeEnabled;
+         ctx->prefCurvature = curvature;
++        // Before anything can disarm below, so the flag only ever says what
++        // this frame itself released
++        ctx->hostReleasePending = 0;
+     }
+     // Zero is a real cell, so "nothing picked" has to be said explicitly. Every
+     // early return below would otherwise read as a press on the first one. Same
+@@ -5739,14 +6159,10 @@ Java_com_limelight_binding_video_XrRenderer_nativeUpdateInput(JNIEnv* env, jobje
+     if (ctx == NULL || !ctx->inputReady || !pointerEnabled || !ctx->placementValid
+             || ctx->sessionState != XR_SESSION_STATE_FOCUSED) {
+         if (ctx != NULL) {
+-            ctx->buttonsDown = 0;
+             ctx->beamVisible = 0;
+-            if (ctx->grabMode != 0) {
+-                // Dropping focus mid grab has to count as letting go, or the
+-                // anchor is stale when focus comes back and the screen jumps
+-                ctx->grabMode = 0;
+-                ctx->poseDirty = 1;
+-            }
++            // Everything the hands were doing goes with it, so nothing the user
++            // could not see survives into the frame the pointer comes back on
++            resetInputState(ctx);
+             if (ctx->cogDragSlider >= 0) {
+                 // Same for a slider: a drag must not survive the trigger it
+                 // was being held with going unwatched. Ending it here still
+@@ -5766,7 +6182,9 @@ Java_com_limelight_binding_video_XrRenderer_nativeUpdateInput(JNIEnv* env, jobje
+     sync.countActiveActionSets = 1;
+     sync.activeActionSets = &active;
+     if (XR_FAILED(xrSyncActions(ctx->session, &sync))) {
+-        ctx->buttonsDown = 0;
++        // The actions are unreadable, so every press this context believes in
++        // is something the runtime last told it and nothing has since revised
++        resetInputState(ctx);
+         (*env)->SetFloatArrayRegion(env, outArr, 0, IN_SLOTS, out);
+         return;
+     }
+@@ -5796,13 +6214,119 @@ Java_com_limelight_binding_video_XrRenderer_nativeUpdateInput(JNIEnv* env, jobje
+         dt = 0.1f;
+     }
+ 
++    // The head pose wants both halves of the validity flag, not just the
++    // position: the shoulder a hand ray is cast from is found by rotating an
++    // offset by the head's orientation, so a head pose with a position and no
++    // rotation has no shoulders under it. It also has to survive poseUsable,
++    // since a stale rotation here is what the previous frame's head leaves
++    // behind when the runtime has stopped tracking.
+     XrSpaceLocation headLoc = { XR_TYPE_SPACE_LOCATION };
++    const XrSpaceLocationFlags headNeeded = XR_SPACE_LOCATION_POSITION_VALID_BIT
++            | XR_SPACE_LOCATION_ORIENTATION_VALID_BIT;
+     int headValid = XR_SUCCEEDED(xrLocateSpace(ctx->viewSpace, space,
+                                                ctx->predictedDisplayTime, &headLoc))
+-            && (headLoc.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT) != 0;
++            && (headLoc.locationFlags & headNeeded) == headNeeded
++            && poseUsable(&headLoc.pose);
+     if (headValid) {
+         ctx->headPos = headLoc.pose.position;
+     }
++    else {
++        // Nothing downstream is allowed to read the head pose on a frame the
++        // runtime would not stand behind
++        headLoc.pose.position.x = 0.0f;
++        headLoc.pose.position.y = 0.0f;
++        headLoc.pose.position.z = 0.0f;
++        headLoc.pose.orientation.x = 0.0f;
++        headLoc.pose.orientation.y = 0.0f;
++        headLoc.pose.orientation.z = 0.0f;
++        headLoc.pose.orientation.w = 1.0f;
++    }
++
++    // Every hand is sampled every frame, on its own, before anything is read
++    // off a trigger. The sampling used to be called from inside the trigger
++    // expression, where a hand that was already pinched short circuited the
++    // whole thing and reported the pose and the pinch it had last seen, for as
++    // long as the pinch was held. Sampling first is what makes a held pinch
++    // still point at where the hand is.
++    for (int h = 0; h < HAND_COUNT; h++) {
++        sampleHand(ctx, h, space, &headLoc.pose, headValid);
++    }
++
++    // Whether each hand's aim action is active at all. Asked before anything
++    // is located, because an inactive pose action has no space to locate and a
++    // runtime that returns a stale pose for one is entitled to do so.
++    for (int h = 0; h < HAND_COUNT; h++) {
++        ctx->aimActive[h] = actionPoseActive(ctx, ctx->aimAction, h);
++    }
++
++    // What is actually in each hand this frame, which is the question the whole
++    // hand path hangs off. The interaction profile names a controller profile or
++    // a hand profile, and says nothing at all when there is nothing in the
++    // hand, so a runtime that never currents a hand profile still has to be
++    // read as a hand when the joints are answering for it. A profile that has
++    // been named settles the slot outright: a hand profile is a hand even while
++    // its bound aim action is active, which is what a hand profile binds an aim
++    // pose to, and a controller profile is a controller even while the pose is
++    // invalid, which is how a controller is most of the time it is out of view.
++    // The aim action is only the fallback, for a runtime that has named nothing
++    // at all.
++    for (int h = 0; h < HAND_COUNT; h++) {
++        XrInteractionProfileState profile = { XR_TYPE_INTERACTION_PROFILE_STATE };
++        XrPath current = XR_NULL_PATH;
++        if (XR_SUCCEEDED(xrGetCurrentInteractionProfile(ctx->session,
++                                                        ctx->handPaths[h], &profile))) {
++            current = profile.interactionProfile;
++        }
++
++        int isHandProfile = current != XR_NULL_PATH
++                && ((ctx->handProfile != XR_NULL_PATH && current == ctx->handProfile)
++                 || (ctx->msftHandProfile != XR_NULL_PATH
++                        && current == ctx->msftHandProfile));
++        int isControllerProfile = current != XR_NULL_PATH && !isHandProfile;
++
++        if (isHandProfile) {
++            ctx->controllerSource[h] = SRC_HAND;
++        }
++        else if (isControllerProfile) {
++            // No joint fallback from here: a controller the runtime cannot place
++            // is a controller out of view, not a hand
++            ctx->controllerSource[h] = SRC_CONTROLLER;
++        }
++        else if (ctx->aimActive[h] && !ctx->handTracked[h]) {
++            // Nothing named, but something is aiming, and no hand is being
++            // tracked to contradict it
++            ctx->controllerSource[h] = SRC_CONTROLLER;
++        }
++        else if (ctx->handTracked[h]) {
++            // Joints with no profile behind them are the fallback case, and it
++            // is still a hand: the ray and the pinch both come off the joints
++            ctx->controllerSource[h] = SRC_HAND;
++        }
++        else {
++            ctx->controllerSource[h] = SRC_NONE;
++        }
++    }
++
++    // Which source is really driving each hand, which is what the movement gate
++    // and the padlock read. Taken from the frame's own answer rather than from
++    // the profile event, so a hand whose joints took over while the profile
++    // stayed on a controller is still treated as a hand here.
++    static const char* const sourceNames[3] = {
++        "nothing", "hand tracking", "a controller"
++    };
++    for (int h = 0; h < HAND_COUNT; h++) {
++        if (ctx->controllerSource[h] != ctx->lastSource[h]) {
++            // Whatever this hand was holding belonged to the other thing in the
++            // slot, so it goes with the change rather than carrying over into a
++            // source that has not earned a press yet
++            disarmHand(ctx, h);
++            LOGI("hand %d is now driven by %s (joints %d, aim action %d)",
++                 h, sourceNames[ctx->controllerSource[h]], ctx->handTracked[h],
++                 ctx->aimActive[h]);
++        }
++        ctx->lastSource[h] = ctx->controllerSource[h];
++        ctx->usingHands[h] = ctx->controllerSource[h] == SRC_HAND;
++    }
+ 
+     float hitU[SRC_COUNT], hitV[SRC_COUNT];
+     int hovers[SRC_COUNT] = { HOVER_NONE, HOVER_NONE, HOVER_NONE };
+@@ -5814,15 +6338,48 @@ Java_com_limelight_binding_video_XrRenderer_nativeUpdateInput(JNIEnv* env, jobje
+     XrPosef aimPoses[SRC_COUNT];
+     int moved = 0;
+     for (int h = 0; h < SRC_COUNT; h++) {
++        // What this hand says before the arm gate below has had its say
++        int rawClick = 0;
++        // The same question asked of the release rather than of the press, and
++        // answered on the value itself where there is one. rawClick cannot do
++        // this job: with wasDown clear the press test is against PRESS_ON, so a
++        // trigger resting at 0.4 reads as no press at all and the gate below
++        // would arm the hand while the button is still physically down
++        int rawReleased = 0;
+         if (h < HAND_COUNT) {
+             int wasDown = ctx->triggerDown[h];
+             float value = actionFloat(ctx, ctx->triggerAction, h);
+-            // Either a bound trigger or a measured pinch will do. Runtimes
+-            // that offer neither leave this at rest, which is what a headset
+-            // with nothing in its hands should report.
+-            ctx->triggerDown[h] = value > (wasDown ? PRESS_OFF : PRESS_ON)
+-                    || jointPinching(ctx, h, space, &headLoc.pose, headValid);
++            int analog = value > (wasDown ? PRESS_OFF : PRESS_ON);
++
++            // A bound trigger belongs to a controller and a pinch belongs to a
++            // hand, and the two are no longer ORed together. A raw pinch mixed
++            // into an active controller's trigger is what let a pinch in one
++            // hand press with the other, and what made a controller's trigger
++            // value read as a held hand click in the diagnostics. Whichever
++            // source owns the hand is the one that gets to click.
++            int click;
++            if (ctx->controllerSource[h] == SRC_CONTROLLER) {
++                click = analog;
++            }
++            else {
++                // A hand blocked by a system gesture reports no click at all,
++                // and nothing is substituted for it: the OS is running that
++                // gesture and a second one from here would fight it
++                click = ctx->handClickBlocked[h] ? 0 : ctx->handClick[h];
++            }
++            ctx->triggerDown[h] = click;
+             ctx->triggerEdge[h] = ctx->triggerDown[h] && !wasDown;
++            rawClick = click;
++            // A controller is released only at or under the release threshold,
++            // which is the point at which the press test above would also let
++            // go, so the arm gate and the press agree on what is held. The
++            // finiteness test is what keeps a NaN out of it: a NaN compares
++            // false against every threshold, so without it the press test reads
++            // it as released and this would act on that reading. A hand has no
++            // value to ask, so its own click is the whole of the answer.
++            rawReleased = ctx->controllerSource[h] == SRC_CONTROLLER
++                    ? (isfinite(value) && value <= PRESS_OFF)
++                    : !rawClick;
+ 
+             // Diagnostics only. A press held from a pinch reads zero here, so
+             // a hand click shows as a hold that never leaves 0.00.
+@@ -5852,27 +6409,57 @@ Java_com_limelight_binding_video_XrRenderer_nativeUpdateInput(JNIEnv* env, jobje
+             continue;
+         }
+ 
+-        XrSpaceLocation loc = { XR_TYPE_SPACE_LOCATION };
+-        const XrSpaceLocationFlags needed = XR_SPACE_LOCATION_POSITION_VALID_BIT
+-                | XR_SPACE_LOCATION_ORIENTATION_VALID_BIT;
+-        int located = XR_SUCCEEDED(xrLocateSpace(ctx->aimSpaces[h], space,
+-                                                 ctx->predictedDisplayTime, &loc))
+-                && (loc.locationFlags & needed) == needed;
++    XrSpaceLocation loc = { XR_TYPE_SPACE_LOCATION };
++    const XrSpaceLocationFlags needed = XR_SPACE_LOCATION_POSITION_VALID_BIT
++            | XR_SPACE_LOCATION_ORIENTATION_VALID_BIT;
++        // A pose action that is not active has no pose to locate, so the
++        // locate is skipped for it rather than made and believed. Gaze is the
++        // one source with no hand of its own, so it asks with no subaction.
++        int actionLive;
++        if (h == SRC_GAZE) {
++            actionLive = actionPoseActive(ctx, ctx->gazeAction, -1);
++        }
++        else if (ctx->handAim && ctx->controllerSource[h] == SRC_HAND) {
++            // The runtime's own hand aim owns the ray for this hand, and the
++            // bound aim action is not consulted at all: it is the path the
++            // joints replace, and two rays for one hand would fight over the
++            // same slot. A hand the runtime has taken over for a system
++            // gesture, or cannot place this frame, is left with neither, which
++            // is exactly what sampleHand recorded in handRayValid.
++            actionLive = 0;
++        }
++        else {
++            // Hands without the extension, and every controller
++            actionLive = ctx->aimActive[h];
++        }
++        int located = actionLive
++                && XR_SUCCEEDED(xrLocateSpace(ctx->aimSpaces[h], space,
++                                              ctx->predictedDisplayTime, &loc))
++                && (loc.locationFlags & needed) == needed
++                && poseUsable(&loc.pose);
+         if (!located) {
+             // No controller and no pointer pose from the runtime, so the ray
+             // built out of the joints stands in. This is what makes hand
+             // pointing work on runtimes that refuse the hand profile.
+-            if (h < HAND_COUNT && ctx->handRayValid[h]) {
++            //
++            // Only for a hand, though. While a controller is active in a hand
++            // the ray belongs to the controller, and a stale hand ray
++            // substituted for it would be a second pointer fighting the first
++            // one over the same slot. A controller profile that cannot place
++            // its pose has no joint fallback either: it is a controller, not a
++            // hand the runtime has lost.
++            if (h < HAND_COUNT && ctx->handRayValid[h]
++                    && ctx->controllerSource[h] == SRC_HAND) {
+                 loc.pose = ctx->handRay[h];
+             }
+             else {
+-                // Filtering across a tracking gap would sweep the ray in
+-                // from wherever the hand was last seen
+                 if (h < HAND_COUNT) {
+-                    ctx->aimFilterPos[h][0].valid = 0;
+-                    ctx->aimFilterPos[h][1].valid = 0;
+-                    ctx->aimFilterPos[h][2].valid = 0;
+-                    ctx->aimFilterRot[h].valid = 0;
++                    // Tracking has gone for this hand. The press goes with it,
++                    // since a click held through a gap is a click the user
++                    // never saw, and so does the pose history: filtering
++                    // across the gap would sweep the ray in from wherever the
++                    // hand was last seen.
++                    disarmHand(ctx, h);
+                 }
+                 continue;
+             }
+@@ -5895,6 +6482,32 @@ Java_com_limelight_binding_video_XrRenderer_nativeUpdateInput(JNIEnv* env, jobje
+             aimPoses[h] = loc.pose;
+         }
+         aimValid[h] = 1;
++        if (h < HAND_COUNT) {
++            // A hand that has just come back from a tracking gap, a profile
++            // change or a focus loss is holding whatever the runtime left in its
++            // action state, and reading a press straight off that clicks the
++            // host on behalf of the user. So the first frame with a valid pose
++            // and nothing held anywhere is what arms the hand, and until then
++            // both the press and its rising edge are dropped. A hand that is
++            // already armed stays armed, so a drag is never cut in half.
++            //
++            // Nothing held is decided on the release, as read during the raw
++            // sample above rather than from the click, so a trigger held at a
++            // value between the two thresholds does not count as let go.
++            //
++            // Right and middle are asked of this hand rather than of either,
++            // since they belong to it for the same reason the trigger does. Read
++            // as an aggregate they were a button in the other hand keeping this
++            // one unarmed for as long as it was held.
++            if (rawReleased && !actionBool(ctx, ctx->rightClickAction, h)
++                    && !actionBool(ctx, ctx->middleClickAction, h)) {
++                ctx->inputArmed[h] = 1;
++            }
++            if (!ctx->inputArmed[h]) {
++                ctx->triggerDown[h] = 0;
++                ctx->triggerEdge[h] = 0;
++            }
++        }
+         // The keyboard is not modal, but it does own the ground it covers: it
+         // hangs in front of the bar, so a ray that lands on it must not reach
+         // the picture or the furniture behind.
+@@ -5909,7 +6522,12 @@ Java_com_limelight_binding_video_XrRenderer_nativeUpdateInput(JNIEnv* env, jobje
+             hitV[h] = kbV;
+         }
+         else if (screenProject(aimPoses[h], screenPose, ctx->screenWidth, height, radius, curved,
+-                               &hitU[h], &hitV[h])) {
++                               &hitU[h], &hitV[h])
++                 // The projection is the last arithmetic before these numbers
++                 // reach the host cursor, the one euro filters and the ray
++                 // drawing, so a non finite one is refused here rather than
++                 // poisoning all three
++                 && isfinite(hitU[h]) && isfinite(hitV[h])) {
+             // No corner brackets in a room, so nothing there claims the ray
+             hovers[h] = hoverTest(hitU[h], hitV[h], ctx->screenWidth, height, !roomOn,
+                                   &corners[h]);
+@@ -6037,7 +6655,18 @@ Java_com_limelight_binding_video_XrRenderer_nativeUpdateInput(JNIEnv* env, jobje
+             pinching = 1;
+             if (!ctx->pointerAwake) {
+                 ctx->pointerAwake = 1;
+-                ctx->pinchSwallowed[h] = 1;
++                // A pinch that woke the pointer was reaching for the pointer and
++                // not for the screen, so it is swallowed rather than passed on
++                // as a click. Unless it is over one of our own affordances, the
++                // settings cog or a key or the exit prompt, where there was
++                // nothing to wake up for: the swallow is what made the first
++                // pinch on a button do nothing at all, and then the user had to
++                // pinch again to find out. A pinch on the picture or on empty
++                // ground still wakes it and is still swallowed.
++                if (hovers[h] == HOVER_NONE || hovers[h] == HOVER_HALO
++                        || hovers[h] == HOVER_SCREEN) {
++                    ctx->pinchSwallowed[h] = 1;
++                }
+             }
+         }
+         else {
+@@ -6057,9 +6686,28 @@ Java_com_limelight_binding_video_XrRenderer_nativeUpdateInput(JNIEnv* env, jobje
+         }
+     }
+ 
+-    // Deliberate movement wakes the pointer, a controller put down retires it
+-    if (pinching) {
+-        // Only the pinch clock matters while hands are in charge
++    // Deliberate movement wakes the pointer, a controller put down retires it.
++    //
++    // Holding anything holds it up for as long as the hold lasts. A pinch only
++    // ever woke the pointer, so a trigger or a grip that was not a pinch could
++    // still be timed out by the sleep, which is five seconds of holding still
++    // in the middle of a drag. A button is also deliberate enough on its own to
++    // wake the pointer, rather than waiting out the half second of movement a
++    // controller otherwise has to make, since a controller can be picked up and
++    // pressed without ever being waved about first. The grip is read as it was
++    // left by last frame's grab, which costs nothing and is a frame behind at
++    // worst.
++    int holding = pinching;
++    for (int h = 0; h < HAND_COUNT; h++) {
++        if (ctx->triggerDown[h] || ctx->grabDown[h]
++                || actionBool(ctx, ctx->rightClickAction, h)
++                || actionBool(ctx, ctx->middleClickAction, h)) {
++            holding = 1;
++        }
++    }
++    if (holding) {
++        ctx->pointerAwake = 1;
++        // Only the pinch clock matters while something is being held
+         ctx->stillFor = 0.0f;
+         ctx->movingFor = 0.0f;
+     }
+@@ -6078,26 +6726,47 @@ Java_com_limelight_binding_video_XrRenderer_nativeUpdateInput(JNIEnv* env, jobje
+         }
+     }
+ 
+-    // The hand holding the trigger wins, so a drag is never stolen by the other
+-    // one drifting across the screen. Right hand otherwise.
++    // A press already in progress keeps the pointer. Its owner owns the
++    // selection too, whether or not its ray is still on the picture, so a drag
++    // is neither stolen by the other hand nor lost the moment the ray leaves
++    // the screen. Only while it is really still holding something, or a hand
++    // that has gone missing takes the priority back with it.
+     static const int order[SRC_COUNT] = { HAND_RIGHT, HAND_LEFT, SRC_GAZE };
+     int hand = -1;
+-    for (int i = 0; i < SRC_COUNT; i++) {
+-        int h = order[i];
+-        if (hovers[h] == HOVER_SCREEN && ctx->triggerDown[h]) {
+-            hand = h;
+-            break;
+-        }
++    if (ctx->hostOwner >= 0 && aimValid[ctx->hostOwner] && ctx->buttonsDown) {
++        hand = ctx->hostOwner;
+     }
+-    // A hand on something beats one merely near it, so a controller resting in
+-    // the margin never takes the pointer off the one being aimed
+-    for (int pass = 0; pass < 2 && hand < 0; pass++) {
+-        for (int i = 0; i < SRC_COUNT && hand < 0; i++) {
++    else {
++        // The hand holding a host button wins, so a drag is never stolen by the
++        // other one drifting across the screen, and a right or middle click is
++        // not dropped by a hand that is merely nearer. Right hand otherwise.
++        for (int i = 0; i < SRC_COUNT; i++) {
+             int h = order[i];
+-            if (hovers[h] == HOVER_NONE || (pass == 0 && hovers[h] == HOVER_HALO)) {
++            if (hovers[h] != HOVER_SCREEN) {
+                 continue;
+             }
+-            hand = h;
++            // Gaze carries no buttons of its own, so the pinch standing in for
++            // one is what claims the pointer there. A hand claims it on any
++            // button it is holding, and only once it is armed, since an unarmed
++            // hand is carrying whatever the runtime left behind rather than a
++            // press the user can see.
++            int wants = (h == SRC_GAZE) ? ctx->triggerDown[h]
++                                        : (ctx->inputArmed[h] && hostButtonMask(ctx, h) != 0);
++            if (wants) {
++                hand = h;
++                break;
++            }
++        }
++        // A hand on something beats one merely near it, so a controller resting
++        // in the margin never takes the pointer off the one being aimed
++        for (int pass = 0; pass < 2 && hand < 0; pass++) {
++            for (int i = 0; i < SRC_COUNT && hand < 0; i++) {
++                int h = order[i];
++                if (hovers[h] == HOVER_NONE || (pass == 0 && hovers[h] == HOVER_HALO)) {
++                    continue;
++                }
++                hand = h;
++            }
+         }
+     }
+ 
+@@ -6496,6 +7165,7 @@ Java_com_limelight_binding_video_XrRenderer_nativeUpdateInput(JNIEnv* env, jobje
+                 // button down on the host
+                 ctx->pointerAwake = 0;
+                 ctx->buttonsDown = 0;
++                ctx->hostOwner = -1;
+                 ctx->stillFor = 0.0f;
+                 ctx->movingFor = 0.0f;
+                 if (ctx->grabMode != GRAB_NONE) {
+@@ -6620,7 +7290,10 @@ Java_com_limelight_binding_video_XrRenderer_nativeUpdateInput(JNIEnv* env, jobje
+             ctx->beamEnd.z = end.z;
+             ctx->beamVisible = headValid;
+         }
++        // Pointing is off, so the host has nothing to be told about, and
++        // whatever was held is over along with the press that owned it
+         ctx->buttonsDown = 0;
++        ctx->hostOwner = -1;
+         writeInputPose(ctx, out);
+         (*env)->SetFloatArrayRegion(env, outArr, 0, IN_SLOTS, out);
+         return;
+@@ -6668,23 +7341,47 @@ Java_com_limelight_binding_video_XrRenderer_nativeUpdateInput(JNIEnv* env, jobje
+         ctx->beamVisible = headValid;
+     }
+ 
+-    int mask = 0;
+-    for (int h = 0; h < HAND_COUNT; h++) {
+-        // Per hand rather than either hand, so a trigger spent on the grid or a
+-        // panel is out of the count while the other one still clicks
+-        if (ctx->triggerDown[h] && !ctx->triggerSwallowed[h]) {
+-            mask |= VR_BUTTON_LEFT;
++    // The host's buttons belong to one source for the whole press, and only
++    // that source's own buttons count. With the mask ORed out of both hands,
++    // whichever hand was not the one doing the pointing could click the host,
++    // so a controller resting in the margin put buttons down under a drag being
++    // made by the other one.
++    int owner = ctx->hostOwner;
++    int mask = owner >= 0 ? hostButtonMask(ctx, owner) : 0;
++    if (owner >= 0 && mask == 0) {
++        // Every button it was holding is up, so the next press is free to be
++        // taken by whichever hand is pointing then
++        ctx->hostOwner = -1;
++        owner = -1;
++    }
++    // A release forced earlier in this frame owns the frame's output. The other
++    // hand may already be armed and pressing, and letting it claim the mask here
++    // would hand Java 1 out of 1 again: no UP at the host, and a drag that
++    // teleports to the new cursor. So this frame reports the release alone, at
++    // the old cursor, and the next one is free to take a press as normal.
++    int releaseFrame = ctx->hostReleasePending;
++    if (!releaseFrame && owner < 0 && hand >= 0 && hand < HAND_COUNT && aimValid[hand]
++            && ctx->inputArmed[hand] && hit) {
++        // A new press is only taken from the source that was selected, and only
++        // from one that is placed, trusted to press and aiming at the picture
++        // rather than at the furniture around it
++        int candidate = hostButtonMask(ctx, hand);
++        if (candidate != 0) {
++            owner = hand;
++            mask = candidate;
++            ctx->hostOwner = hand;
+         }
+     }
+-    if (actionBool(ctx, ctx->rightClickAction, -1)) {
+-        mask |= VR_BUTTON_RIGHT;
+-    }
+-    if (actionBool(ctx, ctx->middleClickAction, -1)) {
+-        mask |= VR_BUTTON_MIDDLE;
+-    }
+     // A press only counts while aimed at the screen, but a release always
+     // does, so walking the pointer off the edge mid drag still lets go
+     ctx->buttonsDown = (ctx->buttonsDown & mask) | (hit ? mask : 0);
++    if (releaseFrame) {
++        // The hit comes off with the buttons, so Java sends the UP without
++        // moving a cursor that was mid drag
++        ctx->buttonsDown = 0;
++        ctx->hostOwner = -1;
++        out[IN_HIT] = 0.0f;
++    }
+     out[IN_BUTTONS] = (float)ctx->buttonsDown;
+ 
+     // Diagnostics for the click path, one line per transition, so an ordinary
+@@ -6719,8 +7416,12 @@ Java_com_limelight_binding_video_XrRenderer_nativeUpdateInput(JNIEnv* env, jobje
+         ctx->trigLogDown[HAND_RIGHT] = ctx->triggerDown[HAND_RIGHT];
+     }
+ 
+-    XrVector2f stick = actionVec2(ctx, ctx->scrollAction, -1);
+-    if (hit && fabsf(stick.y) > SCROLL_DEADZONE) {
++    // The wheel belongs to the source doing the pointing, like every other host
++    // input. Read without a subaction it reports whichever hand moved its stick
++    // first, which is a scroll from a hand that is not the one aiming, and the
++    // half deflection the other hand is holding parks in the carry.
++    XrVector2f stick = actionVec2(ctx, ctx->scrollAction, hand);
++    if (hit && aimValid[hand] && fabsf(stick.y) > SCROLL_DEADZONE) {
+         float past = (fabsf(stick.y) - SCROLL_DEADZONE) / (1.0f - SCROLL_DEADZONE);
+         ctx->scrollCarry += copysignf(past * SCROLL_CLICKS_PER_SEC * dt, stick.y);
+     }
