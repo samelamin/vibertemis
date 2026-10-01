@@ -50,13 +50,15 @@ jobs:
       - name: Restore native compilation cache
         uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
+          # Extracted Cargo sources (registry/src) are intentionally not cached: a canceled run can leave partial extractions.
           path: |
-            ~/.cargo/registry
+            ~/.cargo/registry/cache
+            ~/.cargo/registry/index
             ~/.cargo/git
             build/quest/alvr/target
             ~/.cargo/bin/cargo-about.exe
-          key: quest-native-windows-rust1971-${{ github.sha }}
-          restore-keys: quest-native-windows-rust1971-
+          key: quest-native-windows-rust1971-v2-${{ github.sha }}
+          restore-keys: quest-native-windows-rust1971-v2-
       - uses: actions/setup-dotnet@d4c94342e560b34958eacfc5d055d21461ed1c5d
         with:
           dotnet-version: 8.0.x
@@ -102,12 +104,14 @@ jobs:
             build/installer/smoke-*.png
           if-no-files-found: ignore
       - name: Save native compilation cache
-        if: always()
+        if: success()
         uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
+          # Extracted Cargo sources (registry/src) are intentionally not cached: a canceled run can leave partial extractions.
           path: |
-            ~/.cargo/registry
+            ~/.cargo/registry/cache
+            ~/.cargo/registry/index
             ~/.cargo/git
             build/quest/alvr/target
             ~/.cargo/bin/cargo-about.exe
-          key: quest-native-windows-rust1971-${{ github.sha }}
+          key: quest-native-windows-rust1971-v2-${{ github.sha }}
