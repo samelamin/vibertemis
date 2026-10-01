@@ -163,13 +163,19 @@ public sealed class UpdateRepository : IDisposable
         string Pem { get; }
     }
 
+    /// <summary>
+    /// One coalesced check handle. Completion is signalled exactly
+    /// once, with the terminal snapshot the repository published for
+    /// that check (never the pre-check snapshot), so a failure
+    /// exposes the recorded failure timestamp and message.
+    /// </summary>
     public sealed class InFlight
     {
         private volatile bool _force;
         private volatile bool _completed;
+        private int _completionGate;
         private Snapshot? _result;
         private Exception? _failure;
-        private Snapshot? _snapshot;
         private readonly TaskCompletionSource<Snapshot> _tcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public InFlight(bool force) { _force = force; }
         public bool Force => _force;
@@ -178,15 +184,20 @@ public sealed class UpdateRepository : IDisposable
         public Snapshot? Result => _result;
         public Exception? Failure => _failure;
         public Task<Snapshot> Completion => _tcs.Task;
-        internal void BindSnapshot(Snapshot s) { _snapshot = s; }
-        internal void Complete(Snapshot s) { _result = s; _completed = true; _tcs.TrySetResult(s); }
-        internal void CompleteWithFailure(Exception t)
+        internal void Complete(Snapshot s)
         {
-            _failure = t;
+            if (Interlocked.Exchange(ref _completionGate, 1) != 0) return;
+            _result = s;
             _completed = true;
-            _result = _snapshot ?? new Snapshot(null, null, null, null, null, null, null,
-                DateTime.MinValue, DateTime.MinValue, t.Message, false);
-            _tcs.TrySetResult(_result);
+            _tcs.TrySetResult(s);
+        }
+        internal void CompleteWithFailure(Exception t, Snapshot s)
+        {
+            if (Interlocked.Exchange(ref _completionGate, 1) != 0) return;
+            _failure = t;
+            _result = s;
+            _completed = true;
+            _tcs.TrySetResult(s);
         }
     }
 
@@ -199,6 +210,8 @@ public sealed class UpdateRepository : IDisposable
     private InFlight? inFlight;
     private readonly object inFlightLock = new();
     private CancellationTokenSource? lifecycleCts;
+    private CancellationToken lifetimeToken;
+    private Task? hydrationTask;
     private TaskScheduler? scheduler;
     private ICheckSource? source;
     private bool disposed;
@@ -225,7 +238,15 @@ public sealed class UpdateRepository : IDisposable
         this.source = source;
         this.scheduler = scheduler;
         lifecycleCts = new CancellationTokenSource();
-        Task.Factory.StartNew(HydrateFromCache, lifecycleCts.Token,
+        lifetimeToken = lifecycleCts.Token;
+        // Hydration owns the cache-derived slots, so it is stored as a
+        // task: every check waits on it before touching check state
+        // (see AwaitHydrationAsync). Neither hydration nor the check
+        // runner is scheduled with the lifecycle token, because a
+        // cancelled queued runner must still enter its body and
+        // finalize its job. Cancellation is observed inside the body
+        // instead.
+        hydrationTask = Task.Factory.StartNew(HydrateFromCache, CancellationToken.None,
             TaskCreationOptions.None, scheduler);
     }
 
@@ -290,9 +311,11 @@ public sealed class UpdateRepository : IDisposable
                 return inFlight;
             }
             var start = new InFlight(force);
-            start.BindSnapshot(currentSnapshot);
             inFlight = start;
-            Task.Factory.StartNew(() => RunInFlight(start), lifecycleCts.Token,
+            // Scheduled without the lifecycle token: a cancel that
+            // lands before the runner is dequeued must not prevent its
+            // body (and therefore its single completion) from running.
+            Task.Factory.StartNew(() => RunInFlight(start), CancellationToken.None,
                 TaskCreationOptions.None, scheduler);
             return start;
         }
@@ -495,6 +518,10 @@ public sealed class UpdateRepository : IDisposable
         }
         catch { downloaded = null; dBytes = null; dSig = null; dApk = null; }
 
+        // Full-snapshot replacement: this write is only safe because
+        // every check waits for the hydration task (see
+        // AwaitHydrationAsync), so it cannot land on top of recorded
+        // check state.
         var prev = currentSnapshot;
         currentSnapshot = new Snapshot(
             available, aBytes, aSig,
@@ -539,22 +566,51 @@ public sealed class UpdateRepository : IDisposable
         }
     }
 
+    /// <summary>
+    /// Waits for the cache hydration started by
+    /// <see cref="BindSource"/> to finish. Hydration's terminal write
+    /// is a full snapshot replacement, so a check that ran
+    /// concurrently with it could be silently overwritten (for
+    /// example resetting a just-recorded <c>LastFailureAt</c> to
+    /// <see cref="DateTime.MinValue"/> or clearing
+    /// <see cref="Snapshot.Checking"/>). Hydration is best effort:
+    /// a faulted hydration must not fail the check.
+    /// </summary>
+    private async Task AwaitHydrationAsync()
+    {
+        var hydration = hydrationTask;
+        if (hydration == null || hydration.IsCompletedSuccessfully) return;
+        try { await hydration.ConfigureAwait(false); }
+        catch { /* hydration failures are tolerated */ }
+    }
+
     private async Task RunInFlight(InFlight job)
     {
-        var forced = job.Force;
-        currentSnapshot = WithChecking(currentSnapshot, true);
-        NotifyObservers();
         try
         {
-            if (!ShouldRunByThrottle(forced))
+            await AwaitHydrationAsync().ConfigureAwait(false);
+
+            SetChecking(true);
+
+            // The captured lifecycle token is checked before any
+            // network I/O, so a shutdown is honoured without the queued
+            // runner being cancelled out of its own finalization.
+            if (lifetimeToken.IsCancellationRequested)
+                throw new OperationCanceledException(lifetimeToken);
+
+            // job.Force is read here, not before the hydration wait: a
+            // manual "Check now" that coalesces onto this job while
+            // hydration is still running bumps Force, and a capture
+            // taken ahead of the wait would silently drop that manual
+            // request and throttle it away.
+            if (!ShouldRunByThrottle(job.Force))
             {
-                FinishInFlight(job);
+                FinishInFlight(job, null);
                 return;
             }
             var src = source;
             if (src == null) throw new InvalidOperationException("no ICheckSource bound");
-            var token = lifecycleCts?.Token ?? CancellationToken.None;
-            var result = await src.CheckAsync(token).ConfigureAwait(false);
+            var result = await src.CheckAsync(lifetimeToken).ConfigureAwait(false);
             if (result == null || !IsNewerThanInstalled(result.Release))
             {
                 RecordNoNewerAvailable();
@@ -564,28 +620,42 @@ public sealed class UpdateRepository : IDisposable
                 cache.PersistAvailable(result.ManifestBytes, result.SignatureBytes);
                 RecordAvailable(result.Release, result.ManifestBytes, result.SignatureBytes);
             }
-            FinishInFlight(job);
+            FinishInFlight(job, null);
         }
         catch (Exception ex)
         {
             RecordFailure(ex.Message ?? ex.GetType().Name);
             FinishInFlight(job, ex);
         }
-        finally
+    }
+
+    /// <summary>
+    /// The single terminal transition for a check handle: publish the
+    /// final snapshot with <see cref="Snapshot.Checking"/> cleared,
+    /// then clear the shared slot and complete the job while still
+    /// holding <c>inFlightLock</c>. Holding the lock across the
+    /// completion signal means a concurrent <see cref="RequestCheck"/>
+    /// can only start its own run after this check has finished, so no
+    /// state write can follow the completion signal.
+    /// </summary>
+    private void FinishInFlight(InFlight job, Exception? failure)
+    {
+        var final = WithChecking(currentSnapshot, false);
+        currentSnapshot = final;
+        NotifyObservers();
+
+        lock (inFlightLock)
         {
-            currentSnapshot = WithChecking(currentSnapshot, false);
-            NotifyObservers();
+            if (ReferenceEquals(inFlight, job)) inFlight = null;
+            if (failure != null) job.CompleteWithFailure(failure, final);
+            else job.Complete(final);
         }
     }
 
-    private void FinishInFlight(InFlight job, Exception? failure = null)
+    private void SetChecking(bool checking)
     {
-        lock (inFlightLock)
-        {
-            inFlight = null;
-        }
-        if (failure != null) job.CompleteWithFailure(failure);
-        else job.Complete(currentSnapshot);
+        currentSnapshot = WithChecking(currentSnapshot, checking);
+        NotifyObservers();
     }
 
     private static Snapshot WithChecking(Snapshot s, bool checking)
@@ -609,8 +679,16 @@ public sealed class UpdateRepository : IDisposable
     {
         if (disposed) return;
         disposed = true;
-        try { lifecycleCts?.Cancel(); } catch { }
-        lifecycleCts?.Dispose();
+        var cts = lifecycleCts;
+        if (cts == null) return;
+        try { cts.Cancel(); } catch { /* tolerated */ }
+        // The token itself is intentionally left undisposed: runners
+        // that are already queued (or in flight) captured it and must
+        // still be able to observe the cancellation and complete their
+        // handle. Disposing the source here would make a late
+        // CancellationToken.Register inside a check source throw
+        // ObjectDisposedException. The repository is app-scoped and
+        // torn down for good, so the source is left to the GC.
     }
 
     public void Shutdown() => Dispose();

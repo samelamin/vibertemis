@@ -4,6 +4,7 @@
 // independence, defensive cloning, and end-to-end disk-cache hydration
 // after a process restart.
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -53,6 +54,102 @@ public class UpdateRepositoryTests : IDisposable
         public StubCheckSource(Func<CancellationToken, Task<UpdateRepository.ICheckSource.CheckResult?>> fn) { _fn = fn; }
         public Task<UpdateRepository.ICheckSource.CheckResult?> CheckAsync(CancellationToken cancellation)
             => _fn(cancellation);
+    }
+
+    /// <summary>
+    /// Scheduler that only runs work when the test says so, so
+    /// "hydration finished" / "the runner was dequeued" are explicit
+    /// events instead of timing. <see cref="TryRunOne"/> is safe to
+    /// call from several threads, which is what lets the test run the
+    /// check runner while hydration is still parked.
+    /// </summary>
+    private sealed class ManualTaskScheduler : TaskScheduler
+    {
+        private readonly ConcurrentQueue<Task> queue = new();
+        protected override IEnumerable<Task> GetScheduledTasks() => queue.ToArray();
+        protected override void QueueTask(Task task) => queue.Enqueue(task);
+        protected override bool TryExecuteTaskInline(Task task, bool taskWasPreviouslyQueued) => false;
+        public bool TryRunOne()
+        {
+            if (!queue.TryDequeue(out var task)) return false;
+            TryExecuteTask(task);
+            return true;
+        }
+        public int Pending => queue.Count;
+    }
+
+    /// <summary>
+    /// Delegating cache that parks the available-manifest read on a
+    /// gate, so a test can hold hydration in flight deterministically.
+    /// </summary>
+    private sealed class GatedAvailableReadCache : UpdateRepository.ICache
+    {
+        private readonly UpdateRepository.ICache inner;
+        private readonly ManualResetEventSlim gate;
+        private readonly TaskCompletionSource<bool> entered =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public GatedAvailableReadCache(UpdateRepository.ICache inner, ManualResetEventSlim gate)
+        {
+            this.inner = inner;
+            this.gate = gate;
+        }
+
+        /// <summary>Completes once hydration is parked inside the gated read.</summary>
+        public Task Entered => entered.Task;
+
+        public void Release() => gate.Set();
+
+        public byte[]? ReadAvailableManifestBytes()
+        {
+            entered.TrySetResult(true);
+            gate.Wait();
+            return inner.ReadAvailableManifestBytes();
+        }
+
+        public byte[]? ReadAvailableSignatureBytes() => inner.ReadAvailableSignatureBytes();
+        public void PersistAvailable(byte[] manifestBytes, byte[] signatureBytes)
+            => inner.PersistAvailable(manifestBytes, signatureBytes);
+        public string DownloadedRoot => inner.DownloadedRoot;
+        public string DownloadedManifestPath(string version) => inner.DownloadedManifestPath(version);
+        public string DownloadedSignaturePath(string version) => inner.DownloadedSignaturePath(version);
+        public string DownloadedApkPath(string version) => inner.DownloadedApkPath(version);
+        public byte[]? ReadDownloadedManifestBytes(string version) => inner.ReadDownloadedManifestBytes(version);
+        public byte[]? ReadDownloadedSignatureBytes(string version) => inner.ReadDownloadedSignatureBytes(version);
+        public string PersistDownloadedInstaller(string version, string sourceFilePath)
+            => inner.PersistDownloadedInstaller(version, sourceFilePath);
+        public void PersistDownloadedMetadata(string version, byte[] manifestBytes, byte[] signatureBytes)
+            => inner.PersistDownloadedMetadata(version, manifestBytes, signatureBytes);
+        public void DeleteDownloaded(string version) => inner.DeleteDownloaded(version);
+        public IReadOnlyList<string> EnumerateDownloadedVersions() => inner.EnumerateDownloadedVersions();
+    }
+
+    private sealed class SnapshotWatcher : UpdateRepository.IObserver
+    {
+        private readonly Action<UpdateRepository.Snapshot> _onUpdate;
+        public SnapshotWatcher(Action<UpdateRepository.Snapshot> onUpdate) { _onUpdate = onUpdate; }
+        public void OnUpdate(UpdateRepository.Snapshot snapshot) => _onUpdate(snapshot);
+    }
+
+    /// <summary>
+    /// Deadlock guard only: every wait in these tests is otherwise
+    /// signal-driven (gates / completion sources), so hitting this
+    /// timeout means the production code never completed the handle.
+    /// </summary>
+    private static readonly TimeSpan DeadlockGuard = TimeSpan.FromSeconds(30);
+
+    private static async Task AwaitBounded(Task task)
+    {
+        var finished = await Task.WhenAny(task, Task.Delay(DeadlockGuard));
+        if (!ReferenceEquals(finished, task))
+            throw new TimeoutException("deadlock guard: task did not complete");
+        await task;
+    }
+
+    private static async Task<T> AwaitBounded<T>(Task<T> task)
+    {
+        await AwaitBounded((Task)task);
+        return await task;
     }
 
     private byte[] MakeManifest(string version, long sequence, long versionCode, long installerBytes, string installerSha, out byte[] body, out byte[] sig)
@@ -372,10 +469,249 @@ public class UpdateRepositoryTests : IDisposable
         var source = new StubCheckSource(ct => throw new IOException("network unreachable"));
         using var repo = NewRepo(clock, cache, source);
         var inflight = repo.RequestCheck(false);
-        await inflight.Completion;
+        var completed = await AwaitBounded(inflight.Completion);
+        Assert.True(inflight.Completed);
         Assert.NotEqual(DateTime.MinValue, repo.Current.LastFailureAt);
         Assert.Equal("network unreachable", repo.Current.LastError);
         Assert.False(repo.ShouldRunByThrottle(false));
+        // The completion carries the terminal snapshot published for
+        // this check, not the pre-check snapshot the handle started
+        // from: a failure must expose the recorded failure timestamp
+        // and message instead of DateTime.MinValue / null.
+        Assert.Same(completed, inflight.Result);
+        Assert.Same(completed, repo.Current);
+        Assert.False(completed.Checking);
+        Assert.Equal(clock.Now, completed.LastFailureAt);
+        Assert.Equal("network unreachable", completed.LastError);
+        Assert.Equal(DateTime.MinValue, completed.LastSuccessAt);
+        Assert.Equal(clock.Now, repo.Current.LastFailureAt);
+        // Failure is preserved alongside the snapshot, and the
+        // published state is still the completed snapshot (no write
+        // follows the completion signal).
+        var failure = Assert.IsType<IOException>(inflight.Failure);
+        Assert.Equal("network unreachable", failure.Message);
+        Assert.Same(completed, repo.Current);
+    }
+
+    /// <summary>
+    /// Check bookkeeping survives cache hydration. BindSource
+    /// schedules hydration independently, so a check used to be able
+    /// to run (and record its outcome) while hydration was still
+    /// reading the disk; hydration's terminal write is a whole-snapshot
+    /// replacement and clobbered the just-recorded state (resetting
+    /// LastFailureAt to MinValue / clearing Checking). The runner must
+    /// wait for hydration.
+    ///
+    /// <para>Deterministic: the gated cache parks hydration on a
+    /// ManualResetEventSlim, the runner is executed from the test
+    /// thread while hydration is parked, and everything else is
+    /// signal-driven.</para>
+    ///
+    /// <para><paramref name="coalescedForce"/> covers both arrival
+    /// shapes of a forced check:
+    /// <c>false</c> - the job is enqueued already forced, the ordinary
+    /// "Check now" on an idle repository; <c>true</c> - the job is
+    /// enqueued unforced while a recent outcome would throttle it, and
+    /// the manual force only lands (coalescing onto the same handle)
+    /// while the runner is parked on the hydration wait. The runner must
+    /// read Force after the wait, so the second shape still reaches the
+    /// source exactly once and records the new outcome.</para>
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CheckWaitsForHydrationBeforeRecordingState(bool coalescedForce)
+    {
+        var manual = new ManualTaskScheduler();
+        using var gate = new ManualResetEventSlim();
+        var clock = new TestClock();
+        var cache = new GatedAvailableReadCache(
+            new UpdateRepositoryDiskCache(new DirectoryInfo(_stateRoot)), gate);
+        int sourceCalls = 0;
+        var source = new StubCheckSource(ct =>
+        {
+            Interlocked.Increment(ref sourceCalls);
+            throw new IOException("network unreachable");
+        });
+        using var repo = new UpdateRepository(cache, clock, new FixedKeySource(_trustKey));
+        if (coalescedForce)
+        {
+            // Seeded before BindSource (hydration preserves the recorded
+            // outcome timestamps/message) so an unforced check is inside
+            // the 15-minute failure window and only the coalesced force
+            // can unlock the run. The message differs from the source's,
+            // so the completion proves the new outcome landed.
+            repo.RecordFailure("seeded failure");
+            Assert.False(repo.ShouldRunByThrottle(false));
+        }
+        repo.BindSource(source, manual);
+        var inflight = repo.RequestCheck(!coalescedForce);
+
+        try
+        {
+            // Hydration runs on a worker thread and parks in the gated read.
+            var hydrationRan = Task.Run(() => manual.TryRunOne());
+            await AwaitBounded(cache.Entered);
+
+            // Hydration is still in flight: running the queued check must
+            // not reach the source or publish the checking state.
+            Assert.True(manual.TryRunOne());
+            Assert.Equal(0, Volatile.Read(ref sourceCalls));
+            Assert.False(repo.Current.Checking);
+            if (coalescedForce)
+            {
+                // The seeded outcome survives hydration untouched and no
+                // check state is layered on top of it.
+                Assert.Equal(clock.Now, repo.Current.LastFailureAt);
+                Assert.Equal("seeded failure", repo.Current.LastError);
+            }
+            else
+            {
+                Assert.Equal(DateTime.MinValue, repo.Current.LastFailureAt);
+                Assert.Null(repo.Current.LastError);
+            }
+            Assert.Equal(DateTime.MinValue, repo.Current.LastSuccessAt);
+            Assert.False(inflight.Completed);
+
+            if (coalescedForce)
+            {
+                // The job was enqueued unforced and is throttled by the
+                // seeded outcome; only force unlocks it.
+                Assert.False(inflight.Force);
+                Assert.False(repo.ShouldRunByThrottle(false));
+                Assert.True(repo.ShouldRunByThrottle(true));
+                // A manual "Check now" lands while the job is parked on
+                // the hydration wait and coalesces onto the same handle.
+                var coalesced = repo.RequestCheck(true);
+                Assert.Same(inflight, coalesced);
+                Assert.True(inflight.Force);
+                // The bump must not be observable as state before the run.
+                Assert.Equal(0, Volatile.Read(ref sourceCalls));
+                Assert.False(repo.Current.Checking);
+                Assert.False(inflight.Completed);
+            }
+
+            gate.Set();
+            Assert.True(await AwaitBounded(hydrationRan));
+
+            var completed = await AwaitBounded(inflight.Completion);
+            Assert.Equal(1, Volatile.Read(ref sourceCalls));
+            Assert.Same(completed, inflight.Result);
+            Assert.False(completed.Checking);
+            Assert.Equal(clock.Now, completed.LastFailureAt);
+            Assert.Equal("network unreachable", completed.LastError);
+            Assert.Equal(DateTime.MinValue, completed.LastSuccessAt);
+            Assert.Equal(clock.Now, repo.Current.LastFailureAt);
+            Assert.Equal("network unreachable", repo.Current.LastError);
+        }
+        finally
+        {
+            // Never strand the hydration worker parked on the gate if an
+            // assertion threw before the release above.
+            gate.Set();
+        }
+    }
+
+    /// <summary>
+    /// The previous check must be fully finalized before the next one
+    /// can start: while a forced re-check is pending on its source the
+    /// snapshot stays Checking, and nothing publishes a
+    /// not-checking snapshot in that window (the old post-completion
+    /// finally did).
+    /// </summary>
+    [Fact]
+    public async Task ForcedSecondCheckStaysCheckingWhilePending()
+    {
+        var clock = new TestClock();
+        var cache = new UpdateRepositoryDiskCache(new DirectoryInfo(_stateRoot));
+        var pendingResult = new TaskCompletionSource<UpdateRepository.ICheckSource.CheckResult?>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondEntered = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        int calls = 0;
+        var source = new StubCheckSource(ct =>
+        {
+            if (Interlocked.Increment(ref calls) == 1)
+                return Task.FromResult<UpdateRepository.ICheckSource.CheckResult?>(null);
+            secondEntered.TrySetResult(true);
+            return pendingResult.Task;
+        });
+        using var repo = NewRepo(clock, cache, source);
+
+        var first = repo.RequestCheck(false);
+        var firstCompleted = await AwaitBounded(first.Completion);
+        Assert.Equal(1, calls);
+        Assert.False(firstCompleted.Checking);
+        Assert.Same(firstCompleted, repo.Current);
+        Assert.False(repo.Current.Checking);
+
+        int staleNotChecking = 0;
+        int watching = 0;
+        repo.AddObserver(new SnapshotWatcher(s =>
+        {
+            if (Volatile.Read(ref watching) == 1 && !s.Checking)
+                Interlocked.Increment(ref staleNotChecking);
+        }));
+
+        var second = repo.RequestCheck(true);
+        Assert.NotSame(first, second);
+        await AwaitBounded(secondEntered.Task);
+        Volatile.Write(ref watching, 1);
+
+        Assert.True(repo.Current.Checking);
+        Assert.False(second.Completed);
+        Assert.False(second.Completion.IsCompleted);
+        Assert.Equal(0, Volatile.Read(ref staleNotChecking));
+
+        pendingResult.TrySetResult(null);
+        var completed = await AwaitBounded(second.Completion);
+        Assert.Equal(2, calls);
+        Assert.Same(completed, second.Result);
+        Assert.False(completed.Checking);
+        Assert.False(repo.Current.Checking);
+        Assert.Equal(clock.Now, completed.LastSuccessAt);
+        Assert.Null(completed.LastError);
+    }
+
+    /// <summary>
+    /// Shutting down must not strand a queued handle and must not keep
+    /// doing network I/O: the runner is scheduled without the lifecycle
+    /// token so a cancel that lands before it is dequeued still runs
+    /// its body, observes the cancellation before the source, and
+    /// completes the handle.
+    /// </summary>
+    [Fact]
+    public async Task CancelBeforeScheduledRunCompletesWithoutCallingSource()
+    {
+        var manual = new ManualTaskScheduler();
+        var clock = new TestClock();
+        var cache = new UpdateRepositoryDiskCache(new DirectoryInfo(_stateRoot));
+        int calls = 0;
+        var source = new StubCheckSource(ct =>
+        {
+            Interlocked.Increment(ref calls);
+            return Task.FromResult<UpdateRepository.ICheckSource.CheckResult?>(null);
+        });
+        using var repo = new UpdateRepository(cache, clock, new FixedKeySource(_trustKey));
+        repo.BindSource(source, manual);
+        var inflight = repo.RequestCheck(true);
+        Assert.Equal(2, manual.Pending);
+
+        repo.Dispose();
+        Assert.Throws<InvalidOperationException>(() => { repo.RequestCheck(true); });
+
+        Assert.True(manual.TryRunOne()); // queued hydration still runs
+        Assert.True(manual.TryRunOne()); // queued runner body still runs
+
+        var completed = await AwaitBounded(inflight.Completion);
+        Assert.Equal(0, Volatile.Read(ref calls));
+        Assert.True(inflight.Completed);
+        Assert.Same(completed, inflight.Result);
+        Assert.False(completed.Checking);
+        Assert.False(repo.Current.Checking);
+        Assert.IsType<OperationCanceledException>(inflight.Failure);
+        Assert.Equal(inflight.Failure!.Message, completed.LastError);
+        Assert.Equal(clock.Now, completed.LastFailureAt);
     }
 
     [Fact]
