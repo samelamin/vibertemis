@@ -8,9 +8,6 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
-$zipUrl = 'https://github.com/samelamin/vibertemis/releases/download/quest-preview-v0.1.0.3/vibertemis-vr-host-windows-0.1.0.3.zip'
-$zipSha = 'bc193bbd1d9ed3dfb9252d921439257e50b52bfc88b13df09f909f917db11302'
-$nativeFingerprint = '512e3203110ed3cbc822cf456e36e239dcd3bcb764feca62c316d910a37764f2'
 function Check-Exit([string]$label) {
     if ($LASTEXITCODE -ne 0) { throw "$label failed: $LASTEXITCODE" }
 }
@@ -22,16 +19,98 @@ if (-not $StagingRoot.StartsWith($buildRoot, [StringComparison]::OrdinalIgnoreCa
 }
 if (Test-Path $StagingRoot) { Remove-Item -Recurse -Force $StagingRoot }
 New-Item -ItemType Directory -Force -Path $OutRoot, "$StagingRoot/manager/bin", "$StagingRoot/manager/prerequisites", "$StagingRoot/runtime" | Out-Null
-$zip = Join-Path $OutRoot 'native.zip'
-if (-not (Test-Path $zip) -or (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant() -ne $zipSha) {
-    Invoke-WebRequest -Uri $zipUrl -OutFile $zip
+
+# The native runtime is always rebuilt from the pinned sources in this tree, so
+# the payload can never drift away from the sources that are being shipped.
+$nativeBuilder = Join-Path $RepoRoot 'quest/native/build-windows.ps1'
+if (-not (Test-Path -LiteralPath $nativeBuilder -PathType Leaf)) { throw "Native builder missing: $nativeBuilder" }
+try { & $nativeBuilder } catch { throw "Native build failed: $($_.Exception.Message)" }
+
+$nativePackage = Join-Path $RepoRoot 'build/quest/native-windows'
+$sourceShaFile = Join-Path $nativePackage 'SOURCE_SHA256'
+$sumsFile = Join-Path $nativePackage 'SHA256SUMS'
+foreach ($manifest in @($sourceShaFile, $sumsFile)) {
+    if (-not (Test-Path -LiteralPath $manifest -PathType Leaf)) { throw "Native manifest missing: $manifest" }
 }
-if ((Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant() -ne $zipSha) { throw 'Native ZIP digest mismatch' }
-$fingerprint = & python "$RepoRoot/quest/native/fingerprint.py"
+$recorded = [IO.File]::ReadAllText($sourceShaFile).Trim()
+if ($recorded -notmatch '^[0-9a-f]{64}$') { throw "SOURCE_SHA256 is malformed: $recorded" }
+$fingerprintOutput = & python (Join-Path $RepoRoot 'quest/native/fingerprint.py')
 Check-Exit 'Native fingerprint'
-if ($fingerprint -ne $nativeFingerprint) { throw "Native sources differ from bundled runtime: got $fingerprint expected $nativeFingerprint" }
-Expand-Archive -Path $zip -DestinationPath "$StagingRoot/runtime"
-Remove-Item "$StagingRoot/runtime/vibertemis-host-companion.exe"
+$fingerprintLine = @($fingerprintOutput)[-1]
+if (-not $fingerprintLine) { throw 'Native fingerprint produced no output' }
+$fingerprint = $fingerprintLine.ToString().Trim()
+if ($fingerprint -notmatch '^[0-9a-f]{64}$') { throw "Native fingerprint is malformed: $fingerprint" }
+if ($recorded -ne $fingerprint) { throw "Native payload was built from other sources: $recorded != $fingerprint" }
+
+# Payload contract: digest plus exactly two spaces plus a relative path, which
+# may contain spaces (for example 'ALVR Dashboard.exe').
+$requiredNative = @(
+    'ALVR Dashboard.exe',
+    'driver.vrdrivermanifest',
+    'bin/win64/driver_alvr_server.dll',
+    'bin/win64/openvr_api.dll',
+    'bin/win64/pyrowave-shared.dll'
+)
+# Windows resolves paths case-insensitively, so the entry table must too:
+# otherwise 'ALVR Dashboard.exe' and 'alvr dashboard.exe' would both pass the
+# duplicate check and collapse onto the same staged file.
+$digests = [Collections.Generic.Dictionary[string, string]]::new([StringComparer]::OrdinalIgnoreCase)
+$linePattern = '^([0-9a-fA-F]{64})  (\S.*)$'
+foreach ($line in [IO.File]::ReadAllLines($sumsFile)) {
+    if ($line -eq '') { continue }
+    if ($line -notmatch $linePattern) { throw "Malformed SHA256SUMS line: $line" }
+    $digest = $Matches[1].ToLowerInvariant()
+    $relative = $Matches[2]
+    # A backslash is a second, unreviewed separator on Windows and a colon can
+    # introduce a drive or ADS suffix, so neither is allowed in a relative entry.
+    if ($relative -match '[\\:]') { throw "SHA256SUMS path must be relative and use '/' separators: $relative" }
+    if ($relative -match '[\x00-\x1F\x7F]') { throw "SHA256SUMS path contains control characters: $relative" }
+    if ($relative.StartsWith('/')) { throw "SHA256SUMS must not contain absolute paths: $relative" }
+    foreach ($segment in $relative.Split('/')) {
+        if ($segment -eq '' -or $segment -eq '.' -or $segment -eq '..') { throw "SHA256SUMS path escapes the package: $relative" }
+        # Win32 trims trailing dots and spaces, which would let one entry alias
+        # another ('win64.' and 'win64' are the same directory on disk).
+        if ($segment.EndsWith('.') -or $segment.EndsWith(' ')) { throw "SHA256SUMS path has a Windows-ambiguous segment: $relative" }
+    }
+    if ($digests.ContainsKey($relative)) { throw "Duplicate SHA256SUMS entry: $relative" }
+    $digests[$relative] = $digest
+}
+if ($digests.Count -eq 0) { throw 'SHA256SUMS is empty' }
+foreach ($needed in $requiredNative) {
+    if (-not $digests.ContainsKey($needed)) { throw "SHA256SUMS is missing required payload: $needed" }
+}
+# Verify every digest before a single byte is copied into the staging runtime.
+# The entry table is only claimed to be relative, so each path is re-resolved
+# to its canonical form and proven to stay inside its own root before use.
+$packageRootFull = [IO.Path]::GetFullPath($nativePackage) + [IO.Path]::DirectorySeparatorChar
+$runtimeRootFull = [IO.Path]::GetFullPath((Join-Path $StagingRoot 'runtime')) + [IO.Path]::DirectorySeparatorChar
+$verified = [string[]]($digests.Keys)
+[Array]::Sort($verified, [StringComparer]::Ordinal)
+$sources = [Collections.Generic.Dictionary[string, string]]::new([StringComparer]::OrdinalIgnoreCase)
+foreach ($relative in $verified) {
+    $source = [IO.Path]::GetFullPath((Join-Path $nativePackage ($relative -replace '/', '\')))
+    if (-not $source.StartsWith($packageRootFull, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "SHA256SUMS path escapes the native package: $relative"
+    }
+    if (-not (Test-Path -LiteralPath $source -PathType Leaf)) { throw "SHA256SUMS lists a missing file: $relative" }
+    $actual = (Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($actual -ne $digests[$relative]) { throw "Native payload digest mismatch: $relative" }
+    $sources[$relative] = $source
+}
+foreach ($relative in $verified) {
+    $source = $sources[$relative]
+    $destination = [IO.Path]::GetFullPath((Join-Path $runtimeRootFull ($relative -replace '/', '\')))
+    if (-not $destination.StartsWith($runtimeRootFull, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "SHA256SUMS path escapes the staging runtime: $relative"
+    }
+    $parent = Split-Path -Parent $destination
+    if (-not (Test-Path -LiteralPath $parent)) { New-Item -ItemType Directory -Force -Path $parent | Out-Null }
+    Copy-Item -LiteralPath $source -Destination $destination
+}
+# Keep the provenance manifests next to the payload they describe.
+Copy-Item -LiteralPath $sourceShaFile -Destination "$StagingRoot/runtime/SOURCE_SHA256"
+Copy-Item -LiteralPath $sumsFile -Destination "$StagingRoot/runtime/SHA256SUMS"
+Write-Host "Staged $($verified.Count) native payload files from $nativePackage"
 
 Push-Location "$RepoRoot/quest/host"
 $previousGOOS = $env:GOOS; $previousGOARCH = $env:GOARCH
