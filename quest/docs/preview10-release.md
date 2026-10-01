@@ -1,53 +1,43 @@
-# Quest preview 10 (0.1.0.10) - DRAFT release notes
+# Quest preview 10 — experimental test build
 
-Status: **DRAFT, test candidate only.** These notes describe what has been
-implemented in the working tree. Validation, CI, hosted downloads and the
-announcement channel are still pending. Facts get updated by the writer after
-root review; do not treat anything below as a finished test report.
+Matching Quest APK and Windows VR Host Manager: **0.1.0.10**.
+Keep Vibeshine installed and unchanged.
 
-## What changed in this build
+## What changed
 
-- **One Update.** The Quest app now performs a single update action instead of
-  a separate check-then-install pair.
-- **Automatic checks.** Update availability is checked on its own; the user is
-  not asked to trigger the check.
-- **New Quest setup/connection flow.** The headset flow is split into explicit
-  inline phases: "Set up PC" and "Connect", each showing its own progress and
-  result state rather than a single opaque step.
-- **Shorter Windows approve/reject path.** The Windows side of the handshake is
-  reduced to a short Approve / Reject decision.
-- **Advanced section.** Less common connection and VR options moved behind a
-  clearly labelled Advanced section.
-- **Native C++ packaging fix.** The native C++ payload packaging step is fixed;
-  the built package is assembled correctly instead of producing a broken
-  native payload layout.
+- Larger Quest controls, clearer connection progress, and inline Retry/Cancel actions.
+- **Set up PC** discovers and pairs an unpaired headset. A paired headset shows **Connect**.
+- Connecting starts SteamVR when the authenticated PC reports it stopped. If SteamVR is already running, **Restart VR** asks for confirmation first.
+- Manual VR now requests microphone permission when needed and retains restart confirmation.
+- Shorter Windows labels, **Approve / Reject**, and collapsible Advanced settings and Activity log.
+- Both apps automatically check for updates. One **Update** action handles downloading and verification, then starts installation. Android or Windows may still require system confirmation.
+- Update failures remain visible, with retry paths. A Windows startup race that could overwrite update results is fixed.
+- The Quest APK includes the previously missing C++ runtime. Packaging checks every native library dependency and records the runtime's origin and checksum.
 
-Everything that already worked in preview 9 is preserved.
+## Install or upgrade
 
-## Known limits
+1. Close VR. Install `VibertemisVR-HostManager-Setup-0.1.0.10.exe` on Windows.
+2. Install `vibertemis-quest-preview-0.1.0.10.apk` on Quest **without uninstalling the existing app**. Preview 9's broken updater requires this one manual APK install. The package and signing certificate are unchanged.
+3. On Windows, use **Set up VR** if setup is incomplete. Keep **Advanced > Start with Windows** enabled for startup after Windows sign-in.
+4. If the Quest is already paired, select **Connect**. Otherwise select **Set up PC**, choose the PC, compare the code on both devices, and choose **Approve** on Windows. Then select **Connect** on Quest.
+5. Grant microphone permission if asked. If prompted to restart an existing SteamVR session, save any game first; **Cancel** leaves it running.
 
-- Test candidate. Hardware has **not** been tested on real Quest hardware.
-- Native VR over a public WAN is not supported.
-- Vibeshine is unchanged in this build.
+No pairing file is required for normal setup. Flat-screen streaming continues through Vibeshine.
 
-## Upgrading from preview 9
+## End-to-end test
 
-The updater shipped in preview 9 is broken, so the first step is a **one-time
-manual APK install** of the preview 10 APK. The in-app updater takes over from
-there.
+Use the same home network first:
 
-After the manual APK install, the Windows side must match:
+1. Start a SteamVR game. Check headset tracking, both controllers, picture, sound, and microphone.
+2. Disconnect and reconnect. Check that the desktop remains usable and that Retry/Cancel recover from an interrupted connection.
+3. Sign out of Windows and sign back in. Confirm the manager starts in the tray and a paired Quest can connect without repeating setup.
+4. Open each app and confirm it checks for updates automatically. Preview 10 should report itself current once no newer release exists. The next published release is needed to test a real device upgrade from this version.
+5. Try flat-screen streaming separately. Report which mode failed, the exact message, and whether SteamVR was already running.
 
-1. Install the matching Windows version 0.1.0.10 (Host Manager).
-2. If VR is not already set up on Windows, run "Set up VR" in the Windows app.
-3. On the Quest, run "Set up PC" and compare the displayed values, then
-   Approve.
-4. Run "Connect" on the Quest.
-5. Allow a restart only if SteamVR is currently running.
+## Limits
 
-## Pending before this becomes a release
+This is an experimental build for owner testing. Quest 3 / RTX 4090 streaming quality, latency, controllers, and real-device installation still need hardware validation; a flawless stream is not claimed.
 
-- [ ] Combined validation (hardware + host) completed
-- [ ] CI green on the release commit
-- [ ] Download URLs uploaded and verified reachable
-- [ ] Telegram announcement posted
+Native tracked VR over a public IP and forwarded router ports is **not implemented**. This build targets local-network testing. Existing flat-screen remote streaming is separate.
+
+The release includes the pinned Android runtime's provenance and license notices. Native protocol and existing trust keys are unchanged.
