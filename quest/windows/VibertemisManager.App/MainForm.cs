@@ -601,6 +601,7 @@ public sealed partial class MainForm : Form
         _chkAutoStart.Text = "Start with Windows";
         _chkAutoStart.AutoSize = true;
         _chkAutoStart.Margin = new Padding(0, 8, 0, 0);
+        _chkAutoStart.MinimumSize = new Size(0, 34);
         row.Controls.Add(_chkAutoStart);
         return row;
     }
