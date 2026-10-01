@@ -27,6 +27,17 @@ internal static class Program
     [STAThread]
     public static int Main(string[] args)
     {
+        // The --restart-vr worker mode is detected FIRST, before any
+        // ApplicationConfiguration.Initialize, single-instance mutex,
+        // settings store, integrity verifier, or service wiring.
+        // vrserver.exe spawns the installed manager directly with
+        // stdin/stdout redirected, so this path must never start
+        // WinForms and must never contend with the running manager
+        // over the app mutex. Invalid arguments return a failure
+        // code here instead of falling through to the normal app.
+        if (Array.Exists(args, a => string.Equals(a, VrRestartWorkerMode.ArgumentName, StringComparison.Ordinal)))
+            return VrRestartWorkerMode.Run(args);
+
         // The --apply-update worker mode is detected BEFORE any
         // ApplicationConfiguration.Initialize, single-instance mutex,
         // settings store, integrity verifier, or service wiring. It
