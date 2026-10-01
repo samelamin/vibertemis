@@ -518,6 +518,8 @@ public class MainHubActivity extends Activity {
             findViewById(R.id.hub_card_screen).setVisibility(View.GONE);
             findViewById(R.id.hub_art_vr_frame).setVisibility(View.GONE);
             findViewById(R.id.hub_subtitle_note).setVisibility(View.GONE);
+            ((LinearLayout.LayoutParams) findViewById(R.id.hub_card_connection).getLayoutParams())
+                    .setMarginStart(0);
             ((TextView) findViewById(R.id.hub_card_title)).setText(R.string.hub_card_title_phone);
             connectBtn.setBackgroundResource(R.drawable.hub_btn_primary_bg);
             connectBtn.setTextColor(getColor(R.color.hub_panel_accent_on));
@@ -557,6 +559,9 @@ public class MainHubActivity extends Activity {
             renderUpdatesBadge(snap);
         });
         renderVersionChip();
+        // Clip the card art to each card's rounded background.
+        findViewById(R.id.hub_card_screen).setClipToOutline(true);
+        findViewById(R.id.hub_card_connection).setClipToOutline(true);
         bindUpdateRepository();
         if (VrCapabilities.isHeadset(this)) setupBtn.setText(R.string.hub_btn_setup);
         setupBtn.setOnClickListener(new View.OnClickListener() {
@@ -2768,6 +2773,8 @@ public class MainHubActivity extends Activity {
     private void renderVersionChip() {
         TextView chip = findViewById(R.id.hub_version);
         if (chip == null) return;
+        // Phones have no room for the chip beside Settings.
+        if (!VrCapabilities.isHeadset(this)) { chip.setVisibility(View.GONE); return; }
         try {
             String name = getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
             if (name == null || name.isEmpty()) { chip.setVisibility(View.GONE); return; }

@@ -10,6 +10,10 @@
     cards    Big Screen | Full VR, equal weight, side by side
     footer   Setup / Change PC, update status line, Updates link
 
+  The ScrollView does not fill the viewport: the cards share the row's
+  height (LinearLayout's uniform match_parent pass) and the footer stays
+  directly under them instead of being squeezed off screen.
+
   Headsets show both cards. Phones hide the Big Screen card: the
   primary Connect in the remaining card already opens the flat PcView.
 
@@ -30,7 +34,7 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="@color/hub_panel_bg"
-    android:fillViewport="true"
+    android:fillViewport="false"
     android:scrollIndicators="none">
 
     <LinearLayout
@@ -251,7 +255,8 @@
 
                 <LinearLayout
                     android:layout_width="match_parent"
-                    android:layout_height="match_parent"
+                    android:layout_height="0dp"
+                    android:layout_weight="1"
                     android:orientation="vertical"
                     android:padding="20dp">
 
@@ -351,7 +356,8 @@
 
                 <LinearLayout
                     android:layout_width="match_parent"
-                    android:layout_height="match_parent"
+                    android:layout_height="0dp"
+                    android:layout_weight="1"
                     android:orientation="vertical"
                     android:padding="20dp">
 
