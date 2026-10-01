@@ -51,6 +51,7 @@ Add-Type @'
 using System;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Reflection;
 using System.Runtime.InteropServices;
 public static class RecoverySmokeUi {
  public delegate bool EnumProc(IntPtr h, IntPtr l);
@@ -69,7 +70,16 @@ public static class RecoverySmokeUi {
  [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr h, ref POINT p);
  [DllImport("user32.dll")] public static extern IntPtr GetParent(IntPtr h);
  [DllImport("user32.dll")] public static extern bool MoveWindow(IntPtr h, int x, int y, int w, int ht, bool repaint);
- [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr h, IntPtr hdc, uint flags);
+  [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr h, IntPtr hdc, uint flags);
+  // The MSAA entry point the checkbox state is read through, declared
+  // raw so the test needs no interop or UIAutomation assembly.
+  // https://learn.microsoft.com/en-us/windows/win32/api/oleacc/nf-oleacc-accessibleobjectfromwindow
+  [DllImport("oleacc.dll")] public static extern int AccessibleObjectFromWindow(IntPtr hwnd, uint objectId, ref Guid iid, [MarshalAs(UnmanagedType.Interface)] out object accessible);
+  private const uint OBJID_CLIENT = 0xFFFFFFFC;
+  private const int CHILDID_SELF = 0;
+  private const int STATE_SYSTEM_CHECKED = 0x10;
+  private const int STATE_SYSTEM_MIXED = 0x20;
+  private static readonly Guid IID_IAccessible = new Guid("618736E0-3C3D-11CF-810C-00AA00389B71");
  public static IntPtr Find(int pid, string label) {
   IntPtr found=IntPtr.Zero;
   EnumWindows((h,l)=> { uint p; GetWindowThreadProcessId(h,out p); if(p!=(uint)pid) return true;
@@ -136,15 +146,37 @@ public static class RecoverySmokeUi {
   if (!GetVisibleBounds(h, out l, out t, out r, out b)) return false;
   return (r-l) >= minWidth && (b-t) >= minHeight;
  }
-  // BM_GETCHECK, so a checkbox is read the way a user reads it instead
-  // of being toggled on a guess. SendMessageTimeout's own return value
-  // only says the message was delivered; the checkbox state is the out
-  // result, so that - and not rc - is what is reported.
+  // The checkbox state as an assistive technology sees it. BM_GETCHECK
+  // is documented as unsupported for owner-drawn check boxes
+  // (https://learn.microsoft.com/windows/win32/controls/bm-getcheck) and
+  // the default WinForms CheckBox is owner-drawn, so that message
+  // answers 0 for both states and a checked, expanded disclosure still
+  // reads as unchecked. IAccessible.accState carries the real state in
+  // STATE_SYSTEM_CHECKED / STATE_SYSTEM_MIXED
+  // (https://learn.microsoft.com/windows/win32/api/oleacc/nf-oleacc-iaccessible-get_accstate),
+  // which WinForms answers from its own managed CheckState.
+  // Returns 1 checked, 2 mixed, 0 unchecked. A state it cannot read is
+  // never reported as unchecked: the call throws with the HRESULT or the
+  // detail of the failure instead.
   public static int GetCheckState(IntPtr h) {
-   if (h==IntPtr.Zero) return -1;
-   IntPtr result;
-   var rc = SendMessageTimeout(h, 0xF0, IntPtr.Zero, IntPtr.Zero, 2, 2000, out result);
-   return rc == IntPtr.Zero ? -1 : (int)result.ToInt64();
+   if (h==IntPtr.Zero) throw new ArgumentException("Checkbox window handle is zero");
+   object accessible;
+   var iid = IID_IAccessible;
+   var hr = AccessibleObjectFromWindow(h, OBJID_CLIENT, ref iid, out accessible);
+   if (hr != 0 || accessible == null)
+    throw new InvalidOperationException("AccessibleObjectFromWindow(OBJID_CLIENT, IID_IAccessible) failed for the checkbox: HRESULT 0x" + hr.ToString("X8") + (accessible == null ? ", no accessible object returned" : ""));
+   try {
+    var state = accessible.GetType().InvokeMember("accState", BindingFlags.GetProperty, null, accessible, new object[] { CHILDID_SELF });
+    if (!(state is int)) throw new InvalidOperationException("IAccessible.accState(CHILDID_SELF) returned " + (state == null ? "null" : state.GetType().FullName) + " instead of a state mask");
+    var flags = (int)state;
+    if ((flags & STATE_SYSTEM_MIXED) != 0) return 2;
+    if ((flags & STATE_SYSTEM_CHECKED) != 0) return 1;
+    return 0;
+   } finally {
+    // Only the wrapper this call created is released; the caller keeps
+    // everything else it owns.
+    if (Marshal.IsComObject(accessible)) Marshal.ReleaseComObject(accessible);
+   }
   }
  public static bool ResizeWindow(IntPtr h, int width, int height) {
   RECT r; if (!GetWindowRect(h, out r)) return false;
@@ -299,18 +331,18 @@ function Assert-DisclosuresReachable([string]$Where) {
     Assert-NotOverlapping -First $advanced -FirstLabel 'Advanced disclosure' -Second $log -SecondLabel 'Activity log disclosure'
     return $advanced
 }
-# A BM_GETCHECK query that never completed is not "unchecked": the
-# native state is simply unknown, and -1 is the only way to tell those
-# apart. When the query fails, the class of the result and the Win32
-# error the call left behind are reported with it, so a broken query is
-# never mistaken for an unchecked box.
+# A state this test cannot read is never "unchecked": the accessibility
+# query either returns a real state or it fails, and a failure is
+# reported with the control it was asked about and the HRESULT or detail
+# the query raised, so a broken query can never satisfy a wait or an
+# assertion by looking like an empty box.
 function Get-NativeCheckState {
     param([IntPtr]$Hwnd, [string]$Label)
-    $state = [RecoverySmokeUi]::GetCheckState($Hwnd)
-    if ($state -ne -1) { return $state }
-    $code = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
-    $detail = [System.ComponentModel.Win32Exception]::new($code).Message
-    throw "Checkbox state query failed for '$Label': RecoverySmokeUi.GetCheckState returned -1 (no state), Win32 error $code ($detail)"
+    try {
+        return [RecoverySmokeUi]::GetCheckState($Hwnd)
+    } catch {
+        throw "Checkbox state query failed for '$Label': $($_.Exception.Message)"
+    }
 }
 # Expands or collapses Advanced from its REAL checkbox state, so a
 # second call is a no-op instead of flipping a disclosure the test does
@@ -474,7 +506,7 @@ try {
     Start-Sleep -Seconds 2
     if (-not [RecoverySmokeUi]::Visible($script:managerProcess.Id)) { throw 'Tray wake immediately hid the manager again' }
     # Receiving-mode posture starts OFF on a clean CI image.
-    Wait-Until { [RecoverySmokeUi]::Find($script:managerProcess.Id,'Host ready: receiving pairing requests is OFF.') -ne [IntPtr]::Zero } 'initial receiving OFF label'
+    Wait-Until { [RecoverySmokeUi]::Find($script:managerProcess.Id,'Not receiving pairing requests.') -ne [IntPtr]::Zero } 'initial receiving OFF label'
     # The primary row follows the real fixture. Set up VR is offered
     # while VR setup is still owed, and on a disposable fresh install
     # the bundled VR runtime has never been prepared, so it is always
@@ -530,7 +562,7 @@ try {
     if ((Get-NativeCheckState -Hwnd $logToggle -Label 'Activity log disclosure') -ne 0) { throw 'Activity log is not collapsed by default' }
     $priorNotice = [RecoverySmokeUi]::FindRegexVisible($script:managerProcess.Id, 'The last update to \S+ did not finish\.')
     Assert-FullyOnScreen -Hwnd $priorNotice -Label 'prior failed update notice in the update footer' -MinWidth 120 -MinHeight 24
-    Assert-FullyOnScreen -Hwnd ([RecoverySmokeUi]::FindVisible($script:managerProcess.Id, 'Host ready: receiving pairing requests is OFF.')) -Label 'readiness header' -MinWidth 60 -MinHeight 16
+    Assert-FullyOnScreen -Hwnd ([RecoverySmokeUi]::FindVisible($script:managerProcess.Id, 'Not receiving pairing requests.')) -Label 'readiness header' -MinWidth 60 -MinHeight 16
     $priorNoticeText = [RecoverySmokeUi]::Read($priorNotice)
     # Truthful and concise: it states the running version and where the
     # detail lives, and it makes no claim about the install being rolled
@@ -550,7 +582,10 @@ try {
     $script:logExpanded = Get-NativeCheckState -Hwnd $logToggle -Label 'Activity log disclosure'
     if ($script:logExpanded -eq 0) {
         [RecoverySmokeUi]::Click($logToggle)
-        Wait-Until { [RecoverySmokeUi]::GetCheckState($logToggle) -ne 0 } 'activity log expanded'
+        # Waited on the reported state, not on the click having landed: a
+        # failed state query throws here rather than reading as an empty
+        # box that happens to match the wait.
+        Wait-Until { [RecoverySmokeUi]::GetCheckState($logToggle) -eq 1 } 'activity log expanded'
         $logBody = Get-NativeCheckState -Hwnd $logToggle -Label 'Activity log disclosure (expanded)'
         if ($logBody -eq 0) { throw "Activity log did not expand (native check state $logBody)" }
         [RecoverySmokeUi]::Click($logToggle)
@@ -603,10 +638,10 @@ try {
     # Steam, so this step never depends on the fixture.
     Set-ManagerWindowSize $script:defaultWindowSize
     [RecoverySmokeUi]::Click($pair)
-    Wait-Until { [RecoverySmokeUi]::Find($script:managerProcess.Id,'Host ready: receiving pairing requests is ON.') -ne [IntPtr]::Zero } 'receiving ON after Pair headset'
+    Wait-Until { [RecoverySmokeUi]::Find($script:managerProcess.Id,'Ready for headset pairing.') -ne [IntPtr]::Zero } 'receiving ON after Pair headset'
     # With no request on screen there is no request card; the owner
     # instruction for the ready posture lives on the readiness header.
-    Wait-Until { [RecoverySmokeUi]::Find($script:managerProcess.Id,'Next action: on your Quest, choose Set up PC and select this PC.') -ne [IntPtr]::Zero } 'ready for headset request'
+    Wait-Until { [RecoverySmokeUi]::Find($script:managerProcess.Id,'On your Quest, choose Set up PC and select this PC.') -ne [IntPtr]::Zero } 'ready for headset request'
     foreach ($label in @('Approve','Reject','Hide')) {
         if ([RecoverySmokeUi]::FindVisible($script:managerProcess.Id,$label) -ne [IntPtr]::Zero) { throw "Request control visible before a request: $label" }
     }
@@ -761,11 +796,11 @@ try {
     $pauseBtn = [RecoverySmokeUi]::FindVisible($script:managerProcess.Id, 'Pause 1 hour')
     [void](Assert-Actionable 'Pause 1 hour' -Hwnd $pauseBtn)
     [RecoverySmokeUi]::Click($pauseBtn)
-    Wait-Until { [RecoverySmokeUi]::Find($script:managerProcess.Id,'Host ready: receiving pairing requests is paused for the next hour.') -ne [IntPtr]::Zero } 'paused label'
+    Wait-Until { [RecoverySmokeUi]::Find($script:managerProcess.Id,'Pairing paused for the next hour.') -ne [IntPtr]::Zero } 'paused label'
     $resumeBtn = [RecoverySmokeUi]::FindVisible($script:managerProcess.Id, 'Resume')
     [void](Assert-Actionable 'Resume' -Hwnd $resumeBtn)
     [RecoverySmokeUi]::Click($resumeBtn)
-    Wait-Until { [RecoverySmokeUi]::Find($script:managerProcess.Id,'Host ready: receiving pairing requests is ON.') -ne [IntPtr]::Zero } 'resumed label'
+    Wait-Until { [RecoverySmokeUi]::Find($script:managerProcess.Id,'Ready for headset pairing.') -ne [IntPtr]::Zero } 'resumed label'
     # Collapse again: the next request and its screenshot should show the
     # quiet default screen, not a left-open management drawer.
     Set-Advanced $false
@@ -829,7 +864,7 @@ try {
     if (-not $wake.WaitForExit(15000)) { throw 'Second instance did not signal existing manager' }
     $wake.Dispose()
     Wait-Until { [RecoverySmokeUi]::Visible($script:managerProcess.Id) } 'restart tray wake visibility'
-    Wait-Until { [RecoverySmokeUi]::Find($script:managerProcess.Id,'Host ready: receiving pairing requests is ON.') -ne [IntPtr]::Zero } 'restart receiving ON label'
+    Wait-Until { [RecoverySmokeUi]::Find($script:managerProcess.Id,'Ready for headset pairing.') -ne [IntPtr]::Zero } 'restart receiving ON label'
     # A prior install that did not finish has to be reported again on
     # every launch until a real attempt replaces it, and a background
     # metadata check must not quietly retire it.

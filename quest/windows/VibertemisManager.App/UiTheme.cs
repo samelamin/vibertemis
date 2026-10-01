@@ -6,7 +6,12 @@ namespace VibertemisManager.App;
 
 internal static class UiTheme
 {
-    public static readonly Color Accent = Color.FromArgb(0, 130, 140);
+    // Darkened teal. The previous accent (#00828C) measured 4.59:1
+    // against white, so it did clear 4.5:1 but with almost no margin for
+    // the label printed on top of it; this one (#00666E) measures about
+    // 6.7:1 and still reads as the same brand colour against the light
+    // control background.
+    public static readonly Color Accent = Color.FromArgb(0, 102, 110);
     public static readonly Color AccentText = Color.White;
 
     public static readonly Padding OuterPadding = new(16, 16, 16, 16);
@@ -51,17 +56,34 @@ internal static class UiTheme
         if (role == ButtonRole.Primary && !SystemInformation.HighContrast)
         {
             button.FlatStyle = FlatStyle.Standard;
+            // Standard paints BackColor, but only once the visual
+            // styles are explicitly declined.
+            button.UseVisualStyleBackColor = false;
             button.BackColor = Accent;
             button.ForeColor = AccentText;
             button.FlatAppearance.BorderColor = Accent;
             button.FlatAppearance.BorderSize = 1;
             button.FlatAppearance.MouseDownBackColor = Darken(Accent, 0.15f);
             button.FlatAppearance.MouseOverBackColor = Darken(Accent, 0.05f);
+            return;
         }
-        else
-        {
-            button.FlatStyle = FlatStyle.System;
-        }
+
+        // Demotion, and high contrast, have to undo the previous
+        // promotion completely. A button that kept the accent
+        // background is still a primary to the eye however the code
+        // classifies it, so every custom colour is put back to the
+        // system value and the visual styles are re-enabled.
+        button.FlatStyle = FlatStyle.System;
+        button.BackColor = SystemColors.Control;
+        button.ForeColor = SystemColors.ControlText;
+        button.FlatAppearance.BorderSize = 1;
+        button.FlatAppearance.BorderColor = SystemColors.Control;
+        button.FlatAppearance.MouseOverBackColor = SystemColors.Control;
+        button.FlatAppearance.MouseDownBackColor = SystemColors.Control;
+        // Set last, on purpose: assigning BackColor can put
+        // UseVisualStyleBackColor back to false, which would leave a
+        // demoted button still painting its promoted accent.
+        button.UseVisualStyleBackColor = true;
     }
 
     public static void ApplyForm(Form form)

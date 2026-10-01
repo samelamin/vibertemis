@@ -342,7 +342,7 @@ public sealed class ApprovalController
                     Expiry: expired
                         ? "Time remaining: expired. The request will be removed shortly."
                         : FormatExpiry(secondsLeft),
-                    Recovery: "Next action: click Approve again, or click Hide.",
+                    Recovery: "Next action: try the action again, or choose Hide.",
                     PanelVisible: true,
                     RequestPaneVisible: !hiddenThisRequest,
                     ApproveEnabled: !expired,

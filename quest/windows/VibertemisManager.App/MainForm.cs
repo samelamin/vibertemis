@@ -95,6 +95,18 @@ public sealed partial class MainForm : Form
     private FormObserver? _updateObserver;
     private UpdateFlowCoordinator? _updateFlow;
     private bool _updateBusy;
+    // The role the update action is currently painted with. Promotion
+    // and demotion both go through RefreshUpdateButtonStyle, and this
+    // cache is what keeps a 1 s status tick from restyling the button
+    // (and repainting it) hundreds of times a minute.
+    private UiTheme.ButtonRole _updateButtonRole = UiTheme.ButtonRole.Demoted;
+    // Whether the primary action row is logically on screen, tracked
+    // independently of Control.Visible. Hiding the form to the tray
+    // flips the inherited Visible of every descendant, and that window
+    // state says nothing about what the owner would see on the way
+    // back, so it must never be read as "the primary row stepped
+    // aside". RefreshPrimaryActionVisibility is the only writer.
+    private bool _primaryActionIntended;
     // True while an update attempt or installer handoff owns the
     // screen. Pairing, setup, and Start/Stop read this so they cannot
     // race an install that is about to close the manager.
@@ -242,7 +254,10 @@ public sealed partial class MainForm : Form
             WrapContents = true,
             Margin = new Padding(0),
         };
-        UiTheme.ApplyButton(_btnUpdate, UiTheme.ButtonRole.Primary);
+        // The update action starts demoted and is promoted only by
+        // RefreshUpdateButtonStyle, once a real update exists and
+        // nothing more specific owns the screen.
+        UiTheme.ApplyButton(_btnUpdate, _updateButtonRole);
         UiTheme.ApplyButton(_btnCheckUpdate, UiTheme.ButtonRole.Demoted);
         UiTheme.ApplyButton(_btnCancelUpdate, UiTheme.ButtonRole.Demoted);
         updateBar.Controls.AddRange(new Control[] { _btnUpdate, _btnCancelUpdate, _updateProgress, _updateProgressLabel, _btnCheckUpdate });
@@ -313,7 +328,7 @@ public sealed partial class MainForm : Form
         _lblHeader.AutoSize = true;
         _lblHeader.AutoEllipsis = true;
         _lblHeader.Margin = new Padding(0, 0, 0, 2);
-        _lblHeader.Text = "Host ready: checking...";
+        _lblHeader.Text = "Checking PC...";
         _lblSubStatus.AutoSize = true;
         _lblSubStatus.AutoEllipsis = true;
         _lblSubStatus.Margin = new Padding(0, 0, 0, 8);
@@ -1054,6 +1069,7 @@ public sealed partial class MainForm : Form
         if (_requestDominates)
         {
             _primaryRow.Visible = false;
+            SetPrimaryActionIntended(false);
             return;
         }
         _primaryRow.Visible = true;
@@ -1072,6 +1088,35 @@ public sealed partial class MainForm : Form
         // Start / Stop only leads when the host is not running yet;
         // a running host needs no toggle here (Advanced still has it).
         _btnCompanionToggle.Visible = !running && !setupNeeded;
+        // Pair headset is a demoted secondary, so the row counts as
+        // owning the screen only for Set up VR or Start.
+        SetPrimaryActionIntended(setupNeeded || !running);
+    }
+
+    private void SetPrimaryActionIntended(bool visible)
+    {
+        if (_primaryActionIntended == visible) return;
+        _primaryActionIntended = visible;
+        RefreshUpdateButtonStyle();
+    }
+
+    // Exactly one prominent action per screen. The update action gets
+    // the accent only when a real update is waiting to be taken AND
+    // nothing more specific is on screen: a pairing decision the owner
+    // has to make, or the Set up VR / Start primary. Otherwise it is an
+    // ordinary native button and the thing that matters keeps the
+    // accent. Deliberately isolated to _btnUpdate and deliberately free
+    // of RenderUpdateUi, which calls RefreshCompanionStatus and would
+    // recurse.
+    private void RefreshUpdateButtonStyle()
+    {
+        var s = _updateSnapshot;
+        bool updateWaiting = s.HasAvailable || s.HasDownloaded;
+        bool rolePrimary = updateWaiting && !_requestDominates && !_primaryActionIntended;
+        var role = rolePrimary ? UiTheme.ButtonRole.Primary : UiTheme.ButtonRole.Demoted;
+        if (_updateButtonRole == role) return;
+        _updateButtonRole = role;
+        UiTheme.ApplyButton(_btnUpdate, role);
     }
 
     // Setup is needed when any of the inputs the Set up VR
@@ -1513,6 +1558,10 @@ public sealed partial class MainForm : Form
             _updateProgressLabel.Text = "";
         }
         RenderUpdateStatusLine(s, flow);
+        // A new snapshot can make an update the one thing worth
+        // promoting, or retire the last one. RefreshUpdateButtonStyle
+        // is a leaf: it never calls back into this render.
+        RefreshUpdateButtonStyle();
     }
 
     // Persistent status ladder mirrors the Android hub badge. The
