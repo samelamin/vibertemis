@@ -64,11 +64,13 @@ public static class RecoverySmokeUi {
  [DllImport("user32.dll")] public static extern bool EnumChildWindows(IntPtr parent, EnumProc p, IntPtr l);
  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
  [DllImport("user32.dll", EntryPoint="SendMessageTimeoutW", CharSet=CharSet.Unicode)] public static extern IntPtr ReadText(IntPtr h, uint m, IntPtr w, StringBuilder text, uint flags, uint timeout, out IntPtr result);
-  [DllImport("user32.dll", SetLastError=true)] public static extern IntPtr SendMessageTimeout(IntPtr h, uint m, IntPtr w, IntPtr l, uint flags, uint timeout, out IntPtr result);
+ [DllImport("user32.dll", SetLastError=true)] public static extern IntPtr SendMessageTimeout(IntPtr h, uint m, IntPtr w, IntPtr l, uint flags, uint timeout, out IntPtr result);
  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
  [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr h, out RECT r);
  [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr h, ref POINT p);
  [DllImport("user32.dll")] public static extern IntPtr GetParent(IntPtr h);
+ [DllImport("user32.dll", EntryPoint="GetClassNameW", CharSet=CharSet.Unicode)] public static extern int GetClassName(IntPtr h, StringBuilder name, int max);
+
  [DllImport("user32.dll")] public static extern bool MoveWindow(IntPtr h, int x, int y, int w, int ht, bool repaint);
   [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr h, IntPtr hdc, uint flags);
   // The MSAA entry point the checkbox state is read through, declared
@@ -146,6 +148,52 @@ public static class RecoverySmokeUi {
   if (!GetVisibleBounds(h, out l, out t, out r, out b)) return false;
   return (r-l) >= minWidth && (b-t) >= minHeight;
  }
+  // Diagnostic for a partial-clipping failure: which ancestor's client
+  // area actually cuts the control off. One line per level - the window
+  // class, the window rectangle, and the client rectangle converted to
+  // screen coordinates - for the control itself and at most 24
+  // ancestors.
+  //
+  // Deliberately narrow: no window text (a caption can carry a path, a
+  // key or anything else that is none of this test's business), no
+  // child enumeration, no other input. Purely best effort - every call
+  // is guarded and nothing here throws, so a diagnostic that cannot
+  // read a window can never replace the real assertion failure it was
+  // attached to.
+  private static void AppendChainEntry(StringBuilder sb, int depth, IntPtr h) {
+   var name = new StringBuilder(256);
+   var cls = "?";
+   try { if (GetClassName(h, name, name.Capacity) > 0) cls = name.ToString(); } catch { }
+   cls = cls.TrimEnd('\0');
+   if (cls.Length == 0) cls = "?";
+   RECT w;
+   if (!GetWindowRect(h, out w)) { sb.Append("  [").Append(depth).Append("] ").Append(cls).AppendLine(" window rect unavailable"); return; }
+   string client;
+   RECT c; POINT o; o.X = 0; o.Y = 0;
+   try {
+    if (GetClientRect(h, out c) && ClientToScreen(h, ref o))
+     client = "(" + o.X + "," + o.Y + "," + (o.X + (c.Right - c.Left)) + "," + (o.Y + (c.Bottom - c.Top)) + ")";
+    else client = "(unavailable)";
+   } catch { client = "(unavailable)"; }
+   sb.Append("  [").Append(depth).Append("] ").Append(cls)
+    .Append(" win=(").Append(w.Left).Append(",").Append(w.Top).Append(",").Append(w.Right).Append(",").Append(w.Bottom).Append(")")
+    .Append(" client=").Append(client).AppendLine();
+  }
+  public static string DescribeBoundsChain(IntPtr h) {
+   var sb = new StringBuilder();
+   try {
+    if (h==IntPtr.Zero) return sb.Append("  (control handle is zero)").ToString();
+    int depth = 0;
+    IntPtr cur = h;
+    while (cur != IntPtr.Zero && depth <= 24) {
+     AppendChainEntry(sb, depth, cur);
+     cur = GetParent(cur);
+     depth++;
+    }
+   } catch { }
+   return sb.ToString();
+  }
+
   // The checkbox state as an assistive technology sees it. BM_GETCHECK
   // is documented as unsupported for owner-drawn check boxes
   // (https://learn.microsoft.com/windows/win32/controls/bm-getcheck) and
@@ -287,7 +335,17 @@ function Assert-FullyOnScreen {
     $cutRight = $full.Right - $vis.Right
     $cutBottom = $full.Bottom - $vis.Bottom
     if ($cutLeft -gt $Tolerance -or $cutTop -gt $Tolerance -or $cutRight -gt $Tolerance -or $cutBottom -gt $Tolerance) {
-        throw "Control is partly outside the client area (left=$cutLeft top=$cutTop right=$cutRight bottom=$cutBottom px): $Label"
+        # The clip numbers alone do not say WHO clips it. The chain
+        # names the class and the screen-space client rectangle of the
+        # control and each of its ancestors, so a failure points at the
+        # exact ancestor instead of needing another blind run. The
+        # diagnostic is best effort: if it cannot be produced, the
+        # clipping failure below is still reported on its own terms and
+        # is never masked by it.
+        $chain = ''
+        try { $chain = [RecoverySmokeUi]::DescribeBoundsChain($Hwnd) }
+        catch { $chain = "  (bounds chain unavailable: $($_.Exception.Message))`r`n" }
+        throw "Control is partly outside the client area (left=$cutLeft top=$cutTop right=$cutRight bottom=$cutBottom px): $Label`r`nBounds chain (window class, window rect, client rect in screen coords):`r`n$chain"
     }
 }
 # A button a user can actually press, sized from its own label: a real

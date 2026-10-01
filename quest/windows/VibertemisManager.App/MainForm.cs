@@ -165,6 +165,15 @@ public sealed partial class MainForm : Form
     // primary rows step aside for it and are restored by re-running the
     // real readiness probes, never by restoring a cached guess.
     private bool _requestDominates;
+    // Re-entrancy guard for UpdateRootMaximumSize. Pinning the root to
+    // the scroll host's client width decides whether the host needs a
+    // vertical scrollbar, and that scrollbar changes the client width,
+    // so the write can re-enter the same hook.
+    private bool _updatingRootMaximumSize;
+    // True while a single coalesced follow-up pass is already queued.
+    // It is cleared when that pass runs, so a settling layout that
+    // reports the same viewport several times still costs one callback.
+    private bool _rootWidthUpdateQueued;
 
     private UserSettings _settings = new();
     private bool _shownFirstTimeTrayHint;
@@ -442,7 +451,10 @@ public sealed partial class MainForm : Form
         // Re-pin the root panel to the scroll host width so a long line
         // wraps rather than horizontally scrolling the root.
         _rootContent.MinimumSize = new Size(0, 0);
-        _scrollHost.Resize += (_, _) => UpdateRootMaximumSize();
+        // ClientSizeChanged, not Resize: the viewport this root is
+        // pinned to is the scroll host's client area, and that is what
+        // changes when the vertical scrollbar appears or disappears.
+        _scrollHost.ClientSizeChanged += (_, _) => UpdateRootMaximumSize();
         UpdateRootMaximumSize();
 
         // The scroll host is the only content layer: the footer docks
@@ -606,25 +618,84 @@ public sealed partial class MainForm : Form
         return row;
     }
 
+    // The width the single-column root is pinned to, derived from the
+    // scroll host's actual client width. ClientSize already excludes the
+    // vertical scrollbar, so no scrollbar allowance is deducted here. The
+    // 32 px is the root's own left + right outer padding, and the result
+    // is clamped so a viewport narrower than the padding cannot produce
+    // a negative size.
+    private static int RootContentTargetWidth(int viewportWidth)
+        => Math.Max(0, viewportWidth - 32);
+
     private void UpdateRootMaximumSize()
     {
-        if (_scrollHost is null || _scrollHost.ClientSize.Width <= 0) return;
-        var bar = SystemInformation.VerticalScrollBarWidth;
-        var width = bar > 0 ? _scrollHost.ClientSize.Width - bar : _scrollHost.ClientSize.Width;
-        if (width < 0) width = 0;
-        // Single column root: leave the 16 px outer padding visible.
-        var max = new Size(width - 32, 0);
-        if (_rootContent != null) _rootContent.MaximumSize = max;
-        // The prose lines wrap to the width that is actually available
-        // rather than to a fixed pixel count, so a larger body font, a
-        // 150% DPI window, or a narrow window wraps instead of clipping.
-        // The comparison code is deliberately left uncapped: it is the
-        // one line that must never wrap or be truncated.
-        var textWidth = new Size(Math.Max(120, max.Width), 0);
-        _lblHeader.MaximumSize = textWidth;
-        _lblSubStatus.MaximumSize = textWidth;
-        _lblPanelStatus.MaximumSize = textWidth;
-        _updateStatusLabel.MaximumSize = textWidth;
+        if (_scrollHost is null) return;
+        // Re-entrant by construction (see the guard field): the pin
+        // below can change the client width that produced it. A nested
+        // call is dropped here and picked up by the coalesced follow-up.
+        if (_updatingRootMaximumSize) return;
+        var appliedViewportWidth = 0;
+        _updatingRootMaximumSize = true;
+        try
+        {
+            appliedViewportWidth = _scrollHost.ClientSize.Width;
+            if (appliedViewportWidth <= 0) return;
+            var targetWidth = RootContentTargetWidth(appliedViewportWidth);
+            // Height stays 0: the root is vertically AutoSize and must
+            // keep growing downward, so only the width is constrained.
+            // Both bounds are pinned to the same width, so the autosized
+            // root follows the viewport in both directions.
+            var bounds = new Size(targetWidth, 0);
+            if (_rootContent is not null)
+            {
+                // Written only on a real change: an identical
+                // MaximumSize/MinimumSize write restarts layout and
+                // costs a pass for nothing.
+                if (_rootContent.MaximumSize != bounds) _rootContent.MaximumSize = bounds;
+                if (_rootContent.MinimumSize != bounds) _rootContent.MinimumSize = bounds;
+            }
+            // The prose lines wrap to the width that is actually available
+            // rather than to a fixed pixel count, so a larger body font, a
+            // 150% DPI window, or a narrow window wraps instead of clipping.
+            // The comparison code is deliberately left uncapped.
+            var textWidth = new Size(Math.Max(120, targetWidth), 0);
+            if (_lblHeader.MaximumSize != textWidth) _lblHeader.MaximumSize = textWidth;
+            if (_lblSubStatus.MaximumSize != textWidth) _lblSubStatus.MaximumSize = textWidth;
+            if (_lblPanelStatus.MaximumSize != textWidth) _lblPanelStatus.MaximumSize = textWidth;
+            if (_updateStatusLabel.MaximumSize != textWidth) _updateStatusLabel.MaximumSize = textWidth;
+        }
+        finally
+        {
+            _updatingRootMaximumSize = false;
+        }
+        // A viewport that moved while this update was in flight (the
+        // scrollbar appearing or disappearing) is stranded by the guard
+        // above, so it gets exactly ONE follow-up pass after the current
+        // layout finishes - never a synchronous recursion, and never a
+        // second callback while one is already pending. A viewport that
+        // maps to the same target width schedules nothing.
+        if (_scrollHost.ClientSize.Width == appliedViewportWidth) return;
+        if (RootContentTargetWidth(_scrollHost.ClientSize.Width)
+            == RootContentTargetWidth(appliedViewportWidth)) return;
+        QueueRootWidthUpdate();
+    }
+
+    // One coalesced pass, requested through the UI queue so it runs
+    // after the layout that stranded it has completed.
+    private void QueueRootWidthUpdate()
+    {
+        if (_rootWidthUpdateQueued) return;
+        if (IsDisposed || Disposing || !IsHandleCreated) return;
+        _rootWidthUpdateQueued = true;
+        try
+        {
+            BeginInvoke(new Action(() => {
+                _rootWidthUpdateQueued = false;
+                if (IsDisposed || Disposing || !IsHandleCreated) return;
+                UpdateRootMaximumSize();
+            }));
+        }
+        catch (InvalidOperationException) { _rootWidthUpdateQueued = false; } /* Window closed during callback. */
     }
 
     private void WireEvents()
