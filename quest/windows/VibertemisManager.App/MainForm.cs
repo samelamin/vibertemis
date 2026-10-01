@@ -32,15 +32,22 @@
 //   - Close-to-tray is the default; the first time it happens
 //     the manager shows a one-shot explanation. Explicit Exit
 //     owns/stops only the owned companion child.
-//   - Updates use a single Update action. One click pins a release,
-//     downloads it (skipping the download when those exact bytes are
-//     already cached), verifies it, and hands the job to the existing
-//     UpdateWorker, which closes the manager and runs the signed
-//     installer. There is no second in-app Install confirmation: the
-//     explicit Update click is the in-app authorization, and the OS
-//     consent surface (UAC / installer UI) still applies. Cancellation
-//     is available during the attempt and invalidates it completely.
-//     Background checks are metadata only and never install.
+//   - Updates use a single Update action. One click resolves the
+//     release - running the final metadata check itself when nothing
+//     installable is known yet, so there is no separate "Check for
+//     updates" control and no check-then-update second tap - then pins
+//     it, downloads it (skipping the download when those exact bytes
+//     are already cached), verifies it, and hands the job to the
+//     existing UpdateWorker, which closes the manager and runs the
+//     signed installer. There is no second in-app Install
+//     confirmation: the explicit Update click is the in-app
+//     authorization, and the OS consent surface (UAC / installer UI)
+//     still applies. Cancellation is available during the attempt -
+//     including during its metadata check - and invalidates it
+//     completely. Background checks are metadata only and never
+//     install; they are also no longer deferred while SteamVR or the
+//     ALVR Dashboard is running, because a read-only check cannot
+//     conflict with a running application.
 //   - SteamVR is NEVER started by the manager. The
 //     "Install SteamVR" affordance is a steam://install/250820
 //     URL dispatch; the user runs Steam itself. The manager never
@@ -75,13 +82,15 @@ public sealed partial class MainForm : Form
 {
     private readonly AppServices _svc;
     private NotifyIcon? _tray;
-    // One primary update control. Its label is derived from the
+    // ONE primary update control. Its label is derived from the
     // coordinator + repository state by UpdateStatusLineRenderer, so
-    // the owner is never asked to click through Download then
-    // Install: the single click IS the authorization and it runs
-    // download -> verify -> installer handoff.
-    private readonly Button _btnUpdate = new() { Text = "Check for updates", AutoSize = true };
-    private readonly Button _btnCheckUpdate = new() { Text = "Check for updates", AutoSize = true };
+    // the owner is never asked to click through Check then Download
+    // then Install: the single click IS the authorization and it runs
+    // check -> download -> verify -> installer handoff. There is no
+    // secondary check button either - when the click has nothing to
+    // install yet, the coordinator runs the final metadata check
+    // itself as part of that same click.
+    private readonly Button _btnUpdate = new() { Text = "Update", AutoSize = true, MinimumSize = new Size(90, 24) };
     private readonly Button _btnCancelUpdate = new() { Text = "Cancel", AutoSize = true, Visible = false };
     private readonly ProgressBar _updateProgress = new() { Visible = false, Width = 220, Height = 16, Minimum = 0, Maximum = 100, Style = ProgressBarStyle.Continuous };
     private readonly Label _updateProgressLabel = new() { Visible = false, AutoSize = true, Text = "" };
@@ -267,9 +276,8 @@ public sealed partial class MainForm : Form
         // RefreshUpdateButtonStyle, once a real update exists and
         // nothing more specific owns the screen.
         UiTheme.ApplyButton(_btnUpdate, _updateButtonRole);
-        UiTheme.ApplyButton(_btnCheckUpdate, UiTheme.ButtonRole.Demoted);
         UiTheme.ApplyButton(_btnCancelUpdate, UiTheme.ButtonRole.Demoted);
-        updateBar.Controls.AddRange(new Control[] { _btnUpdate, _btnCancelUpdate, _updateProgress, _updateProgressLabel, _btnCheckUpdate });
+        updateBar.Controls.AddRange(new Control[] { _btnUpdate, _btnCancelUpdate, _updateProgress, _updateProgressLabel });
         var progress = new FlowLayoutPanel
         {
             Dock = DockStyle.Top,
@@ -710,17 +718,17 @@ public sealed partial class MainForm : Form
         };
         _btnRefreshAdapters.Click += (_, _) => RefreshAdapters();
         _cmbAdapter.SelectedIndexChanged += (_, _) => OnAdapterPicked();
-        // The single update action. One click resolves the release,
-        // downloads it if needed, verifies it, and hands off to the
-        // existing installer worker. There is no second in-app
-        // Install prompt; the OS consent surface still applies.
+        // The single update action. One click resolves the release -
+        // running the final metadata check itself when nothing is known
+        // yet - downloads it if needed, verifies it, and hands off to
+        // the existing installer worker. There is no second in-app
+        // Install prompt and no second check button; the OS consent
+        // surface still applies.
         _btnUpdate.Click += (_, _) => BeginUpdateFlow();
         // Cancel only ever invalidates the in-flight attempt. It
         // never discards a verified download and never resumes the
         // attempt later.
         _btnCancelUpdate.Click += (_, _) => CancelUpdateFlow();
-        // Manual metadata re-check. Metadata only: it never installs.
-        _btnCheckUpdate.Click += (_, _) => TriggerUpdateCheck(force: true);
         _btnOpenSteamPage.Click += (_, _) => OpenUrl("https://store.steampowered.com/about/");
         _btnInstallSteamVr.Click += (_, _) => OpenUrl(_svc.SteamVr.Discover().Installed ? "steam://rungameid/250820" : "steam://install/250820");
         _btnVcRedistPage.Click += async (_, _) => await PrepareVr();
@@ -772,8 +780,8 @@ public sealed partial class MainForm : Form
         // effectively open (timestamps do not persist across process
         // boundaries). The timer keeps dispatching this on a 1 s
         // tick so any user-visible busy window (VR setup, update
-        // handoff, SteamVR runtime busy) suppresses it cleanly via
-        // the same gate.
+        // handoff, this manager's own attempt) suppresses it cleanly
+        // via the same gate.
         TriggerBackgroundUpdateCheck();
     }
 
@@ -1508,10 +1516,12 @@ public sealed partial class MainForm : Form
         SaveSettings();
     }
 
-    // Stage 1: metadata-only check. Triggered manually by the user
-    // (force=true) or by the background tick (force=false, throttled).
-    // The check is coalesced by the shared repository; concurrent
-    // triggers share the in-flight handle.
+    // Stage 1: metadata-only check. Triggered by the background tick
+    // (force=false, throttled by the shared repository) or, as the
+    // last step of a failed click, by the coordinator's own forced
+    // check through the injected delegate below. The check is
+    // coalesced by the shared repository; concurrent triggers share
+    // the in-flight handle.
     private void TriggerUpdateCheck(bool force)
     {
         if (_updateRepo == null) return;
@@ -1529,19 +1539,23 @@ public sealed partial class MainForm : Form
     // Auto-trigger from the status timer or explicit Activated
     // handler. The repository throttles repeated calls (6 h
     // success, 15 min failure). Errors are absorbed because a busy
-    // background check must not block gaming. The auto-trigger is
-    // deferred while the host is busy (VR setup, install handoff,
-    // SteamVR runtime busy); the next 1 s tick picks it up
-    // automatically once the busy state clears.
+    // background check must not block gaming.
+    //
+    // A metadata check is READ-ONLY: it fetches and verifies a signed
+    // manifest, downloads nothing, installs nothing, and never touches
+    // a running application's files. It used to be deferred entirely
+    // while SteamVR / ALVR Dashboard were running, so a user who
+    // spends every session in VR never learned an update existed and
+    // the only way to find out was a manual control that then still
+    // did not install anything. What genuinely conflicts is still
+    // suppressed: VR setup, an install handoff, and this manager's own
+    // update attempt. The next 1 s tick picks the check up
+    // automatically once any of those clears.
     private void TriggerBackgroundUpdateCheck()
     {
         if (_updateRepo == null) return;
         if (!IsHandleCreated || Disposing || IsDisposed) return;
         if (_installHandOffInFlight || _preparingVr || _updateBusy) return;
-        // Defer while SteamVR / ALVR Dashboard are running so the
-        // check does not race an in-progress setup or download.
-        var busy = _svc.BusyChecker.Check();
-        if (busy.IsBusy) return;
         if (_updateRepo.ShouldRunByThrottle(false))
         {
             TriggerUpdateCheck(false);
@@ -1586,23 +1600,23 @@ public sealed partial class MainForm : Form
         // the handoff, so setup / pairing / start cannot race an
         // install that is about to close the manager. A cancelling
         // attempt stays locked until the interrupted transport has
-        // unwound, because only then is a retry safe.
-        var locked = stage is UpdateFlowStage.Choosing or UpdateFlowStage.Downloading
-            or UpdateFlowStage.Verifying or UpdateFlowStage.Cancelling
-            or UpdateFlowStage.HandingOff or UpdateFlowStage.AwaitingSystem;
+        // unwound, because only then is a retry safe. The click's own
+        // metadata check locks too: it is the first stage of a real
+        // attempt that can end in an install, and the next tap has to
+        // be refused rather than running a second attempt beside it.
+        var locked = stage is UpdateFlowStage.Choosing or UpdateFlowStage.Checking
+            or UpdateFlowStage.Downloading or UpdateFlowStage.Verifying
+            or UpdateFlowStage.Cancelling or UpdateFlowStage.HandingOff
+            or UpdateFlowStage.AwaitingSystem;
         _updateActionLocked = locked;
         bool idle = !locked && !_updateBusy && !_installHandOffInFlight && !_preparingVr;
 
+        // One update action, whatever it has to do. Its label comes
+        // from the same renderer the tests pin, so "Update", "Update
+        // to <version>", "Checking…" and "Retry update" can never
+        // describe two steps.
         _btnUpdate.Text = UpdateStatusLineRenderer.ActionLabel(s, flow);
         _btnUpdate.Enabled = idle && _updateFlow is not null;
-        // One action per state. The manual re-check is a secondary that
-        // exists only while the primary is doing something else, so the
-        // owner never sees two identical "Check for updates" buttons side
-        // by side at rest, and it disappears while work is in flight.
-        _btnCheckUpdate.Text = s.Checking ? "Checking…" : "Check for updates";
-        _btnCheckUpdate.Visible = idle && !s.Checking
-            && !UpdateStatusLineRenderer.PrimaryIsCheck(s, flow);
-        _btnCheckUpdate.Enabled = _btnCheckUpdate.Visible;
         // Cancel is offered only while the attempt itself says it can
         // still be cancelled: not after the irreversible handoff
         // boundary, and not again while it is already cancelling.
@@ -1617,8 +1631,10 @@ public sealed partial class MainForm : Form
         RefreshCompanionStatus();
 
         // Progress is either real bytes or indeterminate. Verification
-        // has no meaningful percentage, so it never invents one, and a
-        // cancelling attempt stops showing a bar it can no longer move.
+        // has no meaningful percentage, so it never invents one; a
+        // metadata check moves no bytes at all and runs the same honest
+        // marquee rather than a fabricated one. A cancelling attempt
+        // stops showing a bar it can no longer move.
         var showProgress = locked && stage != UpdateFlowStage.AwaitingSystem
             && stage != UpdateFlowStage.Cancelling;
         _updateProgress.Visible = showProgress;
@@ -1750,9 +1766,6 @@ public sealed partial class MainForm : Form
         if (_updateRepo == null || _updateDownloader == null)
         {
             _btnUpdate.Enabled = false;
-            // No update source at all, so there is nothing for the
-            // secondary manual check to do either.
-            _btnCheckUpdate.Visible = false;
             _updateStatusLabel.Text = "Update status: check unavailable \u2014 updates are not configured for this install.";
             return;
         }
@@ -1767,7 +1780,32 @@ public sealed partial class MainForm : Form
             recordDownloaded: (target, file) =>
                 repo.RecordDownloaded(target.Release, target.ManifestBytes, target.SignatureBytes, file),
             purgeDownloaded: target => repo.ClearDownloadedAfterInstall(target.Version),
-            handoff: (target, token) => InvokeOnUiAsync(() => RunUpdateHandoffAsync(target, token)));
+            handoff: (target, token) => InvokeOnUiAsync(() => RunUpdateHandoffAsync(target, token)),
+            // The click's own last step: when the owner pressed Update
+            // and nothing installable was known yet, this is what
+            // resolves the target, so one action covers "check then
+            // install" and no second control exists.
+            //
+            // Forced, because the owner explicitly asked to update and
+            // must not be told "up to date" because a background tick
+            // ran less than six hours ago. It waits on the repository's
+            // own coalesced handle, so a check already in flight for the
+            // background tick is joined rather than duplicated.
+            check: async token =>
+            {
+                UpdateRepository.InFlight inflight;
+                try { inflight = repo.RequestCheck(force: true); }
+                catch (Exception ex)
+                {
+                    throw new InvalidOperationException("the update check could not be started: " + ex.Message, ex);
+                }
+                // WaitAsync cancels THIS attempt's wait only. The
+                // repository's shared check is deliberately never
+                // cancelled: it fetches metadata for the background
+                // tick and the window activation as well, and it
+                // changes nothing on the machine.
+                return await inflight.Completion.WaitAsync(token).ConfigureAwait(false);
+            });
         _updateFlow.StateChanged += OnUpdateFlowStateChanged;
         _updateFlow.Notice += LogStatus;
     }
@@ -1866,15 +1904,22 @@ public sealed partial class MainForm : Form
             _updateBusy = state.Busy;
             // Only a stage that means the attempt is really moving bytes
             // or the installer retires the standing notice from the last
-            // attempt. Choosing is deliberately excluded: the coordinator
-            // publishes it before its own busy check, so a click that was
-            // refused did no update work and the previous result is still
-            // the truth about this install. Blocked and Failed are not an
-            // attempt either, and a metadata check never reaches here.
+            // attempt. Choosing and Checking are deliberately excluded:
+            // the coordinator publishes them before it knows whether it
+            // will do any work at all (its own busy check can still
+            // refuse the attempt, and a check can end in "nothing
+            // newer"), so a click that was refused did no update work
+            // and the previous result is still the truth about this
+            // install. Blocked and Failed are not an attempt either, and
+            // a background metadata check never reaches here.
             if (state.Stage is UpdateFlowStage.Downloading or UpdateFlowStage.Verifying
                 or UpdateFlowStage.HandingOff or UpdateFlowStage.AwaitingSystem)
                 AcknowledgePriorUpdateOutcome();
-            if (state.Stage is UpdateFlowStage.Downloading or UpdateFlowStage.Verifying)
+            // A stage that shows a bar has to render it here: the
+            // click's own metadata check moves no bytes, so it is the
+            // marquee branch rather than a determinate bar stuck at 0%.
+            if (state.Stage is UpdateFlowStage.Checking or UpdateFlowStage.Downloading
+                or UpdateFlowStage.Verifying)
                 ApplyUpdateProgress(state);
             RenderUpdateUi();
         });
@@ -1971,8 +2016,9 @@ public sealed partial class MainForm : Form
     }
 
     // Progress rendering. Bytes are only shown when the stage actually
-    // knows them; verification has no honest percentage, so it runs a
-    // marquee rather than inventing one.
+    // knows them; verification and the click's metadata check have no
+    // honest percentage, so they run a marquee rather than inventing
+    // one.
     private void ApplyUpdateProgress(UpdateFlowState state)
     {
         _updateProgress.Visible = true;

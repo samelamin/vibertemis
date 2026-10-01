@@ -6,15 +6,22 @@
 // Ladder:
 //   1. an in-flight / ended one-click attempt (its stage owns the
 //      line, so an error survives a collapsed activity log)
-//   2. checking (a metadata check is in flight)
+//   2. checking (a metadata check is in flight, whether the owner
+//      asked for it with Update or the background tick did)
 //   3. ready (verified installer is on disk and ready to install)
 //   4. available (newer metadata is known, no verified installer)
-//   5. error (last check failed; user can retry with Check now)
+//   5. error (last check failed; the one Update action retries it)
 //   6. current (a successful check found no newer release)
 //   7. not yet checked (no successful check has run yet)
 //
 // No "up to date" line appears before a successful check has
 // happened — the default text is always visible from launch.
+// There is exactly ONE update action, and its label never describes
+// a first step of two: at rest it is "Update" (with or without the
+// version it will fetch or install), while a click is in flight it
+// is "Checking…", and a failed or busy attempt offers "Retry
+// update". A label that said "Check for updates" would be a promise
+// that something still has to be pressed afterwards.
 // The ladder matches the Android UpdatesActivity visibility
 // ladder and the hub badge ladder so the user sees the same
 // outcome language on every surface.
@@ -52,7 +59,7 @@ public static class UpdateStatusLineRenderer
         }
         if (!string.IsNullOrEmpty(s.LastError))
         {
-            return $"Update status: check unavailable \u2014 {s.LastError}. Use Check for updates to retry.";
+            return $"Update status: check unavailable \u2014 {s.LastError}. Use Update to retry.";
         }
         if (s.LastSuccessAt != DateTime.MinValue)
         {
@@ -63,9 +70,14 @@ public static class UpdateStatusLineRenderer
 
     /// <summary>
     /// Label for the single update action. There is exactly one
-    /// primary update control, so this label is what tells the owner
-    /// whether the click will check, download, or install an
-    /// already-verified download. It never promises two steps.
+    /// primary update control, so this label has to tell the owner
+    /// what the one click does without promising a second one. At
+    /// rest it is always an Update: "Update" when the machine knows
+    /// of nothing newer (the click checks and then installs), and
+    /// "Update to &lt;version&gt;" for a release it can already name
+    /// - one still to download or one already cached and verified.
+    /// "Install update" is never used: the click that installs those
+    /// cached bytes is the same Update click, not a separate step.
     /// </summary>
     public static string ActionLabel(UpdateRepository.Snapshot s, UpdateFlowState? flow = null)
     {
@@ -73,6 +85,12 @@ public static class UpdateStatusLineRenderer
         {
             return flow.Stage switch
             {
+                // The click found nothing to install and is checking
+                // for itself. Naming that step is honest - it is what
+                // is happening - and it is still the same action, so
+                // there is nothing else for the owner to press after
+                // it.
+                UpdateFlowStage.Checking => "Checking\u2026",
                 UpdateFlowStage.Choosing or UpdateFlowStage.Downloading
                     or UpdateFlowStage.Verifying or UpdateFlowStage.HandingOff
                     => flow.Version is null ? "Updating\u2026" : $"Updating to {flow.Version}\u2026",
@@ -85,29 +103,15 @@ public static class UpdateStatusLineRenderer
                 _ => "Update",
             };
         }
+        // A background metadata check in flight owns the label, so the
+        // single control never looks idle while it is working.
         if (s.Checking) return "Checking\u2026";
-        // An explicit Update on a verified cache installs those
-        // bytes; it must not silently fetch a newer release instead.
-        if (s.HasDownloaded) return $"Install update {s.Downloaded!.Version}";
+        // An explicit Update on a verified cache installs exactly
+        // those bytes; it must not silently fetch a newer release
+        // instead, and it is still one Update, not an install step.
+        if (s.HasDownloaded) return $"Update to {s.Downloaded!.Version}";
         if (s.HasNewerAvailable) return $"Update to {s.Available!.Version}";
-        return "Check for updates";
-    }
-
-    /// <summary>
-    /// True when the single primary action is already a metadata check.
-    /// The UI uses this to hide its secondary manual Check button: at
-    /// rest with nothing on offer, both controls would carry the same
-    /// "Check for updates" label and do the same thing. It is derived
-    /// from the same inputs as <see cref="ActionLabel"/> rather than by
-    /// comparing label text, so the two cannot drift.
-    /// </summary>
-    public static bool PrimaryIsCheck(UpdateRepository.Snapshot s, UpdateFlowState? flow = null)
-    {
-        // A live or ended attempt owns the primary action, so it is
-        // never a plain check.
-        if (flow is not null && flow.Stage != UpdateFlowStage.Idle) return false;
-        if (s.Checking) return false;
-        return !s.HasDownloaded && !s.HasNewerAvailable;
+        return "Update";
     }
 
     private static string StagePhrase(UpdateFlowStage stage, string? version)
@@ -116,6 +120,7 @@ public static class UpdateStatusLineRenderer
         return stage switch
         {
             UpdateFlowStage.Choosing => $"starting {subject}\u2026",
+            UpdateFlowStage.Checking => "checking for updates\u2026",
             UpdateFlowStage.Downloading => $"downloading {subject}\u2026",
             UpdateFlowStage.Verifying => $"verifying {subject}\u2026",
             UpdateFlowStage.Cancelling => $"cancelling {subject}\u2026",
