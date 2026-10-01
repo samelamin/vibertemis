@@ -1,7 +1,6 @@
 package com.vibertemis.quest.hub;
 
 import android.Manifest;
-import android.app.AlertDialog;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.os.Looper;
@@ -76,9 +75,10 @@ public class ConnectJourneyTest {
     /**
      * Drain the main looper and the single-thread connect worker for a
      * bounded window so every queued worker task has run and its UI
-     * callback has been delivered. Used only where the assertion is
-     * about work that must NOT have been queued, where there is no
-     * positive completion signal to await.
+     * callback has been delivered. Used where the assertion is about a
+     * bounded count — that nothing extra was queued, or that a queued
+     * continuation is not replayed — so there is no second positive
+     * completion signal to await.
      */
     private void settle() throws Exception {
         long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(500L);
@@ -108,55 +108,84 @@ public class ConnectJourneyTest {
         }
     }
 
-    @Test public void runningHostRequiresRestartConsent() throws Exception {
+    /**
+     * A WARM {@code vrserver=true} host is a normal, idempotent
+     * connection, so one click is the whole journey: exactly one
+     * {@code HostClient.start} and exactly one SteamVrActivity
+     * dispatch, with no dialog anywhere.
+     *
+     * <p>That single launch must carry
+     * {@code vq_pcvr_allow_restart=false} and a ZERO restart deadline,
+     * so the native side can never restart a healthy VR session it was
+     * not asked to touch. A warm server is not a discrepancy, so it
+     * never prompts: the Restart VR / Cancel dialog belongs to an
+     * authenticated native mismatch callback, which
+     * {@link MainHubNativeReturnTest} and {@link MainHubActivityTest}
+     * cover.
+     */
+    @Test public void warmHostConnectsInOneTapWithoutRestartPermission() throws Exception {
         host.status.put("vrserver", true);
         try (var c = Robolectric.buildActivity(TestHub.class).setup()) {
             c.get().findViewById(R.id.hub_btn_connect).performClick();
-            await(() -> ShadowAlertDialog.getLatestAlertDialog() != null
-                    && ShadowAlertDialog.getLatestAlertDialog().isShowing());
-            assertEquals(0, host.starts.get());
-            AlertDialog dialog = ShadowAlertDialog.getLatestAlertDialog();
-            assertEquals("Restart VR", dialog.getButton(AlertDialog.BUTTON_POSITIVE).getText().toString());
-            dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick();
-            await(() -> host.starts.get() == 1);
+            final Intent[] launch = new Intent[1];
+            await(() -> (launch[0] = Shadows.shadowOf(c.get()).getNextStartedActivity()) != null);
+            assertEquals("one warm connection is one host start", 1, host.starts.get());
+            assertEquals("the warm journey dispatches SteamVrActivity",
+                    "com.vibertemis.quest.hub.SteamVrActivity",
+                    launch[0].getComponent().getClassName());
+            assertFalse("a warm connection must not grant restart permission",
+                    launch[0].getBooleanExtra("vq_pcvr_allow_restart", true));
+            assertEquals("a warm connection must carry a zero restart deadline",
+                    0L, launch[0].getLongExtra("vq_pcvr_restart_until_ms", -1L));
+            assertNull("one warm connection must dispatch SteamVrActivity exactly once",
+                    Shadows.shadowOf(c.get()).getNextStartedActivity());
+            assertNull("a warm host must never prompt the user",
+                    ShadowAlertDialog.getLatestAlertDialog());
         }
     }
 
     /**
-     * A rapid double tap on the consent dialog's Restart VR button must
-     * not queue a second start request. The first accepted start
-     * consumes the generation the dialog captured, so the second tap's
-     * stale generation is rejected by its own guard: exactly one
-     * {@code HostClient.start} and exactly one activity dispatch.
+     * A rapid duplicate tap on Connect while the first attempt is still
+     * in flight on the host worker must not queue a second attempt. The
+     * fake host's latch holds the accepted start request open, so the
+     * extra taps really do land on the same button while that attempt
+     * is unfinished; the in-flight guard rejects them, so the whole
+     * warm journey still yields exactly one {@code HostClient.start}
+     * and exactly one SteamVrActivity dispatch — and that one launch
+     * still carries no restart permission, with no dialog anywhere.
      */
-    @Test public void rapidRestartTapsIssueOneStartAndOneLaunch() throws Exception {
+    @Test public void rapidDuplicateConnectTapsIssueOneStartAndOneLaunch() throws Exception {
         host.status.put("vrserver", true);
         host.release = new CountDownLatch(1);
         try (var c = Robolectric.buildActivity(TestHub.class).setup()) {
             c.get().findViewById(R.id.hub_btn_connect).performClick();
-            await(() -> ShadowAlertDialog.getLatestAlertDialog() != null
-                    && ShadowAlertDialog.getLatestAlertDialog().isShowing());
-            AlertDialog dialog = ShadowAlertDialog.getLatestAlertDialog();
-            android.widget.Button restart = dialog.getButton(AlertDialog.BUTTON_POSITIVE);
-            assertEquals("Restart VR", restart.getText().toString());
-            // First tap is accepted; the latch holds its start request
-            // open so the second tap lands on the same button while the
-            // same attempt is still in flight.
-            restart.performClick();
             await(() -> host.starts.get() == 1);
-            // Second tap on the same button, still before the held
-            // request completes.
-            restart.performClick();
+            // Duplicate taps land on the same button while the same
+            // start request is still held open by the fake host.
+            c.get().findViewById(R.id.hub_btn_connect).performClick();
+            c.get().findViewById(R.id.hub_btn_connect).performClick();
             Shadows.shadowOf(Looper.getMainLooper()).idle();
+            assertEquals("a duplicate tap must not queue a second start request",
+                    1, host.starts.get());
+            assertNull("nothing may be dispatched while the start is in flight",
+                    Shadows.shadowOf(c.get()).getNextStartedActivity());
             host.release.countDown();
             final Intent[] launch = new Intent[1];
             await(() -> (launch[0] = Shadows.shadowOf(c.get()).getNextStartedActivity()) != null);
             settle();
-            assertEquals("second tap must not queue a second start request",
+            assertEquals("a duplicate tap must not queue a second start request",
                     1, host.starts.get());
-            assertNotNull("consent must dispatch SteamVrActivity", launch[0]);
-            assertNull("one consent must dispatch SteamVrActivity exactly once",
+            assertEquals("the warm journey dispatches SteamVrActivity",
+                    "com.vibertemis.quest.hub.SteamVrActivity",
+                    launch[0].getComponent().getClassName());
+            assertFalse("a warm connection must not grant restart permission",
+                    launch[0].getBooleanExtra("vq_pcvr_allow_restart", true));
+            assertEquals("a warm connection must carry a zero restart deadline",
+                    0L, launch[0].getLongExtra("vq_pcvr_restart_until_ms", -1L));
+            assertNull("one connection must dispatch SteamVrActivity exactly once",
                     Shadows.shadowOf(c.get()).getNextStartedActivity());
+            assertNull("a warm host must never prompt the user",
+                    ShadowAlertDialog.getLatestAlertDialog());
         }
     }
 
@@ -178,11 +207,25 @@ public class ConnectJourneyTest {
             c.pause();
             host.release.countDown();
             await(() -> pendingLaunch(c.get()));
-            assertNull(Shadows.shadowOf(c.get()).getNextStartedActivity());
+            assertNull("a hub paused mid-attempt must not dispatch VR",
+                    Shadows.shadowOf(c.get()).getNextStartedActivity());
             c.resume();
-            assertNotNull(Shadows.shadowOf(c.get()).getNextStartedActivity());
+            // The resumed dispatch is gated on the real process-liveness
+            // proof, which answers on the connect worker, so the launch
+            // is awaited rather than assumed to be synchronous. The
+            // awaiting condition is itself the assertion, so the intent
+            // is captured in the same pass that proves it exists.
+            final Intent[] launch = new Intent[1];
+            await(() -> (launch[0] = Shadows.shadowOf(c.get()).getNextStartedActivity()) != null);
+            assertEquals("the deferred launch must be SteamVrActivity",
+                    "com.vibertemis.quest.hub.SteamVrActivity",
+                    launch[0].getComponent().getClassName());
             c.pause().resume();
-            assertNull(Shadows.shadowOf(c.get()).getNextStartedActivity());
+            // Drain the worker and the main looper before claiming the
+            // queued continuation was not replayed.
+            settle();
+            assertNull("the deferred launch must not be replayed",
+                    Shadows.shadowOf(c.get()).getNextStartedActivity());
         }
     }
 
