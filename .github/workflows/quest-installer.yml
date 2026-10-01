@@ -25,9 +25,38 @@ jobs:
           go test -race -count=1 ./...
   windows-build:
     runs-on: windows-2022
-    timeout-minutes: 45
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Install pinned Rust
+        shell: pwsh
+        run: |
+          rustup toolchain install 1.97.1 --profile minimal
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          rustup override set 1.97.1
+      - name: Verify native toolchains
+        shell: pwsh
+        run: |
+          if (-not (Get-Command cmake -ErrorAction SilentlyContinue)) { throw 'cmake is not available' }
+          cmake --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $clangDir = @(
+            "$env:ProgramFiles\LLVM\bin",
+            "${env:ProgramFiles(x86)}\Microsoft Visual Studio\2022\Enterprise\VC\Tools\Llvm\x64\bin",
+            "$env:ProgramFiles\Microsoft Visual Studio\2022\Enterprise\VC\Tools\Llvm\x64\bin"
+          ) | Where-Object { $_ -and (Test-Path (Join-Path $_ 'libclang.dll')) } | Select-Object -First 1
+          if (-not $clangDir) { throw 'LLVM libclang.dll is not available' }
+          "LIBCLANG_PATH=$clangDir" | Out-File -FilePath $env:GITHUB_ENV -Append
+      - name: Restore native compilation cache
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            build/quest/alvr/target
+            ~/.cargo/bin/cargo-about.exe
+          key: quest-native-windows-rust1971-${{ github.sha }}
+          restore-keys: quest-native-windows-rust1971-
       - uses: actions/setup-dotnet@d4c94342e560b34958eacfc5d055d21461ed1c5d
         with:
           dotnet-version: 8.0.x
@@ -72,3 +101,13 @@ jobs:
             build/installer/smoke-*.log
             build/installer/smoke-*.png
           if-no-files-found: ignore
+      - name: Save native compilation cache
+        if: always()
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            build/quest/alvr/target
+            ~/.cargo/bin/cargo-about.exe
+          key: quest-native-windows-rust1971-${{ github.sha }}
