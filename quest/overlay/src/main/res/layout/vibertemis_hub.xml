@@ -1,33 +1,51 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Hub panel layout. Plain ScrollView / LinearLayout. No OpenXR, no special
-  theme requirements. Buttons use the platform theme's selectable
-  background (native focus / ripple) and are sized for headset ray-cast
-  targets (56dp minHeight). We deliberately do NOT set
-  android:textColor on the buttons: the platform theme chooses
-  foreground/background together so we never paint white text on a
-  light native button.
+  Vibertemis XR Preview hub. Quiet utility layout: a single
+  Connection card with one prominent primary action, two secondary
+  rows, one advanced link, and a true-state Updates footer.
 
-  Layout:
-    title
-    subtitle            (explains detected mode, set in code)
-    status
-    divider
-    Connect (primary)   (always shown)
-    connect summary     (explains what was detected)
-    Screen gaming       (headset only - explicit flat override)
-    screen summary      (headset only)
-    Streaming settings
-    Setup
+  Spacing tokens (24dp padding / 20dp card padding / 14dp card
+  radius) come from the Claude frontend-design pass.
 
-  No separate manual SteamVR (PCVR) button: the hub detects device
-  class via FEATURE_VR_HEADTRACKING and routes Connect automatically.
+    background  #0D1216
+    card        #141B21 (1dp #1F2A33 stroke)
+    text        #ECF2F5 (primary) / #9BA8B2 (secondary)
+    teal        #14616E (primary) / #7FE0D2 (focus)
+
+  Touch-target heights:
+    primary  Connect 72dp
+    secondary Flat screen, Updates, Setup 56dp
+    inline   Cancel connection, Retry, Cancel error 56dp
+    link     Updates 48dp
+
+  Every hub button sets textAllCaps="false" and carries no
+  contentDescription: the visible label is the accessible name, and
+  the Connect / Set up PC / Change PC labels are set in code from
+  pairing state, so a static description would go stale.
+
+  Connect changes purpose by pairing state. If paired, the primary
+  Connect launches the authenticated PCVR flow. If unpaired, the
+  primary "Set up PC" button opens the VR-setup picker (the same
+  flow that lives under Settings > Advanced for paired headsets).
+
+  Inline phase and inline error are drawn INTO the card during a
+  connect attempt so the user sees real progress without a wall of
+  dialogs. The phase pill, the inline error text, and the inline
+  Retry chip are hidden at rest and shown only when relevant. The
+  Cancel button follows the phase line it interrupts.
+
+  No fabricated hostname, lastplayed time, connection metrics, or
+  Ready label. The saved-PC line shows ONLY what is actually
+  persisted in PairingStore (the saved address). "Saved pairing is
+  not proof the PC is online" is shown above the primary action so the
+  user never confuses persistence with reachability.
 -->
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="@color/hub_panel_bg"
-    android:fillViewport="true">
+    android:fillViewport="true"
+    android:scrollIndicators="none">
 
     <LinearLayout
         android:layout_width="match_parent"
@@ -65,77 +83,234 @@
             android:textColor="@color/hub_panel_fg"
             android:text="@string/hub_status_unknown" />
 
-        <View
-            android:layout_width="match_parent"
-            android:layout_height="1dp"
-            android:layout_marginTop="16dp"
-            android:layout_marginBottom="16dp"
-            android:background="#33FFFFFF" />
-
-        <Button
-            android:id="@+id/hub_btn_connect"
+        <!-- Connection card. 20dp padding around the body, 14dp
+             corners. The card is the only prominent panel on the
+             hub. Every other row lives outside it as a secondary
+             action. -->
+        <LinearLayout
+            android:id="@+id/hub_card_connection"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:minHeight="56dp"
-            android:textSize="18sp"
-            android:text="@string/hub_btn_connect"
-            android:contentDescription="@string/hub_btn_connect" />
+            android:layout_marginTop="20dp"
+            android:orientation="vertical"
+            android:padding="20dp"
+            android:background="@drawable/hub_card_bg">
 
-        <TextView
-            android:id="@+id/hub_connect_note"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="6dp"
-            android:layout_marginBottom="12dp"
-            android:textSize="16sp"
-            android:textColor="@color/hub_panel_subtle"
-            android:text="@string/hub_subtitle_companion_required" />
+            <TextView
+                android:id="@+id/hub_card_title"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textSize="15sp"
+                android:textColor="@color/hub_panel_subtle"
+                android:textAllCaps="true"
+                android:letterSpacing="0.08"
+                android:text="@string/hub_card_title" />
 
+            <TextView
+                android:id="@+id/hub_card_pc_status"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:textSize="20sp"
+                android:textStyle="bold"
+                android:textColor="@color/hub_panel_fg"
+                android:text="@string/hub_card_unpaired" />
+
+            <TextView
+                android:id="@+id/hub_card_pc_caveat"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:textSize="15sp"
+                android:textColor="@color/hub_panel_subtle"
+                android:text="@string/hub_card_paired_caveat" />
+
+            <!-- Primary 72dp Connect. Text is set in code based on
+                 pairing state: "Connect" if paired, "Set up PC" if
+                 unpaired. Background and text colour are pinned
+                 in the activity so we never depend on the platform
+                 theme picking a foreground that fights the teal.
+                 No contentDescription: the visible label is the
+                 accessible name, and the label changes in code, so a
+                 static description would go stale. -->
+            <Button
+                android:id="@+id/hub_btn_connect"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="20dp"
+                android:minHeight="72dp"
+                android:textSize="20sp"
+                android:textStyle="bold"
+                android:textAllCaps="false"
+                android:textColor="@color/hub_panel_accent_on"
+                android:background="@drawable/hub_btn_primary_bg"
+                android:text="@string/hub_btn_connect" />
+
+            <TextView
+                android:id="@+id/hub_connect_note"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:textSize="15sp"
+                android:textColor="@color/hub_panel_subtle"
+                android:text="@string/hub_subtitle_companion_required" />
+
+            <!-- Inline phase pill. Hidden at rest (visibility="gone").
+                 Drawn only while a connect attempt is in flight so
+                 the user sees real progress without a modal
+                 dialog. -->
+            <TextView
+                android:id="@+id/hub_card_phase"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:paddingStart="14dp"
+                android:paddingEnd="14dp"
+                android:paddingTop="10dp"
+                android:paddingBottom="10dp"
+                android:textSize="15sp"
+                android:textColor="@color/hub_panel_subtle"
+                android:background="@drawable/hub_phase_pill_bg"
+                android:visibility="gone" />
+
+            <!-- Cancel the in-flight connect. Sits directly after the
+                 phase line it interrupts. Hidden at rest. -->
+            <Button
+                android:id="@+id/hub_btn_cancel_connection"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:minHeight="56dp"
+                android:textAllCaps="false"
+                android:textColor="@color/hub_panel_fg"
+                android:background="@drawable/hub_btn_secondary_bg"
+                android:text="@string/hub_phase_cancel"
+                android:visibility="gone" />
+
+            <!-- Inline error block. Hidden at rest. Shown when the
+                 connect attempt fails. Inline Retry button is
+                 included so the user never has to re-navigate to
+                 the primary Connect. -->
+            <LinearLayout
+                android:id="@+id/hub_card_error_row"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:orientation="vertical"
+                android:paddingStart="14dp"
+                android:paddingEnd="14dp"
+                android:paddingTop="10dp"
+                android:paddingBottom="14dp"
+                android:background="@drawable/hub_phase_pill_bg"
+                android:visibility="gone">
+
+                <TextView
+                    android:id="@+id/hub_card_error"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:textSize="15sp"
+                    android:textColor="@color/hub_panel_error" />
+
+                <Button
+                    android:id="@+id/hub_card_error_retry"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:minHeight="56dp"
+                    android:textSize="15sp"
+                    android:textStyle="bold"
+                    android:textAllCaps="false"
+                    android:textColor="@color/hub_panel_focus"
+                    android:background="@drawable/hub_chip_retry_bg"
+                    android:text="@string/hub_phase_retry"
+                    android:visibility="gone" />
+
+                <Button
+                    android:id="@+id/hub_card_error_cancel"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:minHeight="56dp"
+                    android:textSize="15sp"
+                    android:textAllCaps="false"
+                    android:textColor="@color/hub_panel_subtle"
+                    android:background="@android:color/transparent"
+                    android:text="@string/hub_phase_cancel"
+                    android:visibility="gone" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <!-- Secondary 56dp rows. Flat screen is headset-only; on a
+             phone the primary Connect already routes to flat PcView
+             so a second flat surface would be a duplicate of the
+             primary action. -->
         <Button
             android:id="@+id/hub_btn_screen"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
             android:minHeight="56dp"
-            android:textSize="18sp"
-            android:text="@string/hub_btn_screen"
-            android:contentDescription="@string/hub_btn_screen" />
+            android:textSize="17sp"
+            android:textAllCaps="false"
+            android:textColor="@color/hub_panel_fg"
+            android:background="@drawable/hub_btn_secondary_bg"
+            android:text="@string/hub_btn_screen" />
 
         <TextView
             android:id="@+id/hub_screen_note"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="6dp"
-            android:layout_marginBottom="12dp"
-            android:textSize="16sp"
+            android:textSize="15sp"
             android:textColor="@color/hub_panel_subtle"
             android:text="@string/hub_btn_screen_summary" />
 
+        <!-- Secondary 56dp Settings. -->
         <Button
             android:id="@+id/hub_btn_settings"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
             android:minHeight="56dp"
-            android:textSize="18sp"
-            android:text="@string/hub_btn_settings"
-            android:contentDescription="@string/hub_btn_settings" />
+            android:textSize="17sp"
+            android:textAllCaps="false"
+            android:textColor="@color/hub_panel_fg"
+            android:background="@drawable/hub_btn_secondary_bg"
+            android:text="@string/hub_btn_settings" />
 
+        <!-- Advanced link "Setup" (or "Change PC" once paired) — 56dp.
+             Reachable from the hub (advanced placement) and from
+             Settings > Advanced. Visually a secondary action so a
+             4-button panel of primary controls never appears. Text
+             only, no fill, teal text colour so it reads as a link.
+             The label is set in code from pairing state, so it is the
+             accessible name on its own. -->
         <Button
             android:id="@+id/hub_btn_setup"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
+            android:layout_marginTop="20dp"
             android:minHeight="56dp"
-            android:textSize="18sp"
-            android:text="@string/hub_btn_setup"
-            android:contentDescription="@string/hub_btn_setup" />
+            android:textSize="16sp"
+            android:textColor="@color/hub_panel_focus"
+            android:background="@android:color/transparent"
+            android:textAllCaps="false"
+            android:text="@string/hub_btn_setup" />
 
+        <!-- Updates footer. 48dp link + a true-state badge drawn from
+         the provider snapshot. The badge is hidden when nothing is
+         known yet so we never paint a fake "up to date" before a
+         real check has run. -->
         <Button
             android:id="@+id/hub_btn_updates"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
-            android:minHeight="56dp"
-            android:textSize="18sp"
+            android:layout_marginTop="20dp"
+            android:minHeight="48dp"
+            android:textSize="16sp"
+            android:textColor="@color/hub_panel_focus"
+            android:background="@android:color/transparent"
+            android:textAllCaps="false"
             android:text="@string/hub_btn_updates" />
 
         <TextView
@@ -145,7 +320,7 @@
             android:layout_marginTop="4dp"
             android:layout_marginBottom="4dp"
             android:textSize="15sp"
-            android:textColor="@color/hub_panel_warn"
+            android:textColor="@color/hub_panel_subtle"
             android:visibility="gone"
             android:text="@string/hub_updates_badge_default" />
     </LinearLayout>
