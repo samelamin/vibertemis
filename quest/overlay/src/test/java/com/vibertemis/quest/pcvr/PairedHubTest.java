@@ -40,7 +40,7 @@ public class PairedHubTest {
         @Override
         public org.json.JSONObject request(HostPairing pairing, String method, String path, byte[] body) throws Exception {
           if (!"GET".equals(method) || !"/status".equals(path)) throw new AssertionError("Only a read-only preflight is allowed");
-          return new org.json.JSONObject();
+          return new org.json.JSONObject().put("vrserver", false);
         }
         @Override
         public void start(HostPairing pairing, String codec) throws Exception {
@@ -69,15 +69,22 @@ public class PairedHubTest {
     release.countDown();
   }
 
+  private static void awaitStarted() throws Exception {
+    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+    while (entered.getCount() != 0 && System.nanoTime() < deadline) {
+      Shadows.shadowOf(android.os.Looper.getMainLooper()).idle();
+      Thread.sleep(5);
+    }
+    assertEquals("explicit Connect must start the host", 0L, entered.getCount());
+  }
+
   @Test
-  public void doubleTapOneRequestAndPauseDropsLateResult() throws Exception {
+  public void doubleTapOneRequestAndPauseDefersLateResult() throws Exception {
     ActivityController<TestHub> controller = Robolectric.buildActivity(TestHub.class).setup();
     TestHub hub = controller.get();
     hub.findViewById(R.id.hub_btn_connect).performClick();
-    PcvrTestActions.confirmRestartIfShown();
-    assertTrue(entered.await(2, TimeUnit.SECONDS));
+    awaitStarted();
     hub.findViewById(R.id.hub_btn_connect).performClick();
-    PcvrTestActions.confirmRestartIfShown();
     hub.findViewById(R.id.hub_btn_screen).performClick();
     assertEquals(1, calls.get());
     controller.pause();
@@ -93,8 +100,7 @@ public class PairedHubTest {
     ActivityController<TestHub> controller = Robolectric.buildActivity(TestHub.class).setup();
     TestHub hub = controller.get();
     hub.findViewById(R.id.hub_btn_connect).performClick();
-    PcvrTestActions.confirmRestartIfShown();
-    assertTrue(entered.await(2, TimeUnit.SECONDS));
+    awaitStarted();
     Shadows.shadowOf(RuntimeEnvironment.getApplication())
         .denyPermissions(Manifest.permission.RECORD_AUDIO);
     release.countDown();

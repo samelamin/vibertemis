@@ -14,6 +14,7 @@ import android.provider.Settings;
 import android.util.Log;
 import android.view.View;
 import android.widget.Button;
+import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -28,58 +29,76 @@ import com.vibertemis.quest.pcvr.VrSetupDiscovery;
 import com.limelight.PcView;
 import com.limelight.R;
 import com.limelight.preferences.StreamSettings;
+import org.json.JSONObject;
 
 /**
  * Panel-mode launch hub. NOT itself immersive / NOT an OpenXR activity.
  *
- * <p>The hub exposes a single primary <b>Connect</b> action whose target
- * is decided by {@link VrCapabilities#isHeadset(android.content.Context)} —
- * the {@code PackageManager.FEATURE_VR_HEADTRACKING} signal — and never
- * by user-visible device names or heuristics:
+ * <p>The hub exposes a single prominent <b>Connection card</b> with one
+ * primary action whose label is decided by pairing state and device
+ * class — NOT by user-visible device names or heuristics:
  * <ul>
- *   <li><b>Real headset (FEATURE_VR_HEADTRACKING true)</b> — Connect
- *       routes into the authenticated PCVR+SteamVR start
- *       ({@link SteamVrActivity}). Mic permission is requested up front
- *       (instead of letting ALVR race with our NativeActivity subclass
- *       over the same runtime grant dialog). On denial we do NOT launch;
- *       the user sees a clear recovery dialog with an "Open app
- *       settings" shortcut for permanent-denial states.</li>
- *   <li><b>Phone / TV / other non-headset</b> — Connect routes into the
- *       existing flat {@link PcView} start. The upstream
- *       {@code PreferenceConfiguration.readPreferences} gates
- *       {@code enableVrMode} against {@link VrCapabilities#isHeadset} so
- *       phones never reach {@code com.limelight.GameXR}.</li>
+ *   <li><b>Real headset, paired</b> — primary action reads "Connect".
+ *       A tap issues an authenticated {@code /status} probe against the
+ *       paired host (with bounded LAN rediscovery if the saved
+ *       endpoint is unreachable) and then branches on the result:
+ *       <ul>
+ *         <li>{@code vrserver=false} — the PC is cold: we set the
+ *             120-second restart-consent window and proceed straight
+ *             to the start request. No modal dialog.</li>
+ *         <li>{@code vrserver=true} — SteamVR is already running on
+ *             the PC: we surface an explicit <b>Restart VR / Cancel</b>
+ *             consent dialog. The user must confirm before we set the
+ *             consent window and start the request.</li>
+ *         <li>missing / non-boolean {@code vrserver} — fail closed:
+ *             an inline error is drawn into the card with a Retry
+ *             chip. We never invent a decision on an unknown state.</li>
+ *       </ul>
+ *   </li>
+ *   <li><b>Real headset, unpaired</b> — primary action reads
+ *       "Set up PC" and opens the VR-setup picker directly. The picker
+ *       reaches enrollment, manual entry and the advanced pairing
+ *       dialog the same way the legacy Setup button did.</li>
+ *   <li><b>Phone / TV / other non-headset</b> — primary action reads
+ *       "Connect" and routes into the existing flat {@link PcView}
+ *       start. We never ask for the microphone permission on a phone
+ *       because the flat path does not need it.</li>
  * </ul>
  *
- * <p>On a headset, an explicit <b>Screen gaming</b> row is the per-launch
- * flat-screen override for the auto-detected PCVR target. On a phone,
- * the same row is hidden — the primary Connect already goes to
- * {@code PcView} and a second "screen" button would be a redundant
- * duplicate of the primary action.
+ * <p>Connection progress and errors are drawn INTO the connection card
+ * as an inline phase line and an inline error block. The hub never
+ * stacks transient dialogs on success, never asks the user to confirm
+ * a cold start (the probe already proved the PC is reachable), and
+ * never starts a VR launch from a state we have not authenticated.
  *
- * <p>Mode switching is only valid from the idle hub. Both target
- * activities own their own XR session lifecycle; the hub does not try
- * to forcibly terminate either.
+ * <p><b>Transient pause and the continuation queue.</b> A connect
+ * attempt that completes while the hub is paused (the user took the
+ * headset off briefly) does not dispatch VR until the next resume,
+ * and even then only if the hub is still alive, still a headset,
+ * still has microphone permission, and the restart-consent window
+ * has not silently expired. The continuation is bound to the
+ * current {@code connectGeneration}; a Cancel / Destroy / new tap
+ * bumps the generation and any queued continuation is dropped.
  *
- * <p>The hub never auto-launches from {@code onResume}. The only path to
- * a target activity is an explicit user tap, and the hub guards each
- * tap against in-flight permission requests and pending launches so a
- * rapid double-tap or an asynchronous permission result for a different
- * request cannot start two activities at once.
+ * <p>The hub never auto-launches from {@code onResume}. Only an
+ * explicit user tap can dispatch a target activity or a queued
+ * continuation, and the hub guards each tap against in-flight
+ * permission requests and pending launches so a rapid double-tap or
+ * an asynchronous permission result for a different request cannot
+ * start two activities at once.
  *
- * <p><b>Launch / permission guard lifecycle.</b> The
- * {@code launchPending} flag is set whenever the hub dispatches
- * {@code startActivity(...)} for Screen, PCVR, Settings, or Setup. It
- * is cleared by {@code onResume} ONLY when the hub actually left for
- * that launched activity (the {@code launchLeftHub} flag set in
- * {@code onPause} is the proof). Permission dialogs MAY pause the
- * hub on some platform versions before {@code launchPending} is
- * set, and the subsequent permission-return {@code onResume} must
- * therefore NOT clear the guard: a permission-driven pause must not
- * look like a launched-activity pause. Result: a rapid tap during
- * the permission round-trip cannot launch a second activity, and a
- * tap immediately after the permission grant still respects the
- * in-flight launch.
+ * <p><b>Microphone requests carry an explicit target.</b> Setup no
+ * longer asks for the microphone up front, so the two headset actions
+ * that need it (the primary Connect and the Manual VR fallback) each
+ * capture which one they are while the request is dispatched. The
+ * real grant callback consumes that target exactly once and resumes
+ * only the action that asked for it: a Connect grant continues into
+ * the authenticated probe, and a Manual VR grant still has to clear
+ * the explicit legacy restart consent. The target is cleared on a
+ * denied / empty / mismatched result, on a duplicate result, on an
+ * explicit Cancel and on destroy, and it is never persisted — a hub
+ * recreated behind the system dialog keeps the request guard but has
+ * no action to resume, so a stray result cannot replay a stale intent.
  */
 public class MainHubActivity extends Activity {
 
@@ -89,20 +108,73 @@ public class MainHubActivity extends Activity {
 
     private static final String STATE_REQUEST_PENDING = "vq_hub_request_pending";
 
+    /** No microphone permission request is in flight. */
+    private static final int MIC_TARGET_NONE = 0;
+    /** The primary Connect action on a paired host: the grant
+     *  continues through the authenticated probe and the cold start. */
+    private static final int MIC_TARGET_CONNECT = 1;
+    /** The manual VR fallback (Advanced → Manual VR, Connection
+     *  options → Open PCVR manually): the grant continues through the
+     *  explicit legacy restart consent, never straight to a launch. */
+    private static final int MIC_TARGET_MANUAL_VR = 2;
+
+    /** Width of the restart-consent window. The same value is used by
+     *  the manual VR fallback so a single numeric constant governs
+     *  the contract. The window starts when the user confirms
+     *  Restart VR (or the probe passes on a cold server) and ends
+     *  two minutes later. */
+    private static final long RESTART_CONSENT_WINDOW_MS = 120000L;
+
     private HubPrefs prefs;
     private SettingsController settingsController;
 
     private boolean requestPending;
+    /**
+     * The action that is waiting on the in-flight microphone
+     * permission request, captured at request time so the grant
+     * continuation resumes exactly the action the user started.
+     *
+     * <p>This is deliberately NOT persisted in instance state: a
+     * recreated hub restores {@link #requestPending} so it cannot
+     * dispatch a second request, but it deliberately has no idea what
+     * the original request was for. A stray grant result landing on
+     * the recreated instance therefore has no target and is dropped
+     * instead of replaying a stale launch.
+     */
+    private int micPermissionTarget = MIC_TARGET_NONE;
     private boolean permissionContinuationPending;
+    /** Target captured with {@link #permissionContinuationPending}
+     *  when a grant result lands while the hub is paused. */
+    private int permissionContinuationTarget = MIC_TARGET_NONE;
     private boolean connectPending;
     private long restartConsentUntil;
     private boolean resumed;
+    private boolean restartPromptPending;
     private volatile int connectGeneration;
     private com.vibertemis.quest.update.UpdateRepository updateRepository;
     private com.vibertemis.quest.update.UpdateRepository.Observer updateObserver;
     private volatile HostClient hostClient;
     private com.vibertemis.quest.pcvr.PairingSession vrBootstrap;
+    /** Generation captured when a successful connect callback landed
+     *  while the hub was paused. The continuation only dispatches on
+     *  resume if the current {@link #connectGeneration} still equals
+     *  this value, so Cancel / Destroy / a new tap reliably drop the
+     *  queued launch. */
+    private volatile int pendingContinuationGeneration;
+    private boolean pendingContinuation;
+    /** Inline phase and error views, captured once in onCreate so the
+     *  connect lifecycle does not repeatedly look them up. */
+    private TextView phaseView;
+    private LinearLayout errorRow;
+    private TextView errorView;
+    private Button errorRetryBtn;
+    private Button errorCancelBtn;
     private android.app.AlertDialog connectDialog;
+    /** Dialog shown to the user when the authenticated probe reports
+     *  {@code vrserver=true} so SteamVR must be restarted. The user
+     *  must press Restart VR before we set the consent window and
+     *  start. */
+    private android.app.AlertDialog restartVrDialog;
     private final java.util.concurrent.ExecutorService connectWorker = java.util.concurrent.Executors.newSingleThreadExecutor();
     /**
      * Transient dialogs that survive a single user action but
@@ -151,11 +223,6 @@ public class MainHubActivity extends Activity {
         setContentView(R.layout.vibertemis_hub);
         prefs = new HubPrefs(this);
         settingsController = new SettingsController(this);
-        // If a preset Apply or a manual edit fires while the hub is
-        // visible (rare, but possible if the user comes back from the
-        // settings screen with the app still in the foreground), the
-        // cached snapshot is updated and the hub status line refreshes
-        // without requiring a full onResume cycle.
         settingsController.addObserver(new SettingsController.Observer() {
             @Override
             public void onUpstreamPreferenceChanged(String key,
@@ -173,28 +240,62 @@ public class MainHubActivity extends Activity {
         TextView subtitle = findViewById(R.id.hub_subtitle);
         TextView connectNote = findViewById(R.id.hub_connect_note);
         TextView screenNote = findViewById(R.id.hub_screen_note);
-        TextView updatesBadge = findViewById(R.id.hub_updates_badge);
+        TextView cardPcStatus = findViewById(R.id.hub_card_pc_status);
+        TextView cardPcCaveat = findViewById(R.id.hub_card_pc_caveat);
+        phaseView = findViewById(R.id.hub_card_phase);
+        findViewById(R.id.hub_btn_cancel_connection).setOnClickListener(v -> cancelHostConnection());
+        errorRow = findViewById(R.id.hub_card_error_row);
+        errorView = findViewById(R.id.hub_card_error);
+        errorRetryBtn = findViewById(R.id.hub_card_error_retry);
+        errorCancelBtn = findViewById(R.id.hub_card_error_cancel);
 
         boolean isHeadset = VrCapabilities.isHeadset(this);
+        boolean pairedHost = hasPairedHost();
         if (isHeadset) {
-            // Headset: primary Connect goes to authenticated PCVR; the
-            // Screen gaming row is the explicit per-launch flat
-            // override. The companion reminder is now attached to the
-            // connect-note row because every headset Connect opens
-            // PCVR.
             subtitle.setText(R.string.hub_subtitle_detected_headset);
             connectNote.setText(R.string.hub_steamvr_companion_reminder);
             screenBtn.setVisibility(View.VISIBLE);
             screenNote.setVisibility(View.VISIBLE);
+            // Primary action title depends on whether a paired host
+            // exists. "Set up PC" is the discoverable affordance for
+            // an unpaired headset — there is no separate manual
+            // setup-only button.
+            if (pairedHost) {
+                connectBtn.setText(R.string.hub_btn_connect);
+                try {
+                    HostPairing saved = new PairingStore(getApplicationContext()).load();
+                    if (saved != null) {
+                        cardPcStatus.setText(getString(R.string.hub_card_paired, saved.address));
+                    } else {
+                        cardPcStatus.setText(R.string.hub_card_unpaired);
+                    }
+                } catch (Exception e) {
+                    // A corrupted persisted pairing is shown as
+                    // "unpaired" so the user can retry Setup; we
+                    // never pretend it is still valid.
+                    cardPcStatus.setText(R.string.hub_card_unpaired);
+                }
+                cardPcCaveat.setVisibility(View.VISIBLE);
+            } else {
+                connectBtn.setText(R.string.hub_btn_setup_pc);
+                cardPcStatus.setText(R.string.hub_card_unpaired);
+                cardPcCaveat.setVisibility(View.GONE);
+            }
         } else {
             // Phone / TV: primary Connect already opens PcView, so the
             // separate Screen gaming row is hidden — surfacing it
             // would be a redundant duplicate of the primary action.
             // The companion reminder line is generic for both modes.
             subtitle.setText(R.string.hub_subtitle_detected_phone);
-            connectNote.setText(R.string.hub_btn_connect_screen_summary);
+            connectNote.setText(R.string.hub_subtitle_detected_phone);
             screenBtn.setVisibility(View.GONE);
             screenNote.setVisibility(View.GONE);
+            cardPcCaveat.setVisibility(View.GONE);
+            cardPcStatus.setText(R.string.hub_card_unpaired);
+            // Phones never reach Setup VR through the primary
+            // Connect path; they go to PcView. The Setup link
+            // below the settings row opens the SetupActivity
+            // documentation screen for a phone.
         }
 
         connectBtn.setOnClickListener(new View.OnClickListener() {
@@ -225,27 +326,20 @@ public class MainHubActivity extends Activity {
                 Toast.makeText(this, "Updates screen unavailable", Toast.LENGTH_LONG).show();
             }
         });
-        // Shared update repository: install an observer that re-renders
-        // the badge when the background check produces new state. We
-        // never cancel the shared check from here; the repository owns
-        // its executor.
-        com.vibertemis.quest.update.UpdateRepository repository =
-                com.vibertemis.quest.update.UpdateRepositoryProvider.get(getApplicationContext());
-        if (repository != null) {
-            updateRepository = repository;
-            updateObserver = snap -> runOnUiThread(() -> { if (!isDestroyed()) renderUpdatesBadge(snap); });
-            repository.addObserver(updateObserver);
-            renderUpdatesBadge(repository.snapshot());
-        } else {
-            updatesBadge.setVisibility(View.GONE);
-        }
-        if (VrCapabilities.isHeadset(this)) setupBtn.setText("Setup VR");
+        bindUpdateRepository();
+        if (VrCapabilities.isHeadset(this)) setupBtn.setText(R.string.hub_btn_setup);
         setupBtn.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 if (VrCapabilities.isHeadset(MainHubActivity.this)) showVrSetup(); else launchSetup();
             }
         });
+        if (errorRetryBtn != null) {
+            errorRetryBtn.setOnClickListener(v -> retryConnect());
+        }
+        if (errorCancelBtn != null) {
+            errorCancelBtn.setOnClickListener(v -> cancelHostConnection());
+        }
     }
 
     /**
@@ -268,20 +362,24 @@ public class MainHubActivity extends Activity {
             launchScreenGaming();
             return;
         }
+        if (!hasPairedHost()) {
+            // Unpaired headset: "Set up PC" launches the VR-setup
+            // picker directly. There is no separate "Setup" detour;
+            // the primary affordance IS the setup path until the
+            // user has a paired host.
+            showVrSetup();
+            return;
+        }
         if (hasMicPermission()) {
             launchSteamVr();
         } else {
-            requestMicForSteamVr();
+            requestMicForSteamVr(MIC_TARGET_CONNECT);
         }
     }
 
     @Override
     protected void onSaveInstanceState(Bundle outState) {
         super.onSaveInstanceState(outState);
-        // Only the request guard survives recreation. The launch guard
-        // is released on the next onResume after the user explicitly
-        // returns to the hub; recreating mid-launch clears the in-flight
-        // launch and the new instance is ready for a fresh tap.
         outState.putBoolean(STATE_REQUEST_PENDING, requestPending);
     }
 
@@ -290,29 +388,59 @@ public class MainHubActivity extends Activity {
         super.onResume();
         resumed = true;
         if (pairingNotice != null) {
-            trackDialog(new android.app.AlertDialog.Builder(this).setTitle("VR pairing").setMessage(pairingNotice).setPositiveButton("Done", null).show());
+            showPairingNotice(pairingNotice);
             pairingNotice = null;
         }
         settingsController.refresh();
         settingsController.register();
         renderStatus();
-        // Release the launch guard ONLY when we actually left the hub
-        // for a launched activity. Permission dialogs MAY pause the
-        // hub on some platform versions before launchPending is set,
-        // so a permission-driven pause must not look like a
-        // launched-activity pause — the permission-return onResume
-        // therefore keeps the guard set when launchLeftHub is false.
         if (launchLeftHub) {
             launchPending = false;
             launchLeftHub = false;
         }
-        // Continue only an explicit Connect whose permission result arrived
-        // while paused. Ordinary resumes never initiate a VR connection.
+        // Continue only an explicit Connect (or an explicit Manual VR
+        // entry) whose permission result arrived while paused, and only
+        // into the action that actually asked for the microphone. An
+        // ordinary resume never initiates a VR connection, and the
+        // continuation is consumed here so a later resume cannot replay
+        // it.
         if (permissionContinuationPending) {
             permissionContinuationPending = false;
+            final int continuationTarget = permissionContinuationTarget;
+            permissionContinuationTarget = MIC_TARGET_NONE;
             if (!isFinishing() && !isDestroyed() && hasMicPermission()
-                    && VrCapabilities.isHeadset(this)) launchSteamVr();
+                    && VrCapabilities.isHeadset(this)) {
+                continueAfterMicGrant(continuationTarget);
+            }
         }
+        if (restartPromptPending && connectPending) showRestartVrConsent(connectGeneration);
+        refreshConnectionCard();
+        // Drain a queued continuation that landed while paused. The
+        // continuation is dropped if the generation moved on, the
+        // hub is finishing/destroyed, the device is no longer a
+        // headset, the microphone permission has been revoked, or
+        // the restart-consent window has silently expired. A valid
+        // continuation dispatches SteamVrActivity exactly once.
+        if (pendingContinuation
+                && pendingContinuationGeneration == connectGeneration
+                && !isFinishing() && !isDestroyed()
+                && VrCapabilities.isHeadset(this)
+                && hasMicPermission()
+                && (!usesNativeRuntime() || restartConsentValid())) {
+            pendingContinuation = false;
+            dispatchSteamVr();
+        } else if (pendingContinuation) {
+            // Drop the queued continuation: a Cancel / Destroy /
+            // permission loss / consent expiry happened while paused.
+            cancelHostConnection();
+            showInlineError(hasMicPermission() ? R.string.hub_error_consent_expired
+                    : R.string.hub_error_mic_required);
+        }
+        // Re-bind before the auto-check: the provider is allowed to
+        // publish a repository later (a retried / idempotent init), and
+        // an onCreate that saw null must still end up observing it, or
+        // the badge would stay hidden until the next recreation.
+        bindUpdateRepository();
         triggerUpdateCheckIfIdle(false);
     }
 
@@ -320,25 +448,16 @@ public class MainHubActivity extends Activity {
     protected void onPause() {
         super.onPause();
         resumed = false;
-        // Removing the headset to approve on the PC must not cancel enrollment.
-        // Actual VR launch requests still cancel when leaving the foreground.
-        if (vrBootstrap == null) cancelHostConnection();
-        // Setup VR discovery is a UI affordance: it is always
-        // bounded to the hub lifetime. Cancelling here protects the
-        // hub against a stale callback landing after the user
-        // dismissed the picker. Enrollment is intentionally NOT
-        // cancelled here: the user may take off the headset to
-        // approve on the PC and the request must survive the pause.
+        // Removing the headset to approve on the PC must not cancel
+        // enrollment. Removing the headset while a connect attempt is
+        // in flight (the user takes it off briefly to read the inline
+        // phase) must also not cancel. Only onDestroy forces a hard
+        // cancel; transient pause leaves the worker and the inline
+        // phase intact so the result can land and queue a
+        // continuation tied to the current generation.
         cancelVrSetupDiscovery();
         if (setupDialog != null) { try { setupDialog.dismiss(); } catch (Exception ignored) { } setupDialog = null; }
         settingsController.unregister();
-        // Mark that we actually left for a launched activity. A
-        // permission dialog pause may arrive BEFORE launchPending is
-        // set (the dialog races with the activity transition), so on
-        // that path launchLeftHub stays false and the upcoming
-        // onResume does not release the guard. Permission-driven
-        // pauses never set launchLeftHub; launched-activity pauses
-        // do.
         if (launchPending) {
             launchLeftHub = true;
         }
@@ -378,16 +497,45 @@ public class MainHubActivity extends Activity {
                 == PackageManager.PERMISSION_GRANTED;
     }
 
-    private void requestMicForSteamVr() {
+    /**
+     * Ask for RECORD_AUDIO on behalf of {@code target} and remember
+     * that target so the real grant callback can continue exactly the
+     * action the user started. A request is never dispatched while
+     * another one is in flight or while a launch is pending, so the
+     * request guard cannot be bypassed by a rapid tap.
+     *
+     * @param target one of {@link #MIC_TARGET_CONNECT} or
+     *               {@link #MIC_TARGET_MANUAL_VR}
+     */
+    private void requestMicForSteamVr(int target) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return;
+        if (target == MIC_TARGET_NONE || requestPending || launchPending) return;
+        micPermissionTarget = target;
         requestPending = true;
         try {
             requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO},
                     REQ_MIC_FOR_STEAMVR);
         } catch (Throwable t) {
             requestPending = false;
+            micPermissionTarget = MIC_TARGET_NONE;
             Log.w(TAG, "Failed to dispatch mic permission request: " + t.getMessage());
             Toast.makeText(this, R.string.mic_recovery_msg, Toast.LENGTH_LONG).show();
+        }
+    }
+
+    /**
+     * Route a granted microphone permission back into the action that
+     * requested it. Exactly one continuation is produced per grant:
+     * the target is consumed by the caller before this runs, so a
+     * duplicated grant result can never run it twice.
+     */
+    private void continueAfterMicGrant(int target) {
+        if (target == MIC_TARGET_MANUAL_VR) {
+            // Manual VR keeps its explicit legacy restart consent even
+            // when the grant had to be requested first.
+            startManualVr();
+        } else if (target == MIC_TARGET_CONNECT) {
+            launchSteamVr();
         }
     }
 
@@ -397,23 +545,27 @@ public class MainHubActivity extends Activity {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         if (requestCode != REQ_MIC_FOR_STEAMVR) return;
 
-        // Ignore duplicate or stale results. The request flag is set
-        // only at dispatch time and cleared here, so a re-delivery of
-        // the same result (rare but possible) is a no-op.
         if (!requestPending) return;
         requestPending = false;
+        final int target = micPermissionTarget;
+        // The target is consumed here, so a denied / empty / mismatched
+        // result, and every duplicate delivery, can never start anything.
+        micPermissionTarget = MIC_TARGET_NONE;
+        if (target == MIC_TARGET_NONE) {
+            // The hub was recreated while the system dialog was up:
+            // requestPending survived but the action that asked for the
+            // microphone did not. A stray result must not invent a
+            // launch or replay a stale action.
+            Log.w(TAG, "Dropping mic result for a request this instance did not start");
+            return;
+        }
 
-        // Ignore stale / mismatched results. The current request must
-        // target RECORD_AUDIO and have at least one grant result, and
-        // we must still be a headset with permission granted.
         if (permissions == null || permissions.length == 0
                 || !Manifest.permission.RECORD_AUDIO.equals(permissions[0])) {
             return;
         }
         if (grantResults == null || grantResults.length == 0) {
-            // System killed the activity before delivering a result;
-            // the user has to retry manually.
-            showMicRecoveryDialog(false);
+            showMicRecoveryDialog(target, false);
             return;
         }
         if (!VrCapabilities.isHeadset(this)) {
@@ -426,19 +578,24 @@ public class MainHubActivity extends Activity {
             Log.w(TAG, "PCVR not started: RECORD_AUDIO denied"
                     + (permanentlyDenied ? " (permanent)" : ""));
             Toast.makeText(this, R.string.hub_mic_denied, Toast.LENGTH_LONG).show();
-            showMicRecoveryDialog(permanentlyDenied);
+            showMicRecoveryDialog(target, permanentlyDenied);
             return;
         }
         if (!hasMicPermission()) {
-            // Defensive: the framework granted us but a re-check says no.
-            // Do not launch.
             return;
         }
-        if (!resumed) permissionContinuationPending = true;
-        else launchSteamVr();
+        if (!resumed) {
+            // The permission dialog paused the hub. Remember which
+            // action asked for the mic and continue it exactly once on
+            // the next resume.
+            permissionContinuationPending = true;
+            permissionContinuationTarget = target;
+            return;
+        }
+        continueAfterMicGrant(target);
     }
 
-    private void showMicRecoveryDialog(final boolean permanentlyDenied) {
+    private void showMicRecoveryDialog(final int target, final boolean permanentlyDenied) {
         android.app.AlertDialog.Builder b = new android.app.AlertDialog.Builder(this)
                 .setTitle(R.string.mic_recovery_title)
                 .setMessage(R.string.mic_recovery_msg)
@@ -447,10 +604,10 @@ public class MainHubActivity extends Activity {
             b.setPositiveButton(R.string.mic_recovery_open_settings,
                     (d, w) -> openAppSettings());
             b.setNeutralButton(R.string.mic_recovery_retry,
-                    (d, w) -> requestMicForSteamVr());
+                    (d, w) -> requestMicForSteamVr(target));
         } else {
             b.setPositiveButton(R.string.mic_recovery_retry,
-                    (d, w) -> requestMicForSteamVr());
+                    (d, w) -> requestMicForSteamVr(target));
         }
         trackDialog(b.show());
     }
@@ -472,12 +629,6 @@ public class MainHubActivity extends Activity {
         }
     }
 
-    /**
-     * Launch helpers. Every entry point sets {@code launchPending}
-     * synchronously and clears it on a synchronous dispatch failure
-     * (ActivityNotFoundException, SecurityException) so a follow-up
-     * tap from the same user gesture is not silently swallowed.
-     */
     private void launchScreenGaming() {
         if (launchPending || requestPending || connectPending) return;
         Log.i(TAG, "Launching Screen gaming -> PcView");
@@ -573,11 +724,287 @@ public class MainHubActivity extends Activity {
 
     protected boolean usesNativeRuntime() { return PcvrOptions.PYROWAVE_BUILD; }
 
+    /**
+     * Primary headset-Connect entry. The connect lifecycle runs in
+     * the existing single-thread {@code connectWorker} so all
+     * network I/O is bounded off the UI thread:
+     *
+     * <ol>
+     *   <li><b>Probe.</b> Issue an authenticated {@code GET /status}
+     *       against the paired host. On a transport failure (the
+     *       saved address is unreachable) run the bounded LAN
+     *       rediscovery helper against the paired TLS pin and retry
+     *       the probe once the hint is verified. The probe result is
+     *       the only authority for the connect decision — we never
+     *       inspect a cached value, never guess.</li>
+     *   <li><b>Decision.</b> Inspect the {@code vrserver} field of
+     *       the probe reply:
+     *       <ul>
+     *         <li>{@code vrserver=false} (boolean) — the PC is cold:
+     *             set the 120-second restart-consent window and
+     *             proceed straight to the start request. No modal
+     *             dialog, no consent bypass: the probe already
+     *             proved the PC is reachable and SteamVR is not
+     *             running, so a cold start cannot disrupt a live VR
+     *             session.</li>
+     *         <li>{@code vrserver=true} (boolean) — SteamVR is
+     *             running: surface an explicit Restart VR / Cancel
+     *             consent dialog. Only the user's Restart VR tap
+     *             sets the consent window and continues.</li>
+     *         <li>missing or non-boolean — fail closed: draw an
+     *             inline error into the card and surface an inline
+     *             Retry chip. We never invent a decision on an
+     *             unknown state.</li>
+     *       </ul>
+     *   </li>
+     *   <li><b>Start.</b> Once the consent decision is made, the
+     *       worker issues the {@code POST /start_pcvr} request
+     *       through the same authenticated TLS pin. A successful
+     *       start queues a continuation tied to the current
+     *       generation; if the hub is paused when the success
+     *       lands, the next resume dispatches SteamVrActivity
+     *       exactly once and only if the hub is still alive, still
+     *       a headset, still has microphone permission, and the
+     *       restart-consent window has not silently expired.</li>
+     * </ol>
+     *
+     * <p>The legacy "confirm then start" two-step is intentionally
+     * removed from this entry: the probe has already established
+     * what the cold-start confirmation used to ask. The confirm
+     * dialog is still reachable through the Manual VR fallback
+     * paths (Advanced → Manual VR, Connection options → Open PCVR
+     * manually) so a user who explicitly wants the old behaviour can
+     * still get it.
+     */
     private void launchSteamVr() {
         if (launchPending || connectPending || !VrCapabilities.isHeadset(this) || !hasMicPermission()) return;
         if (!hasPairedHost()) { showVrSetup(); return; }
-        if (!usesNativeRuntime()) { startPcvrConnection(); return; }
-        confirmPcvrRestart(this::startPcvrConnection);
+        connectPending = true;
+        final int generation = ++connectGeneration;
+        pendingContinuation = false;
+        // Drop the queued continuation: a fresh tap supersedes any
+        // pending dispatch from an earlier in-flight attempt.
+        final HostClient client = createHostClient();
+        hostClient = client;
+        showInlinePhase(R.string.hub_phase_probing);
+        clearInlineError();
+        connectWorker.execute(() -> {
+            try {
+                HostPairing pairing = loadHostPairing();
+                if (pairing == null) throw new HostClient.Failure("PAIRING", "Pair your PC again.");
+                if (client.isCancelled()) throw new java.io.IOException("Cancelled");
+                JSONObject status;
+                try {
+                    status = client.request(pairing, "GET", "/status", new byte[0]);
+                } catch (java.io.IOException unreachable) {
+                    if (client.isCancelled()) throw unreachable;
+                    HostPairing candidate = com.vibertemis.quest.pcvr.PairedDiscovery.find(
+                            getApplicationContext(), pairing, client);
+                    status = client.request(candidate, "GET", "/status", new byte[0]);
+                    if (client.isCancelled()) throw new java.io.IOException("Cancelled");
+                    createPairingStore().updateAddress(pairing, candidate);
+                }
+                if (client.isCancelled()) throw new java.io.IOException("Cancelled");
+                if (usesNativeRuntime()) client.setHeadsetHostname(loadNativeHeadsetIdentity());
+                boolean vrserver = status.opt("vrserver") instanceof Boolean
+                        && status.getBoolean("vrserver");
+                if (client.isCancelled()) throw new java.io.IOException("Cancelled");
+                if (status.isNull("vrserver") || !(status.opt("vrserver") instanceof Boolean)) {
+                    // Fail closed on missing/non-boolean. We do NOT
+                    // pretend a missing field is "false"; an unknown
+                    // state means we cannot decide whether SteamVR
+                    // is running.
+                    if (!status.has("vrserver")) {
+                        runOnUiThread(() -> handleProbeUnknown(generation, "missing"));
+                    } else {
+                        runOnUiThread(() -> handleProbeUnknown(generation, "non-boolean"));
+                    }
+                    return;
+                }
+                if (!vrserver) {
+                    // Cold server. The probe already proved the PC
+                    // is reachable and SteamVR is not running, so a
+                    // cold start cannot disrupt a live VR session.
+                    // Set the consent window and continue — no modal
+                    // dialog.
+                    runOnUiThread(() -> {
+                        if (generation != connectGeneration || isFinishing() || isDestroyed()) return;
+                        restartConsentUntil = android.os.SystemClock.elapsedRealtime() + RESTART_CONSENT_WINDOW_MS;
+                        startPcvrConnection(generation);
+                    });
+                } else {
+                    // Warm server. Surface an explicit Restart VR /
+                    // Cancel dialog. Only the user's tap sets the
+                    // consent window and continues; Cancel drops
+                    // the attempt.
+                    runOnUiThread(() -> {
+                        if (generation != connectGeneration || isFinishing() || isDestroyed()) return;
+                        showRestartVrConsent(generation);
+                    });
+                }
+            } catch (Exception e) {
+                final String message = e instanceof HostClient.Failure ? e.getMessage()
+                        : "Could not reach your PC. Check the companion, address and network, then retry.";
+                runOnUiThread(() -> {
+                    if (generation != connectGeneration) return;
+                    connectPending = false;
+                    hostClient = null;
+                    clearInlinePhase();
+                    showInlineError(message);
+                });
+            }
+        });
+    }
+
+    /** Fail-closed handler for an unknown probe state. Draws an
+     *  inline error into the connection card and surfaces an inline
+     *  Retry chip. The user can re-attempt the connect without
+     *  re-doing the consent dialog. */
+    private void handleProbeUnknown(int generation, String reason) {
+        if (generation != connectGeneration || isFinishing() || isDestroyed()) return;
+        connectPending = false;
+        hostClient = null;
+        clearInlinePhase();
+        showInlineError(getString(R.string.hub_error_state_unknown));
+    }
+
+    /** Surface the Restart VR / Cancel consent dialog for the warm
+     *  server case. The dialog is generation-scoped so a Cancel /
+     *  Destroy / new tap during the dialog cancels the in-flight
+     *  attempt. Only Restart VR sets the consent window and
+     *  continues. */
+    private void showRestartVrConsent(int generation) {
+        if (generation != connectGeneration || !connectPending || isFinishing() || isDestroyed()) return;
+        if (!resumed) { restartPromptPending = true; return; }
+        restartPromptPending = false;
+        if (restartVrDialog != null) {
+            try { restartVrDialog.dismiss(); } catch (Exception ignored) { }
+            restartVrDialog = null;
+        }
+        clearInlineError();
+        android.app.AlertDialog dialog = new android.app.AlertDialog.Builder(this)
+                .setTitle(R.string.hub_restart_title)
+                .setMessage(R.string.hub_restart_message)
+                .setPositiveButton(R.string.hub_restart_confirm, (d, w) -> {
+                    if (generation != connectGeneration || isFinishing() || isDestroyed()) return;
+                    if (!resumed || !VrCapabilities.isHeadset(this) || !hasMicPermission()) {
+                        // Mic permission could have been revoked
+                        // while the dialog was up; refuse to start.
+                        connectPending = false;
+                        hostClient = null;
+                        clearInlinePhase();
+                        showInlineError(R.string.hub_error_mic_required);
+                        return;
+                    }
+                    restartConsentUntil = android.os.SystemClock.elapsedRealtime() + RESTART_CONSENT_WINDOW_MS;
+                    startPcvrConnection(generation);
+                })
+                .setNegativeButton(R.string.hub_restart_cancel, (d, w) -> {
+                    if (generation != connectGeneration) return;
+                    cancelHostConnection();
+                })
+                .setOnCancelListener(d -> {
+                    if (generation != connectGeneration) return;
+                    cancelHostConnection();
+                })
+                .show();
+        restartVrDialog = dialog;
+        trackDialog(dialog);
+    }
+
+    /**
+     * Continue the connect lifecycle after the consent decision.
+     * Issues the {@code POST /start_pcvr} request through the same
+     * authenticated TLS pin and dispatches SteamVrActivity on
+     * success. If the hub is paused when the success lands, the
+     * dispatch is queued as a continuation tied to the current
+     * generation; the next resume fires it exactly once, only if
+     * the hub is still alive, still a headset, still has microphone
+     * permission, and the restart-consent window has not silently
+     * expired.
+     *
+     * <p>The incoming generation is consumed atomically by the first
+     * accepted start, after the prerequisite and client checks. A
+     * rapid double tap on the consent dialog's positive button can
+     * reach this function twice with the same generation before the
+     * worker finishes; consuming it here invalidates the consent
+     * dialog's captured generation, so the second tap is rejected by
+     * its own guard instead of queueing a second start request. Every
+     * async callback and the queued continuation bind to the fresh
+     * generation captured below.
+     */
+    private void startPcvrConnection(int generation) {
+        if (generation != connectGeneration || !connectPending || launchPending) return;
+        if (!VrCapabilities.isHeadset(this) || !hasMicPermission()) {
+            cancelHostConnection();
+            showInlineError(R.string.hub_error_mic_required);
+            return;
+        }
+        final HostClient client = hostClient;
+        if (client == null) {
+            connectPending = false;
+            clearInlinePhase();
+            showInlineError(R.string.hub_error_generic);
+            return;
+        }
+        final int startGeneration = ++connectGeneration;
+        showInlinePhase(R.string.hub_phase_starting);
+        clearInlineError();
+        connectWorker.execute(() -> {
+            try {
+                HostPairing pairing = loadHostPairing();
+                if (pairing == null) throw new HostClient.Failure("PAIRING", "Pair your PC again.");
+                if (client.isCancelled()) throw new java.io.IOException("Cancelled");
+                client.start(pairing, new PcvrOptions(getApplicationContext()).requestedCodec());
+                runOnUiThread(() -> {
+                    if (startGeneration != connectGeneration || isFinishing() || isDestroyed()) return;
+                    if (!VrCapabilities.isHeadset(this) || !hasMicPermission()) {
+                        // Permission loss or class change between the
+                        // worker callback and the dispatch. Drop the
+                        // attempt; the user sees the inline error.
+                        connectPending = false;
+                        hostClient = null;
+                        clearInlinePhase();
+                        showInlineError(R.string.hub_error_mic_required);
+                        return;
+                    }
+                    if (usesNativeRuntime() && !restartConsentValid()) {
+                        connectPending = false;
+                        hostClient = null;
+                        clearInlinePhase();
+                        showInlineError(R.string.hub_error_consent_expired);
+                        return;
+                    }
+                    if (!resumed) {
+                        // Queue the dispatch for the next resume.
+                        pendingContinuation = true;
+                        pendingContinuationGeneration = startGeneration;
+                        return;
+                    }
+                    dispatchSteamVr();
+                });
+            } catch (Exception e) {
+                final String message = e instanceof HostClient.Failure ? e.getMessage()
+                        : "Could not reach your PC or read its pairing. Check the companion, address and network, then retry.";
+                runOnUiThread(() -> {
+                    if (startGeneration != connectGeneration) return;
+                    connectPending = false;
+                    hostClient = null;
+                    clearInlinePhase();
+                    showInlineError(message);
+                });
+            }
+        });
+    }
+
+    /** True if the consent window is still in the future. The window
+     *  starts when Restart VR is confirmed or the cold probe
+     *  succeeds and ends two minutes later. A silent expiry between
+     *  confirmation and dispatch must never produce a launch. */
+    private boolean restartConsentValid() {
+        long until = restartConsentUntil;
+        if (until <= 0L) return false;
+        return android.os.SystemClock.elapsedRealtime() < until;
     }
 
     private void showVrAdvanced() {
@@ -595,11 +1022,35 @@ public class MainHubActivity extends Activity {
                     Toast.makeText(this, "Could not open pairing settings. Try again.", Toast.LENGTH_LONG).show();
                 }
             })
-            .setNeutralButton("Manual VR", (d,w) -> {
-                if(!resumed || connectPending || launchPending || !VrCapabilities.isHeadset(this) || !hasMicPermission()) return;
-                if(usesNativeRuntime()) confirmPcvrRestart(this::dispatchSteamVr); else dispatchSteamVr();
-            })
+            .setNeutralButton("Manual VR", (d,w) -> startManualVr())
             .setNegativeButton("Back", (d,w) -> { if(resumed) showVrSetup(); }).show());
+    }
+
+    /**
+     * Shared Manual VR entry for both reachable manual paths (Advanced
+     * → Manual VR and Connection options → Open PCVR manually).
+     *
+     * <p>The setup flow no longer asks for the microphone up front, so
+     * this entry must never silently return when the microphone is
+     * missing: it captures {@link #MIC_TARGET_MANUAL_VR} and asks, and
+     * the real grant callback routes straight back here through
+     * {@link #continueAfterMicGrant}. Either way the user still has to
+     * clear the explicit legacy restart consent before anything is
+     * dispatched — the mic request alone is never consent.
+     */
+    private void startManualVr() {
+        if (!resumed || isFinishing() || isDestroyed()) return;
+        if (connectPending || launchPending || requestPending) return;
+        if (!VrCapabilities.isHeadset(this)) return;
+        if (!hasMicPermission()) {
+            requestMicForSteamVr(MIC_TARGET_MANUAL_VR);
+            return;
+        }
+        // The manual VR fallback keeps the legacy coldstart
+        // confirmation: there is no probe, so the user explicitly opts
+        // into a SteamVR restart.
+        if (usesNativeRuntime()) confirmPcvrRestartLegacy(this::dispatchSteamVr);
+        else dispatchSteamVr();
     }
 
     /** Show the Setup VR flow. Discovers candidates via NSD and
@@ -612,13 +1063,9 @@ public class MainHubActivity extends Activity {
      *  routing the user through Screen gaming would force them
      *  through a Vibeshine flow they do not need. */
     private void showVrSetup() {
-        if (!resumed || isFinishing() || isDestroyed() || connectPending || launchPending) return;
-        // Cancel any in-flight discovery from a previous pass.
+        if (!resumed || isFinishing() || isDestroyed() || connectPending || launchPending || requestPending) return;
         cancelVrSetupDiscovery();
         final int generation = ++discoveryGeneration;
-        // Show the "Searching…" dialog synchronously so the user
-        // gets immediate feedback. Late callbacks check generation
-        // before swapping the dialog body.
         android.app.AlertDialog searching = new android.app.AlertDialog.Builder(this)
                 .setTitle("Set up VR")
                 .setMessage("Searching for your PC on the local network…")
@@ -628,17 +1075,9 @@ public class MainHubActivity extends Activity {
         setupDialog = searching;
         final com.vibertemis.quest.pcvr.VrSetupDiscovery discovery = createVrSetupDiscovery();
         runningDiscovery = discovery;
-        // discovered is final, populated by the worker, then read
-        // by the post-onUiThread lambda. Capture it inside an
-        // effectively-final holder so the lambda compiles.
         final java.util.concurrent.atomic.AtomicReference<java.util.List<com.vibertemis.quest.pcvr.VrSetupDiscovery.Candidate>> discoveredRef =
                 new java.util.concurrent.atomic.AtomicReference<>(
                         new java.util.ArrayList<com.vibertemis.quest.pcvr.VrSetupDiscovery.Candidate>());
-        // The saved Moonlight DB hint scan runs on the same
-        // single-thread connectWorker as the discovery so the UI
-        // thread never blocks on a potentially-expensive SQLite
-        // query. The result is captured by dbHintsRef and the UI
-        // only sees the merged list once both are ready.
         final java.util.concurrent.atomic.AtomicReference<java.util.List<com.vibertemis.quest.pcvr.VrSetupDiscovery.Candidate>> dbHintsRef =
                 new java.util.concurrent.atomic.AtomicReference<>(
                         new java.util.ArrayList<com.vibertemis.quest.pcvr.VrSetupDiscovery.Candidate>());
@@ -648,11 +1087,8 @@ public class MainHubActivity extends Activity {
             try {
                 discovered = discovery.browse();
             } catch (java.io.IOException ignored) {
-                // LAN discovery unavailable; treat as empty so the
-                // user still sees the explicit empty state below.
             }
             discoveredRef.set(discovered);
-            // Off-UI: scan the saved Moonlight database for hints.
             dbHintsRef.set(loadSavedMoonlightHints(discovered));
             runOnUiThread(() -> {
                 if (generation != discoveryGeneration || isFinishing() || isDestroyed()) return;
@@ -666,30 +1102,6 @@ public class MainHubActivity extends Activity {
         });
     }
 
-    /** Read saved Moonlight PC addresses off the UI thread and
-     *  return them as untrusted VR-setup hints. A DB hint is
-     *  skipped entirely when its IP matches a discovered
-     *  candidate so the discovered custom port wins (a hostile
-     *  or stale DB row never overrides the freshly-advertised
-     *  service port). Hints keep the schema reserved for the
-     *  picker even when they have no VR server cert: the
-     *  authenticated TLS handshake still has to succeed, the hint
-     *  is only a list entry.
-     *
-     *  <p><b>Address shape:</b>
-     *  {@link com.limelight.nvstream.http.ComputerDetails.AddressTuple}
-     *  carries the host as {@code a.address} (bare, no
-     *  {@code host:port} concatenation) and the port as a
-     *  separate {@code int} field. The stored port is the
-     *  Moonlight / Sunshine GameStream port (47989 etc.), NOT a
-     *  VR port, so it must NEVER be reused for the VR
-     *  enrollment. Every hint uses {@link
-     *  VrSetupDiscovery#DEFAULT_VR_PORT} and lets the
-     *  authenticated TLS handshake confirm the real listener port
-     *  on the PC. IPv6 hints are rejected because the VR
-     *  discovery path only accepts IPv4 (see
-     *  {@link com.vibertemis.quest.pcvr.VrSetupDiscovery#sanitize});
-     *  an IPv6 row in the Moonlight DB has no useful VR mapping. */
     java.util.List<com.vibertemis.quest.pcvr.VrSetupDiscovery.Candidate> loadSavedMoonlightHints(
             java.util.List<com.vibertemis.quest.pcvr.VrSetupDiscovery.Candidate> discovered) {
         java.util.List<com.vibertemis.quest.pcvr.VrSetupDiscovery.Candidate> out =
@@ -709,31 +1121,14 @@ public class MainHubActivity extends Activity {
                                 : (pc.manualAddress != null ? pc.manualAddress : pc.localAddress);
                 if (a == null || a.address == null || a.address.isEmpty()) continue;
                 String host = a.address;
-                // Reject IPv6 hints. AddressTuple strips brackets
-                // from IPv6 literals, so the colon count is the
-                // giveaway — a single colon means IPv4 port is
-                // encoded in the address (a malformed row), more
-                // than one colon means IPv6.
                 if (host.indexOf(':') >= 0) continue;
-                // The hint port is always the VR default. The
-                // stored GameStream port is never the VR port.
                 int dbPort = VrSetupDiscovery.DEFAULT_VR_PORT;
-                // Discovered custom port wins over the DB row for
-                // the same IP. Skip the hint entirely so the user
-                // sees one entry per machine, not two.
                 if (discoveredIps.contains(host)) continue;
                 String displayName = (pc.name == null || pc.name.isEmpty()) ? host : pc.name;
                 out.add(new com.vibertemis.quest.pcvr.VrSetupDiscovery.Candidate(
                         displayName, host, dbPort));
             }
         } catch (Throwable dbScanFailure) {
-            // The Moonlight SQLite layer is OPTIONAL for VR pairing.
-            // A missing / locked / non-Writable / corrupt DB row
-            // must NEVER leave the picker stuck on the searching
-            // dialog. Swallow the failure and return whatever hints
-            // we have; the caller still has the discovered list
-            // and the user still has the manual-entry + advanced
-            // escape hatches.
             Log.w(TAG, "saved Moonlight DB scan failed; continuing without hints", dbScanFailure);
         } finally {
             if (db != null) { try { db.close(); } catch (Exception ignored) { } }
@@ -741,10 +1136,6 @@ public class MainHubActivity extends Activity {
         return out;
     }
 
-    /** Cancel the current discovery pass. Bumps the generation so
-     *  late callbacks short-circuit and the VrSetupDiscovery's own
-     *  cancellation flag wakes the bounded result poll within
-     *  ~CANCEL_POLL_MS. Safe to call from any state. */
     private void cancelVrSetupDiscovery() {
         if (runningDiscovery != null) {
             try { runningDiscovery.cancel(); } catch (Exception ignored) { }
@@ -753,15 +1144,6 @@ public class MainHubActivity extends Activity {
         discoveryGeneration++;
     }
 
-    /** Render the candidate picker. Discovered PCs come first; saved
-     *  Moonlight PCs are deduped and shown second as hints even when
-     *  they have no serverCert. Both lists are pre-loaded off the UI
-     *  thread by {@link #loadSavedMoonlightHints}; this method only
-     *  shapes and shows the picker. When nothing was found the user
-     *  sees the explicit "No VR PC found" empty state with Retry /
-     *  Enter address / Advanced options. Screen-gaming is NOT offered
-     *  here: that route is reserved for the Screen-gaming flow,
-     *  not for VR pairing. */
     private void renderSetupCandidates(java.util.List<com.vibertemis.quest.pcvr.VrSetupDiscovery.Candidate> discovered,
                                        java.util.List<com.vibertemis.quest.pcvr.VrSetupDiscovery.Candidate> dbHints,
                                        int generation) {
@@ -775,11 +1157,6 @@ public class MainHubActivity extends Activity {
                 if (seen.add(key)) merged.add(c);
             }
         }
-        // DB hints: dedup by host+port against the discovered list.
-        // The hint list itself is already filtered to skip IPs that
-        // matched a discovered candidate, so this loop is the second
-        // line of defence against double entries from a same-host
-        // collision.
         if (dbHints != null) {
             for (com.vibertemis.quest.pcvr.VrSetupDiscovery.Candidate c : dbHints) {
                 String key = c.address + ":" + c.port;
@@ -787,13 +1164,9 @@ public class MainHubActivity extends Activity {
             }
         }
         if (merged.isEmpty()) {
-            // Explicit empty state. Screen-gaming is NOT a route
-            // here; VR pairing is a separate workflow that runs on
-            // top of the same LAN reachability as Screen gaming
-            // but uses its own approval on the PC.
             android.app.AlertDialog empty = new android.app.AlertDialog.Builder(this)
                     .setTitle("No VR PC found")
-                    .setMessage("We did not find a PC running VR Host Manager on the local network. Open VR Host Manager on the PC and choose Setup VR (or Pair headset), then choose Retry. You can also enter the address by hand or import a saved pairing file under Advanced.")
+                    .setMessage(R.string.hub_vr_setup_empty_message)
                     .setPositiveButton("Retry", (d, w) -> { if (resumed && !connectPending && !launchPending) showVrSetup(); })
                     .setNeutralButton("Enter address", (d, w) -> { if (resumed && !connectPending && !launchPending) showManualEntry(); })
                     .setNegativeButton("Advanced", (d, w) -> { if (resumed && !connectPending && !launchPending) showVrAdvanced(); })
@@ -818,12 +1191,8 @@ public class MainHubActivity extends Activity {
         setupDialog = picker;
     }
 
-    /** Manual entry dialog. Accepts a validated PC endpoint with an
-     *  optional VR port (default 28540). URI credentials, paths,
-     *  queries, fragments, and invalid ports are rejected with a
-     *  clear error so a typo never reaches the wire. */
     private void showManualEntry() {
-        if (!resumed || connectPending || launchPending) return;
+        if (!resumed || connectPending || launchPending || requestPending) return;
         final android.widget.EditText input = new android.widget.EditText(this);
         input.setHint("pc-host[:port]");
         input.setSingleLine(true);
@@ -847,8 +1216,6 @@ public class MainHubActivity extends Activity {
                         return;
                     }
                     dialog.dismiss();
-                    // No resplit: parseManualEndpoint returns the
-                    // validated host/port as a typed pair.
                     enrollVrHost(endpoint.host, endpoint.port);
                 }));
         dialog.show();
@@ -867,7 +1234,7 @@ public class MainHubActivity extends Activity {
     }
 
     void enrollVrHost(String host, int port) {
-        if (connectPending || launchPending || !resumed) return;
+        if (connectPending || launchPending || !resumed || requestPending) return;
         connectPending=true;
         final int generation=++connectGeneration;
         final com.vibertemis.quest.pcvr.PairingSession bootstrap =
@@ -877,7 +1244,7 @@ public class MainHubActivity extends Activity {
         final Runnable[] tick = new Runnable[1];
         final long[] lastShownSecs = new long[] { -1L };
         connectDialog=trackDialog(new android.app.AlertDialog.Builder(this).setTitle("Connecting to your PC")
-            .setMessage("Contacting " + host + ". Windows Setup VR enables pairing automatically. If receiving is off, choose Pair headset on the PC.")
+            .setMessage(getString(R.string.hub_vr_setup_contacting_host, host))
             .setNegativeButton("Cancel",(d,w)->cancelHostConnection())
             .setOnCancelListener(d->cancelHostConnection()).show());
         connectWorker.execute(() -> {
@@ -890,9 +1257,6 @@ public class MainHubActivity extends Activity {
                     connectDialog.setMessage(body);
                     android.widget.TextView message = connectDialog.findViewById(android.R.id.message);
                     if (message != null) message.setTypeface(android.graphics.Typeface.MONOSPACE);
-                    // Kick the countdown. The deadline was set
-                    // BEFORE this callback fired, so the first tick
-                    // already observes a non-zero remaining time.
                     if (tick[0] == null) {
                         tick[0] = new Runnable() {
                             @Override public void run() {
@@ -920,13 +1284,10 @@ public class MainHubActivity extends Activity {
                     ui.post(tick[0]);
                 }));
                 if (generation != connectGeneration || isFinishing() || isDestroyed()) return;
-                // Persist an approved credential off the UI thread. If Cancel
-                // races a save already in progress, retain that credential but
-                // suppress all late UI and never start VR automatically.
                 try { createPairingStore().save(enrolled); }
                 catch (Exception e) {
                     throw new com.vibertemis.quest.pcvr.StandalonePairingClient.SetupFailure(
-                            "Could not save VR pairing. Retry Setup VR.");
+                            getString(R.string.hub_vr_setup_save_failed));
                 }
                 if (generation != connectGeneration || isFinishing() || isDestroyed()) return;
                 runOnUiThread(() -> {
@@ -934,12 +1295,10 @@ public class MainHubActivity extends Activity {
                     if (generation!=connectGeneration || isFinishing() || isDestroyed()) return;
                     finishHostConnection();
                     if (!resumed) {
-                        pairingNotice = "Paired. Choose Connect when you're ready; SteamVR starts from the headset.";
+                        pairingNotice = "Paired. Select Connect to play.";
                         return;
                     }
-                    trackDialog(new android.app.AlertDialog.Builder(this).setTitle("Paired")
-                        .setMessage("Your PC is paired for VR. Tap Connect on the headset to start SteamVR. SteamVR may prompt for confirmation on the PC before it restarts.")
-                        .setPositiveButton("Done",null).show());
+                    showPairingNotice("Paired. Select Connect to play.");
                 });
             } catch(Exception e) {
                 final String message;
@@ -968,7 +1327,14 @@ public class MainHubActivity extends Activity {
         });
     }
 
-    private void confirmPcvrRestart(Runnable connect) {
+    /**
+     * Legacy cold-start confirmation kept for the manual VR fallback
+     * paths (Advanced → Manual VR, Connection options → Open PCVR
+     * manually). The main {@link #launchSteamVr} entry no longer
+     * uses this dialog: the authenticated probe has already
+     * established what this dialog used to ask.
+     */
+    private void confirmPcvrRestartLegacy(Runnable connect) {
         if (!resumed || isFinishing() || isDestroyed() || connectPending || launchPending) return;
         connectPending = true;
         final int generation = ++connectGeneration;
@@ -981,71 +1347,16 @@ public class MainHubActivity extends Activity {
                 if (generation != connectGeneration || !connectPending) return;
                 finishHostConnection();
                 if (!resumed || isFinishing() || isDestroyed() || !VrCapabilities.isHeadset(this) || !hasMicPermission()) return;
-                restartConsentUntil = android.os.SystemClock.elapsedRealtime() + 120000;
+                restartConsentUntil = android.os.SystemClock.elapsedRealtime() + RESTART_CONSENT_WINDOW_MS;
                 connect.run();
             }).show());
-    }
-
-    private void startPcvrConnection() {
-        if (launchPending || connectPending || !VrCapabilities.isHeadset(this) || !hasMicPermission()) return;
-        if (!hasPairedHost()) { showVrSetup(); return; }
-        connectPending = true;
-        final int generation = ++connectGeneration;
-        final HostClient client = createHostClient();
-        hostClient = client;
-        connectDialog = trackDialog(new android.app.AlertDialog.Builder(this)
-                .setTitle("Starting PCVR")
-                .setMessage("Contacting your PC and waiting for SteamVR…")
-                .setNegativeButton("Cancel", (d,w) -> cancelHostConnection())
-                .setOnCancelListener(d -> cancelHostConnection()).show());
-        connectWorker.execute(() -> {
-            try {
-                HostPairing pairing = loadHostPairing();
-                if (pairing == null) throw new HostClient.Failure("PAIRING", "Pair your PC again.");
-                // First try the remembered endpoint without launching VR. Only
-                // transport failures trigger a bounded LAN hint lookup.
-                try { client.request(pairing, "GET", "/status", new byte[0]); }
-                catch (java.io.IOException unreachable) {
-                    if (client.isCancelled()) throw unreachable;
-                    HostPairing candidate = com.vibertemis.quest.pcvr.PairedDiscovery.find(getApplicationContext(), pairing, client);
-                    // Matching TXT is not proof: require the paired TLS pin and
-                    // authenticated status before saving or starting anything.
-                    client.request(candidate, "GET", "/status", new byte[0]);
-                    if (client.isCancelled()) throw new java.io.IOException("Cancelled");
-                    new PairingStore(getApplicationContext()).updateAddress(pairing, candidate);
-                    pairing = candidate;
-                }
-                if (usesNativeRuntime()) client.setHeadsetHostname(
-                    loadNativeHeadsetIdentity());
-                client.start(pairing, new PcvrOptions(getApplicationContext()).requestedCodec());
-                runOnUiThread(() -> {
-                    if (generation != connectGeneration || !connectPending) return;
-                    finishHostConnection();
-                    if (resumed && !isFinishing() && !isDestroyed() && VrCapabilities.isHeadset(this) && hasMicPermission()) dispatchSteamVr();
-                });
-            } catch (Exception e) {
-                final String message = e instanceof HostClient.Failure ? e.getMessage() : "Could not reach your PC or read its pairing. Check the companion, address and network, then retry.";
-                runOnUiThread(() -> {
-                    if (generation != connectGeneration || !connectPending) return;
-                    finishHostConnection();
-                    if (!resumed || isFinishing() || isDestroyed()) return;
-                    trackDialog(new android.app.AlertDialog.Builder(this).setTitle("PCVR connection stopped").setMessage(message)
-                        .setPositiveButton("Retry", (d,w) -> launchSteamVr())
-                        .setNegativeButton("Cancel", null)
-                        .setNeutralButton("Connection options", (d,w) -> showConnectionOptions()).show());
-                });
-            }
-        });
     }
 
     private void showConnectionOptions() {
         trackDialog(new android.app.AlertDialog.Builder(this).setTitle("PCVR connection options")
             .setItems(new String[]{"Pair or change PC", "Open PCVR manually"}, (d,which) -> {
                 if (which == 0) showVrSetup();
-                else if (resumed && hasMicPermission() && VrCapabilities.isHeadset(this)) {
-                    if (usesNativeRuntime()) confirmPcvrRestart(this::dispatchSteamVr);
-                    else dispatchSteamVr();
-                }
+                else startManualVr();
             }).setNegativeButton("Cancel", null).show());
     }
 
@@ -1053,21 +1364,59 @@ public class MainHubActivity extends Activity {
         connectPending = false;
         hostClient = null;
         vrBootstrap = null;
+        refreshConnectionCard();
         if (connectDialog != null) { connectDialog.dismiss(); connectDialog = null; }
+        if (restartVrDialog != null) {
+            try { restartVrDialog.dismiss(); } catch (Exception ignored) { }
+            restartVrDialog = null;
+        }
     }
 
     private void cancelHostConnection() {
         ++connectGeneration;
+        pendingContinuation = false;
+        restartPromptPending = false;
+        restartConsentUntil = 0;
+        // An explicit Cancel abandons the action that was waiting on a
+        // paused permission grant, so the queued continuation and the
+        // target that identifies it are both dropped here.
+        permissionContinuationPending = false;
+        permissionContinuationTarget = MIC_TARGET_NONE;
         if (hostClient != null) hostClient.cancel();
         if (vrBootstrap != null) vrBootstrap.cancel();
         finishHostConnection();
+        clearInlinePhase();
+        clearInlineError();
+    }
+
+    /** Re-attempt a connect after an inline error. The retry path
+     *  bumps the generation and re-runs {@link #launchSteamVr}; the
+     *  probe runs again and the consent decision is re-evaluated
+     *  from the current PC state. The retry button is hidden on the
+     *  rare consent-expiry case where the user must explicitly
+     *  confirm Restart VR again before continuing. */
+    private void retryConnect() {
+        if (launchPending || requestPending || connectPending) return;
+        if (!VrCapabilities.isHeadset(this) || !hasMicPermission()) {
+            showInlineError(R.string.hub_error_mic_required);
+            return;
+        }
+        if (!hasPairedHost()) {
+            showInlineError(R.string.hub_error_setup_first);
+            return;
+        }
+        clearInlineError();
+        launchSteamVr();
     }
 
     @Override protected void onDestroy() {
         cancelHostConnection();
         cancelVrSetupDiscovery();
         permissionContinuationPending = false;
-        // Dismiss listeners remove entries; iterate a snapshot.
+        permissionContinuationTarget = MIC_TARGET_NONE;
+        // No permission target may outlive the activity: a result that
+        // lands after destroy must find nothing to continue.
+        micPermissionTarget = MIC_TARGET_NONE;
         for (android.app.AlertDialog d : new java.util.ArrayList<>(transientDialogs)) {
             if (d != null && d.isShowing()) {
                 try { d.dismiss(); } catch (Exception ignored) { }
@@ -1076,16 +1425,27 @@ public class MainHubActivity extends Activity {
         transientDialogs.clear();
         if (setupDialog != null) { try { setupDialog.dismiss(); } catch (Exception ignored) { } setupDialog = null; }
         if (connectDialog != null) { try { connectDialog.dismiss(); } catch (Exception ignored) { } connectDialog = null; }
+        if (restartVrDialog != null) { try { restartVrDialog.dismiss(); } catch (Exception ignored) { } restartVrDialog = null; }
         connectWorker.shutdownNow();
         if (updateRepository != null && updateObserver != null) updateRepository.removeObserver(updateObserver);
         super.onDestroy();
     }
 
     private void dispatchSteamVr() {
-        if (launchPending || !hasMicPermission()) return;
+        if (!resumed || isFinishing() || isDestroyed() || launchPending || !hasMicPermission()) return;
         if (!VrCapabilities.isHeadset(this)) {
             Toast.makeText(this, R.string.hub_steamvr_unsupported,
                     Toast.LENGTH_LONG).show();
+            return;
+        }
+        if (usesNativeRuntime() && !restartConsentValid()) {
+            // A silent expiry between confirmation and dispatch must
+            // never produce a launch. Surface the inline error so the
+            // user can confirm Restart VR again on the same attempt.
+            connectPending = false;
+            hostClient = null;
+            clearInlinePhase();
+            showInlineError(R.string.hub_error_consent_expired);
             return;
         }
         Log.i(TAG, "Launching PCVR -> SteamVrActivity");
@@ -1104,6 +1464,10 @@ public class MainHubActivity extends Activity {
             i.putExtra("vq_pcvr_bitrate_mbps", options.bitrateMbps());
             i.putExtra("vq_pcvr_allow_restart", usesNativeRuntime() && android.os.SystemClock.elapsedRealtime() < restartConsentUntil);
             i.putExtra("vq_pcvr_restart_until_ms", restartConsentUntil);
+            connectPending = false;
+            hostClient = null;
+            clearInlinePhase();
+            clearInlineError();
             launchPending = true;
             startActivity(i);
         } catch (ActivityNotFoundException e) {
@@ -1118,6 +1482,145 @@ public class MainHubActivity extends Activity {
             Toast.makeText(this, R.string.hub_steamvr_unsupported,
                     Toast.LENGTH_LONG).show();
         }
+    }
+
+    private void showPairingNotice(String message) {
+        refreshConnectionCard();
+        clearInlineError();
+        phaseView.setText(message);
+        phaseView.setVisibility(View.VISIBLE);
+    }
+
+    private void refreshConnectionCard() {
+        Button connect = findViewById(R.id.hub_btn_connect);
+        if (connect == null) return;
+        boolean headset = VrCapabilities.isHeadset(this);
+        boolean paired = hasPairedHost();
+        ((TextView) findViewById(R.id.hub_connect_note)).setText(headset
+                ? getString(paired ? R.string.hub_card_note_paired : R.string.hub_card_note_unpaired)
+                : getString(R.string.hub_card_note_phone));
+        findViewById(R.id.hub_status).setVisibility(headset ? View.GONE : View.VISIBLE);
+        Button setup = findViewById(R.id.hub_btn_setup);
+        setup.setText(headset && paired ? getString(R.string.hub_btn_change_pc)
+                : getString(R.string.hub_btn_setup));
+        setup.setVisibility(headset && !paired ? View.GONE : View.VISIBLE);
+        connect.setEnabled(!connectPending && !launchPending);
+        connect.setText(connectPending ? getString(R.string.hub_connecting) : getString(headset && !paired
+                ? R.string.hub_btn_setup_pc : R.string.hub_btn_connect));
+        findViewById(R.id.hub_btn_cancel_connection).setVisibility(connectPending ? View.VISIBLE : View.GONE);
+        TextView savedPc = findViewById(R.id.hub_card_pc_status);
+        if (headset && paired) {
+            try {
+                HostPairing saved = loadHostPairing();
+                savedPc.setText(saved == null ? getString(R.string.hub_card_unpaired)
+                        : getString(R.string.hub_card_paired, saved.address));
+            } catch (Exception ignored) { savedPc.setText(R.string.hub_card_unpaired); }
+        } else savedPc.setText(headset ? getString(R.string.hub_card_unpaired) : getString(R.string.hub_card_pc_choose));
+        // The paired caveat is only true when a PC is actually saved, so
+        // it rides the same headset && paired condition as the saved-PC
+        // line. An unpaired headset or a phone must not be told its PC
+        // "will be checked", and the paired label is deliberately not
+        // named here: the paired choice is the separate Change PC link.
+        TextView pairedCaveat = findViewById(R.id.hub_card_pc_caveat);
+        if (pairedCaveat != null) {
+            pairedCaveat.setVisibility(headset && paired ? View.VISIBLE : View.GONE);
+        }
+    }
+
+    /** Show the inline phase line in the connection card. Hidden at
+     *  rest and shown only while a connect attempt is in flight. */
+    private void showInlinePhase(int resId) {
+        refreshConnectionCard();
+        if (phaseView == null) return;
+        phaseView.setText(resId);
+        phaseView.setVisibility(View.VISIBLE);
+    }
+
+    private void clearInlinePhase() {
+        refreshConnectionCard();
+        if (phaseView == null) return;
+        phaseView.setVisibility(View.GONE);
+        phaseView.setText("");
+    }
+
+    /** Show the inline error block in the connection card. The retry
+     *  chip is shown so the user can re-attempt the connect without
+     *  re-doing the consent dialog. The cancel chip is shown only
+     *  while a worker is in flight (so the user can stop a stuck
+     *  attempt); an idle error (no in-flight worker) hides the
+     *  cancel chip because there is nothing to cancel. */
+    private void showInlineError(int resId) {
+        showInlineError(getString(resId));
+    }
+
+    private void showInlineError(String message) {
+        if (errorRow == null || errorView == null) return;
+        errorView.setText(message);
+        errorRow.setVisibility(View.VISIBLE);
+        if (errorRetryBtn != null) errorRetryBtn.setVisibility(View.VISIBLE);
+        if (errorCancelBtn != null) errorCancelBtn.setVisibility(connectPending ? View.VISIBLE : View.GONE);
+    }
+
+    private void clearInlineError() {
+        if (errorRow == null) return;
+        errorRow.setVisibility(View.GONE);
+        if (errorView != null) errorView.setText("");
+    }
+
+    /**
+     * Bind (or re-bind) the updates badge to the process-wide
+     * {@link com.vibertemis.quest.update.UpdateRepository} that the
+     * provider currently publishes.
+     *
+     * <p>The provider may hand back a different instance (or none at
+     * all) from one call to the next — an initialization that failed
+     * on the first call is retried by a later {@code get} — so the
+     * hub re-binds on every resume instead of trusting the identity
+     * it saw in {@code onCreate}:
+     * <ul>
+     *   <li><b>Same instance</b> — no-op. The observer attached
+     *       earlier is still the right one, so repeated resumes never
+     *       add a second observer and never re-render twice.</li>
+     *   <li><b>Different instance</b> — the prior observer is
+     *       detached before the new one is attached, so a replaced or
+     *       shut-down repository can never call back into this
+     *       activity.</li>
+     *   <li><b>Null</b> — detach and hide the badge: "nothing is
+     *       known" must not leave a stale line rendered from a
+     *       previous instance. A null bind is never skipped, so the
+     *       badge is also hidden on the very first call.</li>
+     * </ul>
+     *
+     * <p>The observer re-checks liveness AND its own captured
+     * instance identity inside the UI-thread hop. A snapshot
+     * published on the check thread between pause and destroy — or
+     * after the hub already re-bound to another repository — must
+     * not render.
+     */
+    private void bindUpdateRepository() {
+        com.vibertemis.quest.update.UpdateRepository repository =
+                com.vibertemis.quest.update.UpdateRepositoryProvider.get(getApplicationContext());
+        // Identity short-circuit for a live, unchanged repository. A
+        // null result always falls through so the badge is hidden
+        // rather than left over from a previous instance.
+        if (repository != null && repository == updateRepository) return;
+        if (updateObserver != null) {
+            if (updateRepository != null) updateRepository.removeObserver(updateObserver);
+            updateObserver = null;
+        }
+        updateRepository = repository;
+        if (repository == null) {
+            renderUpdatesBadge(null);
+            return;
+        }
+        com.vibertemis.quest.update.UpdateRepository.Observer observer = snap -> runOnUiThread(() -> {
+            if (isFinishing() || isDestroyed()) return;
+            if (updateRepository != repository) return;
+            renderUpdatesBadge(snap);
+        });
+        updateObserver = observer;
+        repository.addObserver(observer);
+        renderUpdatesBadge(repository.snapshot());
     }
 
     /**
@@ -1149,8 +1652,9 @@ public class MainHubActivity extends Activity {
      * for a forced refresh.
      */
     private void triggerUpdateCheckIfIdle(boolean force) {
-        com.vibertemis.quest.update.UpdateRepository repository =
-                com.vibertemis.quest.update.UpdateRepositoryProvider.get(getApplicationContext());
+        // Use the already-bound repository: a second provider read
+        // here could hand back an instance the hub is not observing.
+        com.vibertemis.quest.update.UpdateRepository repository = updateRepository;
         if (repository == null) return;
         if (!force) {
             if (!repository.shouldRunByThrottle(false)) return;
@@ -1232,9 +1736,6 @@ public class MainHubActivity extends Activity {
             return;
         }
         if (snap.lastSuccessAtMs > 0) {
-            // A successful check ran and reported no newer release.
-            // Surface "current" until something newer shows up, so the
-            // user has visible confirmation that the app is checked.
             badge.setText(R.string.hub_updates_badge_current);
             badge.setVisibility(View.VISIBLE);
             return;

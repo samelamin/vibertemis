@@ -1,9 +1,11 @@
 package com.vibertemis.quest.pcvr;
 import android.app.AlertDialog;
+import android.content.Intent;
 import android.os.Looper;
 import android.widget.Button;
 import org.robolectric.Shadows;
 import org.robolectric.shadows.ShadowAlertDialog;
+import org.robolectric.shadows.ShadowApplication;
 
 /**
  * Drives the unpaired-headset launch journey through the new
@@ -20,7 +22,11 @@ import org.robolectric.shadows.ShadowAlertDialog;
  *       returned any candidates.</li>
  *   <li>Advanced VR pairing (BUTTON_NEUTRAL = "Manual VR") —
  *       the user opts out of file-based pairing and explicitly
- *       chooses to start VR anyway.</li>
+ *       chooses to start VR anyway. If the microphone has not been
+ *       granted the hub asks for it here instead of silently doing
+ *       nothing; the grant continuation comes back to the same entry
+ *       and the legacy consent prompt is still required, so the three
+ *       stages below may be separated by a permission request.</li>
  *   <li>"Connect to PCVR?" (BUTTON_POSITIVE = "Connect") — the
  *       restart-consent prompt that the native runtime shows
  *       because SteamVR may restart.</li>
@@ -124,5 +130,108 @@ public final class PcvrTestActions {
       stepAdvancedIfPicker();
       stepManualVr();
       stepConnect();
+  }
+
+  /** Dismiss whatever dialog is currently showing without firing any
+   *  button or cancel callback. Tests call this before pausing and
+   *  destroying an activity so a modal dialog never survives the test
+   *  and leak into the next one's latest-dialog state. */
+  public static void dismissLatestDialog() {
+      AlertDialog dialog = ShadowAlertDialog.getLatestAlertDialog();
+      if (dialog == null) return;
+      try { if (dialog.isShowing()) dialog.dismiss(); }
+      catch (Exception ignored) { }
+  }
+
+  /** Action Robolectric records when the activity calls
+   *  {@code requestPermissions}. A recorded permission request has no
+   *  component, so tests can also spot it by that shape. */
+  public static final String ACTION_REQUEST_PERMISSIONS =
+          "android.content.pm.action.REQUEST_PERMISSIONS";
+
+  /** Explicit {@code ComponentName} the hub dispatches for a VR
+   *  launch. */
+  public static final String STEAMVR_ACTIVITY =
+          "com.vibertemis.quest.hub.SteamVrActivity";
+
+  /**
+   * Accumulating log of every started intent Robolectric recorded for
+   * one test.
+   *
+   * <p>{@code getNextStartedActivity()} is destructive — each call
+   * consumes one entry — so a test that drains the same queue twice
+   * (for example before and after an asynchronous host callback)
+   * silently loses the intents an earlier drain already consumed and
+   * then asserts on an incomplete history. This log keeps every
+   * drained intent, so {@link #drain} may be called as often as the
+   * test needs while the counts keep describing the full session.
+   */
+  public static final class StartedIntentLog {
+      private final java.util.List<Intent> intents = new java.util.ArrayList<>();
+
+      private void drainAll(java.util.function.Supplier<Intent> next) {
+          Intent i;
+          while ((i = next.get()) != null) intents.add(i);
+      }
+
+      /** Drain the intents recorded against the application shadow. */
+      public void drain(ShadowApplication app) {
+          if (app == null) return;
+          drainAll(app::getNextStartedActivity);
+      }
+
+      /** Drain the intents recorded against one activity shadow.
+       *
+       *  <p>Robolectric records the system permission-request intent
+       *  and ordinary {@code startActivity} calls through the
+       *  application shadow in some versions and through the activity
+       *  shadow in others. Draining both views is always safe: when
+       *  they share a single slot the second drain finds nothing. */
+      public void drain(android.app.Activity activity) {
+          if (activity == null) return;
+          drainAll(() -> Shadows.shadowOf(activity).getNextStartedActivity());
+      }
+
+      /** Every intent recorded so far, in the order it was dispatched. */
+      public java.util.List<Intent> all() {
+          return new java.util.ArrayList<>(intents);
+      }
+
+      public int size() { return intents.size(); }
+
+      /** Intents recorded for an explicit component class name. */
+      public int countComponent(String className) {
+          int n = 0;
+          for (Intent i : intents) {
+              if (i != null && i.getComponent() != null
+                      && className.equals(i.getComponent().getClassName())) n++;
+          }
+          return n;
+      }
+
+      /** Intents recorded for an action string. */
+      public int countAction(String action) {
+          int n = 0;
+          for (Intent i : intents) if (i != null && action.equals(i.getAction())) n++;
+          return n;
+      }
+
+      /** Microphone permission requests the hub actually dispatched. */
+      public int countPermissionRequests() {
+          return countAction(ACTION_REQUEST_PERMISSIONS);
+      }
+
+      /** Permission requests Robolectric recorded without a component
+       *  (the shape {@code requestPermissions} produces). */
+      public int countComponentlessIntents() {
+          int n = 0;
+          for (Intent i : intents) if (i != null && i.getComponent() == null) n++;
+          return n;
+      }
+
+      /** SteamVrActivity launches recorded so far. */
+      public int countSteamVr() {
+          return countComponent(STEAMVR_ACTIVITY);
+      }
   }
 }

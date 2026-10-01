@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Primary 72dp Connect button. Teal fill, dark ink text, rounded
+  14dp corners. Pressed and focus states deepen the teal and swap
+  the stroke to the focus teal so the ray-cast focus ring is visible
+  on a Quest headset. The default state stays neutral so we never
+  paint a "selected" look that the focus ring would have to fight.
+
+  Layered primary uses hub_panel_accent (#14616E) with a 1dp stroke
+  that resolves to the focus teal (#7FE0D2) on pressed/focused
+  states. Text colour is explicit (hub_panel_accent_on = #ECF2F5)
+  so we never depend on the platform theme picking a foreground.
+-->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_pressed="true">
+        <layer-list>
+            <item>
+                <shape android:shape="rectangle">
+                    <solid android:color="@color/hub_panel_accent_pressed" />
+                    <stroke
+                        android:width="1dp"
+                        android:color="@color/hub_panel_focus" />
+                    <corners android:radius="14dp" />
+                </shape>
+            </item>
+        </layer-list>
+    </item>
+    <item android:state_focused="true">
+        <layer-list>
+            <item>
+                <shape android:shape="rectangle">
+                    <solid android:color="@color/hub_panel_accent" />
+                    <stroke
+                        android:width="2dp"
+                        android:color="@color/hub_panel_focus" />
+                    <corners android:radius="14dp" />
+                </shape>
+            </item>
+        </layer-list>
+    </item>
+    <item>
+        <layer-list>
+            <item>
+                <shape android:shape="rectangle">
+                    <solid android:color="@color/hub_panel_accent" />
+                    <stroke
+                        android:width="1dp"
+                        android:color="@color/hub_panel_card_stroke" />
+                    <corners android:radius="14dp" />
+                </shape>
+            </item>
+        </layer-list>
+    </item>
+</selector>

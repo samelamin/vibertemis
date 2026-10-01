@@ -9,8 +9,8 @@ A single arm64 APK shipping two streaming modes from one launcher.
   tracking on Quest3. The PC host runs the ALVR streamer; this APK is
   the headset client. Hardware behavior on Quest3 is UNTESTED.
 
-APK `vibertemis-quest-preview-0.1.0.9.apk`, package
-`com.vibertemis.quest.preview.debug`, version `0.1.0-quest-preview.9`,
+APK `vibertemis-quest-preview-0.1.0.10.apk`, package
+`com.vibertemis.quest.preview.debug`, version `0.1.0-quest-preview.10`,
 `arm64-v8a` only, `minSdk=26`, `targetSdk=34`. No second ALVR headset
 app — the runtime is bundled inside this APK.
 
@@ -20,8 +20,8 @@ app — the runtime is bundled inside this APK.
    <https://developers.meta.com/horizon/documentation/native/android/mobile-device-setup/>.
 2. Connect over USB and accept the "Allow USB debugging?" prompt on
    the headset.
-3. `adb install -r vibertemis-quest-preview-0.1.0.9.apk`.
-4. Launch under **Unknown Sources**.
+3. `adb install -r vibertemis-quest-preview-0.1.0.10.apk`.
+4. Launch Vibertemis from the headset's app list.
 
 ## Screen mode
 
@@ -74,41 +74,46 @@ is still required; this is an experimental test build.
 ### Windows host setup
 
 1. Keep your existing **Vibeshine** installation unchanged. Run
-   `VibertemisVR-HostManager-Setup-0.1.0.9.exe` in your normal Windows account.
+   `VibertemisVR-HostManager-Setup-0.1.0.10.exe` in your normal Windows account.
    The per-user wizard installs the manager and matching VR runtime. Screen
    streaming still uses your existing Vibeshine; no fork or update is required.
-2. Open **VibertemisVR Host Manager**, then choose **Setup VR**. It detects the
+2. Open **VibertemisVR Host Manager**, then choose **Set up VR**. It detects the
    Microsoft Visual C++ x64 runtime and offers the verified bundled installer
    only when needed. Approve Windows setup/network access. Steam or SteamVR
-   missing? Use the displayed install/finish-setup action, then retry Setup VR.
+   missing? Use the displayed install/finish-setup action, then retry Set up VR.
    Close SteamVR and ALVR Dashboard first. Switching an existing ALVR driver
    asks once; its files/settings and unrelated drivers remain intact.
-3. Enable **Keep host ready after Windows sign-in**. The default route chooses
-   the LAN adapter; manual adapter and manual IPv4/hostname live under
-   **Advanced**.
-4. Successful **Setup VR** already enables persistent pairing
+3. Leave **Advanced > Start with Windows** enabled — it is on by default after
+   Set up VR. The default route chooses the LAN adapter; manual adapter and
+   manual IPv4/hostname live under **Advanced**.
+4. Successful **Set up VR** already enables persistent pairing
    reception on the Windows side. **Pair headset** can re-enable
    it later if you ever turn it off. There is no separate
    Moonlight pre-pairing and no pairing file to copy.
-5. On Quest, choose **Setup VR** in the hub. The headset finds
-   standalone Windows hosts on the LAN on its own. **Select the
-   PC** you want to pair with; there is no Setup VR → PCVR
-   submenu.
-6. Compare the code shown on both screens and approve it in the
-   non-modal panel on the Windows manager. The Quest side saves
-   the pairing, and the request closes automatically. Receiving
-   controls remain available. Saved credentials reconnect on a later explicit **Connect**.
+5. On Quest, choose **Set up PC** in the hub. The headset finds
+   standalone Windows hosts on the LAN on its own. **Select the PC**
+   you want to pair with; there is no setup submenu.
+6. Compare the code shown on both screens, then choose **Approve**
+   once in the non-modal panel on the Windows manager. The Quest side
+   saves the pairing and shows an inline **Paired** line in the hub —
+   there is no confirmation dialog and no pairing file to copy.
+   Receiving controls stay available, and the saved pairing reconnects
+   on a later explicit **Connect**.
 7. If the PC is not visible on the LAN, choose **Enter address**
    in the Quest setup dialog to type an IPv4 address or hostname with
    an optional port for an already reachable endpoint. This
    does not open ports on your router and does not perform
    public-port forwarding; the native VR transport over the
    public Internet is not implemented in this build.
-8. Tap **Connect**, grant microphone permission, and confirm the
-   existing SteamVR restart prompt. A detected VR headset takes
-   the tracked PCVR path. **Flat screen** remains an explicit
-   override. Phones take the flat path and do not ask the host to
-   start SteamVR.
+8. Tap **Connect**; grant microphone permission if asked. When the
+   authenticated host status reports SteamVR as not running, the hub
+   starts it without asking. If the same status reports SteamVR
+   already running, the hub asks for restart confirmation first
+   (Restart VR / Cancel). An unknown or unreachable host state fails
+   closed: the hub draws an inline error with **Retry** and starts
+   nothing. A detected VR headset takes the tracked PCVR path. **Flat
+   screen** remains an explicit override. Phones take the flat path and
+   do not ask the host to start SteamVR.
 
 After this one-time setup, sign in to Windows and leave the manager in the
 tray. It waits for the saved network, retries startup/crashes (2–30 seconds,
@@ -117,20 +122,19 @@ service when that adapter's address changes. Pairing stays intact. This never
 starts or stops SteamVR by itself; the paired Quest Connect request starts VR.
 A missing saved adapter waits instead of switching to a different network.
 
-**Keep host ready after Windows sign-in** is the single startup setting.
-For a new installation it is recommended before the first explicit Start.
-Existing preview4 startup choices are preserved: enable this checkbox once if
-it was previously off. Closing the window keeps hosting in the tray. **Stop
-hosting** pauses hosting and next-launch restoration until you Start again.
-**Exit** stops the current companion but preserves next-login restoration.
-Disabling the checkbox disables future automatic startup/restoration; use Stop
-as well if you want to stop the current session. Startup is after Windows
-sign-in, not a service running at the login screen.
+**Advanced > Start with Windows** is the single startup setting, enabled by
+default after Set up VR. Startup happens after you sign in to Windows, not
+before login. If an earlier preview left it off, turn it back on once. Closing
+the window keeps hosting in the tray. **Stop** pauses hosting and
+next-launch restoration until you Start again. **Exit** stops the current
+companion but preserves next-login restoration. Disabling the checkbox
+disables future automatic startup/restoration; use **Stop** as well if you
+want to stop the current session.
 
 The Quest side auto-checks for new release metadata when the hub opens and
-when the hub has been idle for the throttled window. The Windows side runs
-the same check on manager open. The download/install/launch confirmation
-remains an explicit OS prompt on both sides.
+again while the hub is idle, on a throttle. The Windows side runs the same
+throttled check when the manager opens. Installing an update still needs your
+approval at the operating system level on both sides.
 
 Paired LAN discovery recovers changed PC addresses after authenticating the
 saved PC identity. Internet use still needs a reachable direct/VPN address.
@@ -139,32 +143,50 @@ See [RECOVERY_PLAN.md](RECOVERY_PLAN.md) for the reboot-to-Quest test checklist.
 For an existing ZIP setup, pairing in the user profile is reused. Its ALVR
 session stays in the old ZIP folder; close VR and use Explorer to copy that
 `session.json` into the new installation's `runtime` folder if you want to
-keep those native settings. Use **Setup VR** to register the new runtime.
+keep those native settings. Use **Set up VR** to register the new runtime.
 Do not run the old standalone companion alongside the manager.
 
 Codec/display changes can require a SteamVR restart; save your game before
-confirming Connect. The explicit restart VR prompt is retained on every
-connect so you can always choose to back out before SteamVR restarts.
+confirming Connect. The restart confirmation appears only when the
+authenticated host status reports SteamVR already running, so a cold connect
+stays a single action. Cancel backs out before anything restarts.
 
 ### In-app updates
 
-- Windows: opening the host manager checks for updates automatically. An
-  available update exposes **Download update** directly; **Check for updates**
-  remains a manual refresh. Confirm download, close
-  SteamVR/ALVR Dashboard, then click **Install update**. Download progress and
-  cancellation are shown; a busy session keeps the verified download for later.
-  The worker waits for the manager to exit, runs setup, checks the installed
-  FileVersion and payload integrity, and reopens the manager with the outcome.
-  Pairing/settings are preserved. Active VR sessions block updates/uninstall.
-  If the old updater failed, run the preview7 installer manually once.
-  Logs are under `%LOCALAPPDATA%/VibertemisVRHostManager/logs`; the last shown
-  result stays in `updates/last-update.json.seen` under that state directory.
-- Quest: the idle hub checks automatically and highlights available updates.
-  Open **App updates** to download, then **Install update**; no second check is
-  required. A verified downloaded update remains available while offline.
-  Allow installs from Vibertemis if Android asks, and confirm the Android
-  installer. Preview4 and later update through this screen. Preview3 needs
-  one manual sideload to gain the updater.
+- Windows: opening the host manager checks for signed release metadata
+  automatically on a throttle; **Check for updates** is a manual
+  refresh. An available update gets one **Update** action that
+  downloads it, verifies the bytes and applies it. A busy VR session
+  keeps the verified download for later, and cancelling keeps it too.
+   Pairing and settings survive an update; an active VR session blocks
+   it. A failed or unconfirmed update is reported in the update status at
+   the bottom of the window, with the Activity log collapsed:
+   `updates/last-update.json` under
+  `%LOCALAPPDATA%/VibertemisVRHostManager` stays in place across
+  restarts until an actual new update attempt, and background checks do
+  not acknowledge it. Only a confirmed success or an explicitly
+  superseded result moves it to `last-update.json.seen`. The detailed
+  reason and installer log path stay in the Activity log. Logs are
+  under `%LOCALAPPDATA%/VibertemisVRHostManager/logs`. If an earlier
+  updater failed outright, install the new test release installer
+  manually once.
+- Quest: the hub and the updates screen check signed metadata
+  automatically on open and while idle, on a throttle, and the hub
+  badge shows what is known. An available update gets one **Update**
+  action that downloads it, verifies it, and opens the Android
+  installer — there is no separate in-app download-then-install pair.
+  Android still asks you to allow installs from Vibertemis and to
+  confirm the install. Cancelling, or being busy, keeps the verified
+  download for later. If Android's installer returns an unknown result,
+  the app reports neither success nor failure; **Retry** re-verifies the
+  cached pinned release and reopens the Android installer, so there is no
+  need to reopen the update screen. The actual installed version
+  confirms success.
+- Existing preview9 builds have a broken updater initialization, so
+  their in-app update does not start. Sideload the next signed APK once
+  by hand using your existing method, without uninstalling first. It
+  keeps the same package and signer, so pairing and settings are
+  preserved, and the in-app flow works after that.
 - Both clients verify signed release metadata and downloaded bytes. Quest
   additionally requires the existing app signer and a newer package version.
   Checks target Quest previews, independently of desktop releases.
@@ -174,7 +196,7 @@ connect so you can always choose to back out before SteamVR restarts.
 Forwarded GameStream ports/public PC IP do not carry the native tracked VR
 transport. An optional Tailscale adapter is supported. Install and connect
 Tailscale on the PC and Quest separately, select the PC's **Tailscale VPN** address
-under **Advanced** in Host Manager, run **Setup VR**, then select the paired PC
+under **Advanced** in Host Manager, run **Set up VR**, then select the paired PC
 on Quest. Ensure its saved PC address is reachable over the VPN. This is not
 an integrated VPN installer. LAN remains available without it. Native trust uses
 the authenticated connection's private/VPN source address. If the headset address
@@ -216,9 +238,9 @@ Internet discovery, VPN installation or router port opening is implemented. Home
 loss matter alongside download speed. See the
 [ALVR separate-network guide](https://github.com/alvr-org/ALVR/wiki/Headset-and-ALVR-streamer-on-separate-networks).
 
-Microphone permission is required by the preview launcher. Voice forwarding
-is controlled separately in the ALVR dashboard. Screen synthetic 3D and real
-stereoscopic PCVR are separate modes.
+The launcher requests microphone permission on first use of Connect. Voice
+forwarding is controlled separately in the ALVR dashboard. Screen synthetic 3D
+and real stereoscopic PCVR are separate modes.
 
 ## Rebuilding from source
 

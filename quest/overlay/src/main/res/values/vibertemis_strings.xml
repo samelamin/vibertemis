@@ -9,37 +9,88 @@
     <string name="hub_status_screen_summary">Screen streaming: %1$s @ %2$s fps, %3$s Mbps, codec %4$s.</string>
     <string name="hub_status_unknown">Screen streaming: open Streaming settings to choose values.</string>
 
-    <!-- Primary Connect button. The hub auto-detects device class via
-         PackageManager.FEATURE_VR_HEADTRACKING: a real headset routes
-         Connect into the authenticated PCVR start; a phone or other
-         non-headset device routes Connect into the existing flat
-         PcView start. There is no separate manual VR-mode choice for
-         normal Connect. The explicit Flat screen override below is
-         only shown on a headset, where the primary Connect is PCVR. -->
-    <string name="hub_btn_connect">Connect</string>
-    <string name="hub_btn_connect_screen_summary">Choose your paired PC, or add a PC to get started.</string>
-    <string name="hub_subtitle_detected_headset">VR headset detected. Connect to play SteamVR games.</string>
-    <string name="hub_subtitle_detected_phone">Connect to stream PC games.</string>
+    <!-- Connection card. The hub follows the dark-ink + teal palette
+         specified by the Claude frontend-design pass. The card is the
+         only prominent panel on the hub; secondary rows (Flat screen,
+         Settings, Updates footer) live below it. -->
 
-    <!-- Explicit Flat screen override. Only shown on a real headset,
-         where it differs from the primary Connect target. Hidden on
-         phones because the primary Connect already routes to the
-         flat PcView there. -->
+    <!-- Primary 72dp Connect, paired headset. -->
+    <string name="hub_btn_connect">Connect</string>
+    <!-- Primary 72dp Connect for an unpaired headset; "Set up PC" is
+         the discoverable affordance, not a separate manual button. -->
+    <string name="hub_btn_setup_pc">Set up PC</string>
+    <!-- Secondary 56dp Flat screen override (headset only). -->
     <string name="hub_btn_screen">Flat screen</string>
     <string name="hub_btn_screen_summary">Play regular PC games on a virtual screen.</string>
-
-    <!-- Legacy names retained so the old resource references in
-         MainHubActivity (and any future copy that still uses them)
-         resolve cleanly. The hub no longer surfaces a separate manual
-         SteamVR (PCVR) button; the primary Connect handles headset
-         detection and routing automatically. -->
-    <string name="hub_btn_steamvr">Connect</string>
-    <string name="hub_steamvr_unsupported">PCVR requires a VR headset.</string>
-    <string name="hub_steamvr_companion_reminder">First connection? In Windows VR Host Manager, choose Pair headset. Here, choose Setup VR, compare the code and approve once on the PC.</string>
-    <string name="hub_mic_denied">Microphone permission is required to start SteamVR. PCVR not started.</string>
-
-    <string name="hub_btn_settings">Streaming settings</string>
+    <!-- Secondary 56dp Settings. -->
+    <string name="hub_btn_settings">Settings</string>
+    <!-- 48dp link "Setup" — the VR-setup picker. Reachable from the
+         hub (advanced placement) and from inside Settings > Advanced. -->
     <string name="hub_btn_setup">Setup</string>
+    <!-- Paired-state affordance of the same link: the setup picker is
+         opened to change which saved PC this headset targets. -->
+    <string name="hub_btn_change_pc">Change PC</string>
+
+    <!-- Connection card status block. Honest saved-PC state only;
+         no fabricated hostname/lastplayed/Ready label. -->
+    <string name="hub_card_title">Connection</string>
+    <string name="hub_card_paired">Saved PC: %1$s</string>
+    <string name="hub_card_unpaired">No PC paired for VR.</string>
+    <string name="hub_card_paired_caveat">Your PC will be checked when you connect.</string>
+
+    <!-- Connection card note line, one honest line per state. Headset
+         states name the PC action; the phone state names the missing
+         choice. -->
+    <string name="hub_card_note_paired">Starts SteamVR on your PC.</string>
+    <string name="hub_card_note_unpaired">Open VR Host Manager on your PC, then set up this headset.</string>
+    <string name="hub_card_note_phone">Choose a PC to stream your games.</string>
+    <string name="hub_card_pc_choose">Choose a PC to play.</string>
+
+    <!-- Inline connection phases. Drawn into the card during a connect
+         attempt so the user sees real progress, not a transient
+         dialog stack. -->
+    <string name="hub_phase_probing">Contacting PC…</string>
+    <string name="hub_phase_starting">Starting SteamVR…</string>
+    <string name="hub_phase_waiting_restart">Waiting for SteamVR to restart.</string>
+    <string name="hub_phase_ready">PC ready. Starting headset…</string>
+    <string name="hub_phase_retry">Retry</string>
+    <string name="hub_phase_cancel">Cancel</string>
+    <string name="hub_connecting">Connecting…</string>
+
+    <!-- Inline error copy. Used by the connect card; never sent to a
+         dialog. Errors survive transient pause; the user can retry
+         without re-running setup. -->
+    <string name="hub_error_generic">Could not reach your PC. Retry.</string>
+    <string name="hub_error_state_unknown">Could not confirm SteamVR’s status. Try again.</string>
+    <string name="hub_error_consent_expired">Connection took too long. Try again.</string>
+    <string name="hub_error_mic_required">Microphone permission is required to start SteamVR.</string>
+    <string name="hub_error_pc_unreachable">PC is not reachable on the saved address. Retry, or use Change PC to find a PC.</string>
+    <string name="hub_error_identity">Could not verify PC identity. Retry, or pair again if this PC has changed.</string>
+    <string name="hub_error_pc_unsupported">PC needs an update. Update Windows VR Host Manager and retry.</string>
+    <string name="hub_error_setup_first">Pair your PC with Set up PC before connecting for VR.</string>
+
+    <!-- VR setup picker and pairing dialog bodies. Copy only: dialog
+         titles and button flows stay in MainHubActivity. The Windows
+         button is labelled "Set up VR" and the recovery action on this
+         side is "Set up PC"; both are named literally so the text names
+         a button the user can actually find. -->
+    <string name="hub_vr_setup_empty_message">We did not find a PC running VR Host Manager on the local network. Open VR Host Manager on the PC and choose Set up VR (Windows button) or Pair headset, then choose Retry. You can also enter the address by hand or import a saved pairing file under Advanced.</string>
+    <string name="hub_vr_setup_contacting_host">Contacting %1$s. Windows Set up VR enables pairing automatically. If receiving is off, choose Pair headset on the PC.</string>
+    <string name="hub_vr_setup_save_failed">Could not save VR pairing. Choose Set up PC to try again.</string>
+
+    <!-- Connect restart consent. Surfaced only when the PC reports
+         vrserver=true (SteamVR is already running) so the user gets
+         an explicit Restart VR / Cancel choice. -->
+    <string name="hub_restart_title">Restart VR</string>
+    <string name="hub_restart_message">SteamVR is running on your PC. Connecting may restart it to apply this headset’s settings. Save any VR game in progress first.</string>
+    <string name="hub_restart_confirm">Restart VR</string>
+    <string name="hub_restart_cancel">Cancel</string>
+
+    <string name="hub_subtitle_detected_headset">VR headset detected. Connect to play SteamVR games.</string>
+    <string name="hub_subtitle_detected_phone">Connect to stream PC games.</string>
+    <string name="hub_steamvr_unsupported">PCVR requires a VR headset.</string>
+    <string name="hub_steamvr_companion_reminder">First connection? In Windows VR Host Manager, choose Pair headset. Here, choose Set up PC, compare the code and approve once on the PC.</string>
+    <string name="hub_mic_denied">Microphone permission is required to start SteamVR. PCVR not started.</string>
 
     <!-- Updates row: a single primary button plus a status badge that
          only appears when a verified update is available. The badge
@@ -48,7 +99,7 @@
          see that the latest known state has been confirmed. -->
     <string name="hub_btn_updates">App updates</string>
     <string name="hub_updates_badge_default">No updates available.</string>
-    <string name="hub_updates_badge_available">Update %1$s available — tap App updates to install.</string>
+    <string name="hub_updates_badge_available">Update %1$s available.</string>
     <string name="hub_updates_badge_ready">Update %1$s is verified and ready to install.</string>
     <string name="hub_updates_badge_checking">Checking for updates…</string>
     <string name="hub_updates_badge_offline">Update check unavailable. Tap App updates to retry.</string>
@@ -77,18 +128,18 @@
     <string name="setup_pcvr_mode_body">Stream SteamVR with head and Touch controller tracking. Install the matching custom Windows host from this app release. Stock ALVR builds cannot connect to this preview.</string>
     <string name="setup_pcvr_steps_pc">Steps on the PC:</string>
     <string name="setup_pcvr_step1">Install VibertemisVR Host Manager from this release. Keep your existing Vibeshine installation for screen gaming.</string>
-    <string name="setup_pcvr_step2">Open Host Manager and choose Setup VR. It checks the Windows runtime automatically; approve setup when prompted.</string>
-    <string name="setup_pcvr_step3">If Steam or SteamVR needs setup, use the displayed action, then retry Setup VR. Close SteamVR and ALVR Dashboard first.</string>
+    <string name="setup_pcvr_step2">Open Host Manager and choose Set up VR. It checks the Windows runtime automatically; approve setup when prompted.</string>
+    <string name="setup_pcvr_step3">If Steam or SteamVR needs setup, use the displayed action, then retry Set up VR. Close SteamVR and ALVR Dashboard first.</string>
     <string name="setup_pcvr_step4">Enable Keep host ready after Windows sign-in. Leave the manager in the tray; SteamVR starts when you connect for VR.</string>
     <string name="setup_pcvr_steps_headset">Steps on the headset:</string>
-    <string name="setup_pcvr_headset_step1">Choose Pair headset in Windows VR Host Manager. On this app’s home screen, choose Setup VR and select your PC. Compare every character of the code and approve on the PC once. No pairing file is required.</string>
+    <string name="setup_pcvr_headset_step1">Choose Pair headset in Windows VR Host Manager. On this app’s home screen, choose Set up PC and select your PC. Compare every character of the code and approve on the PC once. No pairing file is required.</string>
     <string name="setup_pcvr_headset_step2">Choose Connect, grant microphone access, and confirm any restart. Save running VR games first.</string>
     <string name="setup_pcvr_headset_step3">Once connected, launch a VR game from the SteamVR library in the headset.</string>
 
     <string name="setup_pcvr_mic_note">This preview build requires microphone permission to start SteamVR. You can control voice chat in the ALVR dashboard.</string>
-    <string name="setup_pcvr_wan_note">Remote VR needs a reachable PC route, such as a VPN on both devices. Select the PC VPN adapter under Windows Advanced and repeat Setup VR. Forwarded GameStream ports alone do not carry tracked VR.</string>
+    <string name="setup_pcvr_wan_note">Remote VR needs a reachable PC route: a VPN on both devices, or a public address with the VR ports forwarded correctly. Select the reachable adapter under Windows Advanced and repeat Set up VR. Forwarded GameStream ports alone do not carry tracked VR.</string>
     <string name="setup_pcvr_tuning_note">PCVR settings offers PyroWave for Home, Standard AV1/HEVC, Travel mode and bitrate limits. Home allows up to 200 Mbps; Travel starts at 30 Mbps. Use ALVR Dashboard for resolution, refresh and fixed foveation. Start at 72 Hz and test your network.</string>
-    <string name="setup_pcvr_troubleshoot_note">If setup fails, check that the matching Windows VR Host Manager is hosting and reachable. Reopen Pair headset on the PC, then retry Setup VR here. Vibeshine needs no changes. Manual pairing remains under Advanced.</string>
+    <string name="setup_pcvr_troubleshoot_note">If setup fails, check that the matching Windows VR Host Manager is hosting and reachable. Reopen Pair headset on the PC, then choose Set up PC here to retry. Vibeshine needs no changes. Manual pairing remains under Advanced.</string>
 
     <string name="setup_open_link">Open</string>
     <string name="setup_copy_link">Copy link</string>

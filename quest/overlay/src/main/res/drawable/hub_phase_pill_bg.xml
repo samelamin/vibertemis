@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Inline-phase pill drawn into the connection card during a connect
+  attempt. Subtle fill, 1dp stroke, rounded so it sits inside the
+  14dp card radius without breaking the visual hierarchy. Foreground
+  text is drawn by the inflated TextView (hub_card_phase) using
+  hub_panel_subtle so it never looks like a primary action.
+-->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <layer-list>
+            <item>
+                <shape android:shape="rectangle">
+                    <solid android:color="@color/hub_panel_card_stroke" />
+                    <stroke
+                        android:width="1dp"
+                        android:color="@color/hub_panel_card_stroke" />
+                    <corners android:radius="10dp" />
+                </shape>
+            </item>
+        </layer-list>
+    </item>
+</selector>

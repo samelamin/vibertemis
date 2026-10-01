@@ -518,9 +518,10 @@ public class VrSetupHubLifecycleTest {
             ctl.resume();
             HostPairing expected = HostClientTest.pairing("host", 28540);
             session.completeSuccess(expected);
-            // The hub dismisses the connecting dialog on success
-            // and the next alert is the Paired notice.
-            awaitDialog("Paired");
+            // Completion appears inline without a second Done click.
+            awaitCondition(() -> ((android.widget.TextView) hub.findViewById(R.id.hub_card_phase))
+                    .getText().toString().contains("Paired."));
+            assertNull(Shadows.shadowOf(hub).getNextStartedActivity());
         } finally {
             ctl.pause().stop().destroy();
         }
@@ -529,7 +530,7 @@ public class VrSetupHubLifecycleTest {
     /** Successful enrollment persists the pairing to disk. The next
      *  onResume (returning from a launched activity, or after
      *  foreground/background) MUST surface the deferred
-     *  pairingNotice dialog so the user is told their PC is paired
+     *  pairing notice inline so the user is told their PC is paired
      *  even if the success was delivered while the hub was not
      *  resumed. The PairingStore is the production seam, so the
      *  test saves via the real {@link com.vibertemis.quest.pcvr.PairingStore}
@@ -566,9 +567,11 @@ public class VrSetupHubLifecycleTest {
             // The save runs on the worker; give it a tick.
             awaitCondition(() -> new com.vibertemis.quest.pcvr.PairingStore(
                     RuntimeEnvironment.getApplication(), create -> fakeKey).hasPairing() && !approval.isShowing());
-            // Resume: the pairingNotice dialog must appear.
+            // Resume shows the saved result inline, without launching VR.
             ctl.resume();
-            awaitDialog("VR pairing");
+            awaitCondition(() -> ((android.widget.TextView) hub.findViewById(R.id.hub_card_phase))
+                    .getText().toString().contains("Paired."));
+            assertNull(Shadows.shadowOf(hub).getNextStartedActivity());
             assertTrue("PairingStore must persist the saved pairing",
                     new com.vibertemis.quest.pcvr.PairingStore(
                             RuntimeEnvironment.getApplication(), create -> fakeKey).hasPairing());
