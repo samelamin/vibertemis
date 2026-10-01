@@ -25,6 +25,7 @@ import java.lang.reflect.Field;
 import java.security.KeyPair;
 import java.security.MessageDigest;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Base64;
 import java.util.UUID;
 
@@ -56,10 +57,34 @@ import static org.junit.Assert.assertTrue;
  * <p>The screen has a single primary action, so these tests assert on
  * that one button: which action it is bound to, what it says, and
  * what a real {@code performClick()} does.
+ *
+ * <p>The hand-off boundary asserted here is parent screen to private
+ * installer: the verified APK leaves the screen as an explicit
+ * {@link SessionInstallActivity} component plus the pinned release's own
+ * cached path and its verified package / versionCode / size / digest,
+ * never as a public {@code FileProvider} content URI. What the private
+ * installer then commits through {@code PackageInstaller} is a second
+ * boundary, covered independently by {@code SessionInstallActivityTest}.
  */
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 28)
 public class UpdatesActivityColdStartTest {
+
+    /** The hand-off contract, spelled out: this screen launches the
+     *  private installer explicitly, with the pinned release's own cached
+     *  path and the values that release was verified against. */
+    private static final String SESSION_INSTALL_ACTION =
+            "com.vibertemis.quest.update.action.SESSION_INSTALL";
+    private static final String EXTRA_APK_PATH =
+            "com.vibertemis.quest.update.extra.APK_PATH";
+    private static final String EXTRA_PACKAGE =
+            "com.vibertemis.quest.update.extra.PACKAGE";
+    private static final String EXTRA_VERSION_CODE =
+            "com.vibertemis.quest.update.extra.VERSION_CODE";
+    private static final String EXTRA_BYTES =
+            "com.vibertemis.quest.update.extra.BYTES";
+    private static final String EXTRA_SHA256 =
+            "com.vibertemis.quest.update.extra.SHA256";
 
     private KeyPair keyPair;
     private String keyPem;
@@ -336,15 +361,18 @@ public class UpdatesActivityColdStartTest {
     // ------------------------------------------------------------------
 
     /**
-     * A cached release reaches the OS installer from one tap and
-     * nothing else. There is no second in-app Install button, so the
-     * whole update is: click Update, verify, hand off.
+     * A cached release is handed to the private session installer from
+     * one tap and nothing else. There is no second in-app Install
+     * button, so the whole update is: click Update, verify, hand off —
+     * and the private installer is told exactly which pinned, verified
+     * file to install.
      */
     @Test public void oneTapUpdateFromCacheReachesSystemInstaller() throws Exception {
         UpdateRepository repo = UpdateRepositoryProvider.get(appContext);
         long installed = readInstalledVersionCodeViaPm();
         UpdateTestFixture.installSigningIdentity(appContext, installed, true);
         File apk = seedDownloadedSlot(repo, "0.1.0.7", 7, installed + 1);
+        byte[] cachedBytes = fakeApkBytes("0.1.0.7");
         Shadows.shadowOf(android.os.Looper.getMainLooper()).idle();
 
         ActivityController<UpdatesActivity> ctl = Robolectric.buildActivity(UpdatesActivity.class)
@@ -355,23 +383,40 @@ public class UpdatesActivityColdStartTest {
             assertEquals(UpdatesActivity.PrimaryAction.UPDATE, a.primaryActionForTest());
             ((Button) getField(a, "primary")).performClick();
             idleUntilHandoff(a);
-            assertTrue("one tap must hand the APK to the OS installer",
+            assertTrue("one tap must hand the APK to the private installer",
                     a.handedToSystemForTest());
-            assertTrue("the activity must be awaiting the system result",
+            assertTrue("the activity must be awaiting the installer's result",
                     a.awaitingSystemForTest());
             org.robolectric.shadows.ShadowActivity.IntentForResult launched =
                     Shadows.shadowOf(a).getNextStartedActivityForResult();
-            assertNotNull("the installer must actually be launched", launched);
-            assertEquals("the OS installer must be ACTION_INSTALL_PACKAGE",
-                    android.content.Intent.ACTION_INSTALL_PACKAGE,
-                    launched.intent.getAction());
-            assertTrue("the installer must receive a package-archive content URI",
-                    launched.intent.getData() != null
-                            && "content".equals(launched.intent.getData().getScheme()));
+            assertNotNull("the private session installer must actually be launched", launched);
+            android.content.Intent handoff = launched.intent;
+            assertEquals("the hand-off must name the private installer explicitly",
+                    SessionInstallActivity.class.getName(),
+                    handoff.getComponent().getClassName());
+            assertEquals("the hand-off must carry the session-install action",
+                    SESSION_INSTALL_ACTION, handoff.getAction());
+            assertNull("the hand-off must not share a public FileProvider URI",
+                    handoff.getData());
+            File handed = handedApk(launched);
+            assertEquals("the private installer must be handed this release's own copy",
+                    apk.getCanonicalPath(), handed.getPath());
+            assertEquals("the pinned package must be handed over",
+                    UpdateTestFixture.packageName(appContext),
+                    stringExtra(handoff, EXTRA_PACKAGE));
+            assertEquals("the pinned versionCode must be handed over",
+                    installed + 1, longExtra(handoff, EXTRA_VERSION_CODE));
+            assertEquals("the pinned byte count must be handed over",
+                    (long) cachedBytes.length, longExtra(handoff, EXTRA_BYTES));
+            assertEquals("the digest the release was verified against must be handed over",
+                    UpdateTestFixture.hex(UpdateTestFixture.sha256(cachedBytes)),
+                    stringExtra(handoff, EXTRA_SHA256));
+            assertTrue("the handed bytes must still be the verified ones",
+                    Arrays.equals(cachedBytes, java.nio.file.Files.readAllBytes(handed.toPath())));
             // No second tap happened, so there is nothing left to tap.
-            assertFalse("the primary must be disabled once the OS owns the screen",
+            assertFalse("the primary must be disabled once the installer owns the screen",
                     a.isPrimaryEnabledForTest());
-            assertEquals("cancel is not ours once the OS owns the screen",
+            assertEquals("cancel is not ours once the installer owns the screen",
                     android.view.View.GONE, a.cancelVisibilityForTest());
             assertNotNull("the status must say we are waiting on Android: "
                     + a.windowStatusText(), a.windowStatusText());
@@ -571,7 +616,7 @@ public class UpdatesActivityColdStartTest {
             assertTrue("primary must be enabled after first check",
                     primary.isEnabled());
             assertEquals(UpdatesActivity.PrimaryAction.CHECK, a.primaryActionForTest());
-            assertEquals("Check for updates", a.primaryLabelForTest());
+            assertEquals("Update", a.primaryLabelForTest());
 
             // Advertise a newer release: the label names it.
             recordAvailableFixture(repo, "0.1.0.7", 7);
@@ -635,6 +680,34 @@ public class UpdatesActivityColdStartTest {
         }
         Shadows.shadowOf(android.os.Looper.getMainLooper()).idle();
         assertTrue("timed out waiting for the system hand-off", a.handedToSystemForTest());
+    }
+
+    private static String stringExtra(android.content.Intent handoff, String name) {
+        Object value = handoff.getExtras() == null ? null : handoff.getExtras().get(name);
+        assertNotNull("the hand-off must carry " + name, value);
+        return String.valueOf(value);
+    }
+
+    private static long longExtra(android.content.Intent handoff, String name) {
+        Object value = handoff.getExtras() == null ? null : handoff.getExtras().get(name);
+        assertNotNull("the hand-off must carry " + name, value);
+        assertTrue(name + " must be handed over as a number, not " + value,
+                value instanceof Number);
+        return ((Number) value).longValue();
+    }
+
+    /** The APK the private installer was handed, resolved from the
+     *  explicit path extra. That installer reads the file itself, so the
+     *  path must name a real file inside the app's own cache. */
+    private File handedApk(org.robolectric.shadows.ShadowActivity.IntentForResult launch)
+            throws Exception {
+        File apk = new File(stringExtra(launch.intent, EXTRA_APK_PATH)).getCanonicalFile();
+        File cache = appContext.getCacheDir().getCanonicalFile();
+        assertTrue("the handed APK must live under the app cache: " + apk
+                        + " (cache " + cache + ")",
+                apk.getPath().startsWith(cache.getPath() + File.separator));
+        assertTrue("the handed APK must exist: " + apk, apk.isFile());
+        return apk;
     }
 
     private long readInstalledVersionCodeViaPm() throws Exception {

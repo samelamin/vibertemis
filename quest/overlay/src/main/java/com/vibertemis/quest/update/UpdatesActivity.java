@@ -9,7 +9,6 @@ import android.provider.Settings;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.*;
-import androidx.core.content.FileProvider;
 import com.limelight.R;
 import java.io.*;
 import java.security.MessageDigest;
@@ -22,8 +21,17 @@ import java.util.List;
  * installer: the tap pins an immutable {@link Attempt} (release,
  * versionCode, APK digest, signed metadata bytes), downloads the APK
  * when the verified cache is not already an exact match, verifies it,
- * and opens the OS installer. There is no second in-app Install tap and
- * Android's own permission / install consent prompts are untouched.
+ * and hands it to a private {@link SessionInstallActivity}, which owns
+ * the Android install session from there. There is no second in-app
+ * Install tap and Android's own permission / install consent prompts are
+ * untouched.
+ *
+ * <p>When nothing is advertised yet, the same single tap owns the
+ * metadata check instead of stopping at a "nothing to do" screen: it
+ * forces or joins one check, and whatever that exact check produced is
+ * what gets pinned and installed, still without a second tap. A check
+ * that finds nothing renders the ordinary up-to-date notice, and a
+ * check that fails is an ordinary Retryable failure.
  *
  * <p>State ownership:
  * <ul>
@@ -45,13 +53,37 @@ import java.util.List;
  *
  * <p>Trust is unchanged: the pinned digest gates every byte we keep,
  * the archive must match this package / versionCode, the signer must
- * equal the installed signer, and the APK is handed over through the
- * {@link UpdateFileProvider} content URI. A cached APK that fails an
- * integrity check is purged so the next attempt downloads fresh bytes;
- * a verified cache survives Cancel, a denial, and any failure that is
- * not evidence of corruption (a live VR session, for instance).
+ * equal the installed signer, and the release-bound copy is handed over
+ * as a file path that the session re-verifies from this app's own update
+ * cache and commits through a {@code PackageInstaller} session. A cached
+ * APK that fails an integrity check is purged so the next attempt
+ * downloads fresh bytes; a verified cache survives Cancel, a denial, and
+ * any failure that is not evidence of corruption (a live VR session, for
+ * instance).
  */
 public final class UpdatesActivity extends Activity {
+
+    /**
+     * Intent flag the launch hub sets when the user asks for an update
+     * rather than merely for this screen. It is consumed exactly once,
+     * so neither a configuration change nor a later resume can replay
+     * an explicit request that has already been acted on (or that the
+     * user cancelled).
+     */
+    public static final String EXTRA_REQUEST_UPDATE = "user_request_update";
+
+    /**
+     * Label of the branch where one tap checks and, when the check
+     * finds a release, installs it without a second tap. The existing
+     * "Check" string resource still names the metadata-only
+     * background check, and resources are read-only here, so the
+     * combined action names itself inline instead.
+     */
+    private static final String UPDATE_LABEL = "Update";
+
+    /** How long an explicit tap waits for the check it owns before
+     *  calling the wait a failure the user can Retry. */
+    private static final long EXPLICIT_CHECK_TIMEOUT_MS = 120_000L;
 
     /**
      * Request codes must fit the lower 16 bits Android accepts, and
@@ -81,8 +113,9 @@ public final class UpdatesActivity extends Activity {
         /** An operation is running, VR is live, or the update service
          *  is unavailable: the button is disabled. */
         NONE,
-        /** Nothing is advertised and nothing is cached: the user can
-         *  force a metadata check. */
+        /** Nothing is advertised and nothing is cached: the one tap
+         *  owns a forced metadata check and installs whatever that
+         *  check finds, so the user never needs a second tap. */
         CHECK,
         /** A newer release is advertised or its verified APK is cached:
          *  one tap downloads (if needed), verifies, and opens the
@@ -160,6 +193,28 @@ public final class UpdatesActivity extends Activity {
     }
 
     /**
+     * One explicit Update tap that owns a metadata check: the exact
+     * flight it requested or joined, and the generation that owns the
+     * tap.
+     *
+     * <p>Ownership is the only authority to pin a target out of a
+     * completed check. A tap is a new object, so a second tap, a Cancel
+     * and a Destroy all retire the first one simply by ceasing to be
+     * {@link UpdatesActivity#ownedCheck}: the flight itself is never
+     * cancelled (it is shared app state), it just stops being able to
+     * install anything.
+     */
+    private static final class ExplicitCheck {
+        final UpdateRepository.InFlight flight;
+        final int generation;
+
+        ExplicitCheck(UpdateRepository.InFlight flight, int generation) {
+            this.flight = flight;
+            this.generation = generation;
+        }
+    }
+
+    /**
      * The single outstanding hand-off to the OS. It records the exact
      * request code the launch used, so a result is only ever accepted
      * for the launch it answers: a result that arrives for an earlier
@@ -191,6 +246,10 @@ public final class UpdatesActivity extends Activity {
         /** Set only by a result carrying this record's own request code. */
         boolean resultReceived;
         int resultCode;
+        /** What the install session reported about its own outcome, when it
+         *  reported anything usable; a mapped install status, or null. */
+        String resultNotice;
+        int resultStatus = -1;
 
         SystemHandoff(int phase, int requestCode, Attempt attempt) {
             this.phase = phase;
@@ -207,10 +266,14 @@ public final class UpdatesActivity extends Activity {
                     && attempt.sameTargetAs(live);
         }
 
-        /** Record a result that matched this exact launch. */
-        void recordResult(int code) {
+        /** Record a result that matched this exact launch. The code alone
+         *  never decides anything: a result code is read here, only ever
+         *  as the reason a version still has not advanced. */
+        void recordResult(int code, Intent data) {
             this.resultReceived = true;
             this.resultCode = code;
+            this.resultNotice = SessionInstallActivity.reasonFor(data);
+            this.resultStatus = SessionInstallActivity.statusFor(data);
         }
     }
 
@@ -250,6 +313,17 @@ public final class UpdatesActivity extends Activity {
      *  continuation; this holds it until onResume. UI-owned. */
     private Attempt queuedContinuation;
     private boolean continuationQueued;
+    /** True when the queued continuation has not run yet and must
+     *  still pin-and-install, rather than hand the already-verified
+     *  bytes to the installer. */
+    private boolean continuationIsUpdate;
+    /** The check an explicit tap owns, or null. While it is set the
+     *  flow is a tap's, not a background check's, so Cancel stays
+     *  available before any attempt exists. */
+    private ExplicitCheck ownedCheck;
+    /** A launch that asked for an update; taken on the first resume
+     *  and never replayed. */
+    private boolean pendingExplicitUpdate;
 
     /** The action the primary button is currently bound to. */
     private volatile PrimaryAction boundPrimaryAction = PrimaryAction.NONE;
@@ -373,8 +447,28 @@ public final class UpdatesActivity extends Activity {
 
         setContentView(scroll);
 
+        pendingExplicitUpdate = consumeUpdateRequest(saved);
+
         refreshInstalledVersionView();
         acquireRepository();
+    }
+
+    /**
+     * Read the explicit-update request and clear it from both the
+     * intent and the restored bundle. Removing it from the intent is
+     * what stops a configuration change — which keeps the same intent —
+     * from replaying a tap that has already been acted on; clearing the
+     * bundle covers a restore that does not carry the intent. Opening
+     * the screen without the flag leaves the metadata-only automatic
+     * check exactly as it was.
+     */
+    private boolean consumeUpdateRequest(Bundle saved) {
+        Intent i = getIntent();
+        boolean fromIntent = i != null && i.getBooleanExtra(EXTRA_REQUEST_UPDATE, false);
+        boolean fromState = saved != null && saved.getBoolean(EXTRA_REQUEST_UPDATE, false);
+        if (i != null) i.removeExtra(EXTRA_REQUEST_UPDATE);
+        if (saved != null) saved.remove(EXTRA_REQUEST_UPDATE);
+        return fromIntent || fromState;
     }
 
     private LinearLayout.LayoutParams lp(int w, int h, int t, int l, int r, int b) {
@@ -439,7 +533,7 @@ public final class UpdatesActivity extends Activity {
         actionError = null;
         lastFailedKind = null;
         render();
-        if (repository.shouldRunByThrottle(false)) triggerCheck(false);
+        if (repository.shouldRunByThrottle(false)) triggerBackgroundCheck();
     }
 
     private static String firstErrorOr(String fallback) {
@@ -473,6 +567,19 @@ public final class UpdatesActivity extends Activity {
     Attempt offeredAttempt() {
         UpdateRepository.Snapshot snap = current == null
                 ? (repository == null ? null : repository.snapshot()) : current;
+        return offeredAttempt(snap);
+    }
+
+    /**
+     * The release this exact snapshot would have the primary action
+     * act on.
+     *
+     * <p>An explicit tap that owns a check pins out of the snapshot
+     * that check completed with, not out of the mutable current one:
+     * a check published in the meantime must not retarget the tap that
+     * is already committed to installing something.
+     */
+    Attempt offeredAttempt(UpdateRepository.Snapshot snap) {
         if (snap == null) return null;
         long installed = installedVersion();
 
@@ -528,6 +635,14 @@ public final class UpdatesActivity extends Activity {
         // while this rests, so metadata published meanwhile cannot pull
         // the tap away from the pinned release.
         if (stage == Stage.INSTALLER_UNCONFIRMED) return PrimaryAction.RETRY_UNCONFIRMED;
+        if (stage == Stage.CHECKING && ownedCheck == null) {
+            // A background check is running and no tap owns it, so the
+            // one button stays live: a tap either installs what is
+            // already offered or joins the very flight in the air and
+            // installs what that flight finds. It is the same single
+            // action, so the label does not change.
+            return offeredAttempt() != null ? PrimaryAction.UPDATE : PrimaryAction.CHECK;
+        }
         if (stage != Stage.IDLE) return PrimaryAction.NONE;
         if (isLiveVrRunning()) return PrimaryAction.NONE;
         if (actionError != null) return PrimaryAction.RETRY;
@@ -547,7 +662,7 @@ public final class UpdatesActivity extends Activity {
         if (action == PrimaryAction.NONE) {
             // Disabled. Keep naming the pinned release while a stage
             // runs so the label matches the work in flight.
-            label = pinned != null ? updateLabel : getString(R.string.upd_action_check);
+            label = pinned != null ? updateLabel : UPDATE_LABEL;
             enabled = false;
         } else if (action == PrimaryAction.RETRY) {
             label = getString(R.string.upd_action_retry);
@@ -562,7 +677,7 @@ public final class UpdatesActivity extends Activity {
             label = updateLabel;
             enabled = true;
         } else {
-            label = getString(R.string.upd_action_check);
+            label = UPDATE_LABEL;
             enabled = true;
         }
         primary.setText(label);
@@ -579,7 +694,7 @@ public final class UpdatesActivity extends Activity {
 
     private String offeredAttemptLabel() {
         Attempt offered = offeredAttempt();
-        return offered == null ? getString(R.string.upd_action_check)
+        return offered == null ? UPDATE_LABEL
                 : getString(R.string.upd_action_update, offered.version());
     }
 
@@ -679,7 +794,8 @@ public final class UpdatesActivity extends Activity {
     private void dispatchPrimaryAction(PrimaryAction action, String failedKind) {
         switch (action) {
             case CHECK:
-                triggerCheck(true);
+                // One tap: force the check and install what it finds.
+                requestUpdate();
                 break;
             case UPDATE:
                 startUpdate();
@@ -690,14 +806,13 @@ public final class UpdatesActivity extends Activity {
             case RETRY:
                 // Retry re-runs the operation that failed. A failed
                 // update retries the pinned update itself; a failed
-                // (or unavailable) check re-runs the check.
+                // (or unavailable) check re-runs the check AND goes on
+                // to install whatever that check finds, so a successful
+                // retry never costs the user a second tap.
                 if (!"check".equals(failedKind) && offeredAttempt() != null) {
                     startUpdate();
-                } else if (repository == null) {
-                    acquireRepository();
-                    if (repository != null) triggerCheck(true);
                 } else {
-                    triggerCheck(true);
+                    requestUpdate();
                 }
                 break;
             case NONE:
@@ -758,8 +873,13 @@ public final class UpdatesActivity extends Activity {
         Attempt pinned = attempt;
         attempt = null;
         if (pinned != null) pinned.cancel();
+        // A check a tap owned loses that ownership here: the flight is
+        // shared app state and keeps running, but it can no longer pin
+        // a target or install anything on this screen's behalf.
+        ownedCheck = null;
         queuedContinuation = null;
         continuationQueued = false;
+        continuationIsUpdate = false;
         handoff = null;
         awaitingPermission = false;
         dismissPermissionDialog();
@@ -793,12 +913,15 @@ public final class UpdatesActivity extends Activity {
 
     /**
      * Cancel stays available for the whole pre-handoff window: while
+     * the check a tap owns is still in the air (there is no attempt to
+     * cancel yet, but the tap is still owed an install), while
      * downloading, while verifying, and while the hand-off itself is
      * being prepared (including the source-permission dialog). Once
      * the OS owns the screen the attempt is no longer ours to cancel,
      * so the button retires.
      */
     boolean isCancelAvailable() {
+        if (ownedCheck != null) return true;
         if (stage == Stage.IDLE || stage == Stage.AWAITING_SYSTEM
                 || stage == Stage.INSTALLER_UNCONFIRMED) return false;
         return attempt != null;
@@ -832,7 +955,14 @@ public final class UpdatesActivity extends Activity {
     //  Check
     // ------------------------------------------------------------------
 
-    private void triggerCheck(boolean force) {
+    /**
+     * The background automatic check. It is metadata-only by
+     * construction: throttled, skipped while VR is live, and never
+     * carrying a target, so it can never install anything. A user's own
+     * tap goes through {@link #requestUpdate()} instead, which forces
+     * the check and owns its result.
+     */
+    private void triggerBackgroundCheck() {
         if (stage != Stage.IDLE) return;
         if (repository == null) {
             // The provider may have failed during cold-start; a
@@ -846,7 +976,7 @@ public final class UpdatesActivity extends Activity {
                 return;
             }
         }
-        if (!force && isLiveVrRunning()) {
+        if (isLiveVrRunning()) {
             render();
             return;
         }
@@ -855,7 +985,7 @@ public final class UpdatesActivity extends Activity {
         stage = Stage.CHECKING;
         render();
 
-        final UpdateRepository.InFlight inflight = repository.requestCheck(force);
+        final UpdateRepository.InFlight inflight = repository.requestCheck(false);
         if (inflight == null) {
             stage = Stage.IDLE;
             render();
@@ -866,8 +996,10 @@ public final class UpdatesActivity extends Activity {
             if (destroyed) return;
             publishToUi(() -> {
                 // A metadata check never installs and never retargets
-                // a pinned update: it only ends its own stage.
-                if (stage == Stage.CHECKING) stage = Stage.IDLE;
+                // a pinned update: it only ends its own stage, and
+                // never one a tap has taken over by joining this very
+                // flight.
+                if (stage == Stage.CHECKING && ownedCheck == null) stage = Stage.IDLE;
                 render();
             });
         }, "UpdatesActivityCheckWaiter");
@@ -876,27 +1008,163 @@ public final class UpdatesActivity extends Activity {
     }
 
     // ------------------------------------------------------------------
+    //  One-click update: check, then install what the check found
+    // ------------------------------------------------------------------
+
+    /**
+     * The single explicit Update tap, with nothing offered to install
+     * yet. The tap owns a metadata check: it requests one, or joins the
+     * one already in the air, and the completion is what pins the
+     * target and starts the install — so the user is never asked for a
+     * second tap.
+     *
+     * <p>The tap is a generation like any other attempt: it supersedes
+     * an earlier tap that was still waiting, and Cancel or Destroy
+     * retires it, which is why ownership lives in a fresh
+     * {@link ExplicitCheck} object rather than in a flag.
+     */
+    private void requestUpdate() {
+        if (stage != Stage.IDLE && stage != Stage.CHECKING) return;
+        if (repository == null) {
+            // The provider may have failed during cold-start; a
+            // subsequent get() can succeed, so re-acquire before
+            // giving up on the check.
+            acquireRepository();
+            if (repository == null) {
+                actionError = firstErrorOr("Update service unavailable");
+                lastFailedKind = "check";
+                render();
+                return;
+            }
+        }
+        clearTerminalState();
+
+        UpdateRepository.InFlight flight;
+        try {
+            // requestCheck coalesces, so a background check already in
+            // the air is joined rather than duplicated (and is bumped
+            // to forced, so the throttle cannot silently skip it).
+            flight = repository.requestCheck(true);
+        } catch (RuntimeException e) {
+            actionError = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+            lastFailedKind = "check";
+            render();
+            return;
+        }
+        if (flight == null) {
+            render();
+            return;
+        }
+        final ExplicitCheck req = new ExplicitCheck(flight, ++generationCounter);
+        ownedCheck = req;
+        stage = Stage.CHECKING;
+        render();
+
+        Thread waiter = new Thread(() -> {
+            try { req.flight.await(EXPLICIT_CHECK_TIMEOUT_MS); }
+            catch (InterruptedException ignored) { return; }
+            if (destroyed) return;
+            publishToUi(() -> onExplicitCheckComplete(req));
+        }, "UpdatesActivityUpdateCheck");
+        waiter.setDaemon(true);
+        waiter.start();
+    }
+
+    /**
+     * The check a tap owned has finished. Ownership is re-checked here,
+     * because the tap may have been cancelled, superseded or destroyed
+     * while the flight was in the air, and a retired tap must install
+     * nothing.
+     *
+     * <p>Completion — not the snapshot's {@code checking} flag — is the
+     * authority on what happened: the repository completes the flight
+     * and only afterwards clears {@code checking}, so a completed
+     * snapshot legitimately still says it is checking. Reading that
+     * flag would report "checking" for a check that is over.
+     */
+    private void onExplicitCheckComplete(ExplicitCheck req) {
+        if (req == null || ownedCheck != req || destroyed) return;
+        ownedCheck = null;
+
+        UpdateRepository.InFlight flight = req.flight;
+        if (!flight.isCompleted()) {
+            // Timed out rather than failed, but the tap it owed an
+            // install for cannot be delivered, so it ends as a failed
+            // check the user can Retry.
+            stage = Stage.IDLE;
+            actionError = "Update check did not finish in time";
+            lastFailedKind = "check";
+            render();
+            return;
+        }
+        Throwable failure = flight.failure();
+        if (failure != null) {
+            stage = Stage.IDLE;
+            actionError = failure.getMessage() == null
+                    ? failure.getClass().getSimpleName() : failure.getMessage();
+            lastFailedKind = "check";
+            render();
+            return;
+        }
+        // Pin out of THIS flight's snapshot. The repository keeps
+        // running and may already have published something newer, but
+        // the target this tap owns is the one its own check produced.
+        Attempt offered = offeredAttempt(flight.result());
+        if (offered == null) {
+            // Nothing newer: the ordinary up-to-date notice, rendered
+            // from the repository exactly as it always was.
+            stage = Stage.IDLE;
+            render();
+            return;
+        }
+        startUpdate(offered);
+    }
+
+    // ------------------------------------------------------------------
     //  Update (download -> verify -> installer, automatically)
     // ------------------------------------------------------------------
 
     private void startUpdate() {
-        if (stage != Stage.IDLE) return;
+        if (stage != Stage.IDLE && stage != Stage.CHECKING) return;
         Attempt offered = offeredAttempt();
         if (offered == null) {
-            // Nothing is offered yet (first run). Fall back to a
-            // check rather than pretending there is something to
-            // install.
-            triggerCheck(true);
+            // Nothing is offered yet (first run). The same tap owns a
+            // check and installs what that check finds, rather than
+            // ending at a "nothing to do" screen that would need a
+            // second tap.
+            requestUpdate();
             return;
         }
+        startUpdate(offered);
+    }
+
+    /**
+     * Pin {@code proposed} to a fresh generation and run the existing
+     * download, verify and installer flow on it.
+     *
+     * <p>While paused the target is pinned but the work is not started:
+     * the resume continues this exact attempt, so a completion that
+     * lands off-screen can neither be lost nor retargeted by whatever
+     * the next check publishes.
+     */
+    private void startUpdate(Attempt proposed) {
+        if (proposed == null || destroyed) return;
+        if (stage != Stage.IDLE && stage != Stage.CHECKING) return;
         clearTerminalState();
-        Attempt pinned = new Attempt(offered.manifest, offered.manifestBytes,
-                offered.signatureBytes, offered.cachedApk, ++generationCounter);
+        Attempt pinned = new Attempt(proposed.manifest, proposed.manifestBytes,
+                proposed.signatureBytes, proposed.cachedApk, ++generationCounter);
         attempt = pinned;
         handedToSystem = false;
         awaitingPermission = false;
         handoff = null;
         stage = pinned.hasCachedApk() ? Stage.VERIFYING : Stage.DOWNLOADING;
+        if (!resumed) {
+            queuedContinuation = pinned;
+            continuationQueued = true;
+            continuationIsUpdate = true;
+            render();
+            return;
+        }
         render();
 
         if (pinned.hasCachedApk()) {
@@ -906,6 +1174,15 @@ public final class UpdatesActivity extends Activity {
         } else {
             launchDownloadWorker(pinned);
         }
+    }
+
+    /** Continue a pinned attempt that was waiting for a resume. The
+     *  cached-bytes path still goes through verification: a queued
+     *  install continuation has not verified anything yet. */
+    private void resumePinnedUpdate(Attempt pinned) {
+        if (!attemptIsActive(pinned)) return;
+        if (pinned.hasCachedApk()) launchInstallWorker(pinned);
+        else launchDownloadWorker(pinned);
     }
 
     /**
@@ -1078,6 +1355,7 @@ public final class UpdatesActivity extends Activity {
         if (!resumed) {
             queuedContinuation = pinned;
             continuationQueued = true;
+            continuationIsUpdate = false;
             return;
         }
         dispatchInstaller(pinned);
@@ -1194,7 +1472,10 @@ public final class UpdatesActivity extends Activity {
         }
     }
 
-    /** Feed the release-bound verified APK to the OS installer. */
+    /** Hand the release-bound verified APK to the install session. The
+     *  file stays in this app's own update cache: the session re-verifies
+     *  exactly this release and commits it to Android from there, so
+     *  nothing that arrives later can change what gets installed. */
     private void handOffToInstaller(Attempt pinned) throws IOException {
         File apk = pinned.cachedApk;
         if (apk == null || !apk.isFile()) throw new IOException("Verified update file is missing");
@@ -1204,11 +1485,9 @@ public final class UpdatesActivity extends Activity {
             // make the result impossible to attribute.
             throw new IOException("No request code available for the installer hand-off");
         }
-        Uri uri = FileProvider.getUriForFile(this, getPackageName() + ".updates", apk);
-        Intent intent = new Intent(Intent.ACTION_INSTALL_PACKAGE)
-                .setDataAndType(uri, "application/vnd.android.package-archive")
-                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                .putExtra(Intent.EXTRA_RETURN_RESULT, true);
+        Intent intent = SessionInstallActivity.newIntent(this, apk.getAbsolutePath(),
+                pinned.manifest.packageName, pinned.manifest.versionCode,
+                pinned.manifest.bytes, pinned.manifest.sha256);
         handedToSystem = true;
         awaitingPermission = false;
         handoff = new SystemHandoff(SystemHandoff.AWAITING_INSTALLER, requestCode, pinned);
@@ -1352,18 +1631,34 @@ public final class UpdatesActivity extends Activity {
         }
         // A verification that completed while paused continues exactly
         // once, from the very stage it left, and only for the still
-        // active attempt.
+        // active attempt. A pin made by a tap that owns a check
+        // continues too, and from its own stage: it starts the work,
+        // it does not hand unverified bytes to the installer.
         if (continuationQueued && queuedContinuation != null) {
             Attempt queued = queuedContinuation;
+            boolean startsUpdate = continuationIsUpdate;
             queuedContinuation = null;
             continuationQueued = false;
-            if (attemptIsActive(queued) && stage == Stage.VERIFYING) {
-                dispatchInstaller(queued);
+            continuationIsUpdate = false;
+            if (attemptIsActive(queued)) {
+                if (startsUpdate) resumePinnedUpdate(queued);
+                else if (stage == Stage.VERIFYING) dispatchInstaller(queued);
             }
+        }
+        if (pendingExplicitUpdate) {
+            // The launch asked for an update. Take that request now,
+            // once: the flag was consumed at create, so nothing can
+            // replay it, and a request whose check was cancelled
+            // inherits no authority to install.
+            pendingExplicitUpdate = false;
+            if (repository == null) acquireRepository();
+            requestUpdate();
+            render();
+            return;
         }
         if (stage == Stage.IDLE) {
             if (repository == null) acquireRepository();
-            if (repository != null) triggerCheck(false);
+            if (repository != null) triggerBackgroundCheck();
             render();
         }
     }
@@ -1419,13 +1714,36 @@ public final class UpdatesActivity extends Activity {
         if (pending.resultReceived) {
             handoff = null;
             invalidateAttempt();
-            resultNotice = "Update " + pinned.version() + " was not installed. The verified download "
-                    + "was kept — tap Update to try again.";
+            resultNotice = failedNotice(pending, pinned);
             return;
         }
         // No answer from Android: unknown, not failed.
         stage = Stage.INSTALLER_UNCONFIRMED;
         render();
+    }
+
+    /**
+     * Why an attempt that came back from the install session did not
+     * install. The session's own short reason is used when it reported
+     * one, so a refusal Android actually explained is not flattened into
+     * a generic sentence; a result that said nothing keeps the generic
+     * wording. {@code RESULT_OK} never reaches here on its own: the
+     * installed version has already been checked and has not advanced.
+     *
+     * <p>Only a reported install status is named as a failure. Anything
+     * else is shown as what the session could actually say, so an outcome
+     * it could not prove is not turned into a claim it never made.
+     */
+    private String failedNotice(SystemHandoff pending, Attempt pinned) {
+        String reason = pending.resultNotice;
+        if (reason == null || reason.isEmpty()) {
+            return "Update " + pinned.version() + " was not installed. The verified download "
+                    + "was kept — tap Update to try again.";
+        }
+        String lead = pending.resultStatus > 0
+                ? "Update " + pinned.version() + " failed: "
+                : "Update " + pinned.version() + " — ";
+        return lead + reason + ". The verified download was kept — tap Update to try again.";
     }
 
     @Override protected void onPause() {
@@ -1453,7 +1771,7 @@ public final class UpdatesActivity extends Activity {
         if (pending.requestCode == SystemHandoff.NO_REQUEST) return;
         if (request != pending.requestCode) return;
         if (!pending.describes(attempt)) return;
-        pending.recordResult(result);
+        pending.recordResult(result, data);
         if (!resumed) return;
         settleHandoff(pending);
     }
