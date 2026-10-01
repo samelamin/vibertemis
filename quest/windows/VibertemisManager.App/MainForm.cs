@@ -1,27 +1,26 @@
 // Main form for the Vibertemis Manager host application.
 //
-// Layout (top to bottom):
-//   - Readiness header. One line, prominent. Tells the owner the
-//     actual posture: ready / setup needed / pending approval /
-//     receiving off. Never claims setup done because the
-//     companion merely started.
-//   - Prerequisite rows: shown only when Steam, SteamVR or the
-//     VC++ runtime are missing. Hidden entirely when everything
-//     is in place so the form stays quiet.
-//   - Primary action row: one button at most. "Set up VR" while
-//     prerequisites are missing; "Pair headset" once ready but
-//     receiving is off; "Start" / "Stop" while receiving is on.
-//   - Advanced container. Real content (network adapter / Refresh,
-//     Open Dashboard, Export pairing, receiving management —
-//     Pause 1 hour / Resume / Turn off / Forget — diagnostics,
-//     update actions). The container is collapsed by default.
-//   - Pairing request panel: bottom-docked ABOVE the footer so
-//     the code label and decision buttons stay mounted in place
-//     while the upper rows wrap at DPI scaling. Approve / Reject
-//     stay usable even when Advanced is collapsed. The instruction
-//     "Compare the code on your Quest." sits outside the buttons.
-//   - Footer (bottom): collapsed activity log + update status +
-//     version.
+// Layout (top to bottom inside one autosized, scrolling root):
+//   - Readiness header. Prominent, always mounted. States the actual
+//     posture: ready / setup needed / receiving off / paused / pending
+//     approval, plus the last failed owner action. It never claims setup
+//     is done because the companion merely started.
+//   - Request card. Only while a Quest is actually waiting: the code,
+//     the countdown, and Approve / Reject / Hide. While it is on screen
+//     it is the first control under the header and the prerequisite and
+//     primary rows step aside, so a pending decision is never competing
+//     with unrelated buttons. With no request there is no card, and the
+//     idle posture stays on the header where it already lived.
+//   - Prerequisite rows: shown only when Steam, SteamVR or the VC++
+//     runtime are missing, hidden entirely when everything is in place.
+//   - Primary action row: one prominent button at most. "Set up VR"
+//     while prerequisites are missing; "Pair headset" once the host
+//     runs; "Start" / "Stop" while the host is stopped.
+//   - Advanced disclosure: adapter / Refresh, Open Dashboard, Export
+//     pairing, receiving management (Pause 1 hour / Resume / Turn off
+//     / Forget), Retry setup, Start with Windows. Collapsed by default.
+//   - Footer (bottom-docked, outside the scroll host): collapsed activity
+//     log + update status + version.
 //
 // Callback invariants preserved:
 //   - Setup Network Access shells the elevated helper with
@@ -142,7 +141,7 @@ public sealed partial class MainForm : Form
     private readonly ListBox _lstStatus = new();
     private readonly Label _lblVersion = new();
 
-    // UI containers (kept as fields so ApplyApprovalModel can
+    // UI containers (kept as fields so the render paths can
     // hide / show whole groups without iterating Controls).
     private TableLayoutPanel _prereqPanel = null!;
     private FlowLayoutPanel _primaryRow = null!;
@@ -150,6 +149,10 @@ public sealed partial class MainForm : Form
     private Panel _logHost = null!;
     private TableLayoutPanel _rootContent = null!;
     private Panel _scrollHost = null!;
+    // True while the request card owns the screen. The prerequisite and
+    // primary rows step aside for it and are restored by re-running the
+    // real readiness probes, never by restoring a cached guess.
+    private bool _requestDominates;
 
     private UserSettings _settings = new();
     private bool _shownFirstTimeTrayHint;
@@ -159,10 +162,14 @@ public sealed partial class MainForm : Form
     {
         _svc = svc;
         Text = "VibertemisVR Host Manager";
-        Width = 720;
-        Height = 700;
+        Width = 760;
+        Height = 580;
         StartPosition = FormStartPosition.CenterScreen;
-        MinimumSize = new Size(640, 620);
+        // Small enough that the disclosures are both on screen at rest,
+        // large enough that the request code fits without scrolling. A
+        // taller body is reached through the scroll host, never by
+        // refusing to let the owner shrink the window.
+        MinimumSize = new Size(560, 440);
         UiTheme.ApplyForm(this);
 
         InitializeReceivingUx();
@@ -184,9 +191,9 @@ public sealed partial class MainForm : Form
 
     private void BuildLayout()
     {
-        // WinForms reserves docked bottom panels in reverse
-        // z-order: declare them first, then let the scroll host
-        // fill the remaining visible space.
+        // WinForms docks from the last added control backwards, so the
+        // footer is declared first and the scroll host last: the scroll
+        // host then fills whatever the footer leaves.
 
         // Footer: collapsed activity log + update status + version.
         var footer = new TableLayoutPanel
@@ -208,15 +215,15 @@ public sealed partial class MainForm : Form
             AutoScroll = true,
             BorderStyle = BorderStyle.FixedSingle,
             BackColor = SystemColors.Control,
-            MinimumSize = new Size(0, 88),
-            MaximumSize = new Size(0, 140),
         };
         _lstStatus.Dock = DockStyle.Fill;
         _lstStatus.HorizontalScrollbar = true;
         _lstStatus.IntegralHeight = false;
         _lstStatus.BorderStyle = BorderStyle.None;
         _logHost.Controls.Add(_lstStatus);
-        logExpander.InnerPanel.Controls.Add(_logHost);
+        // A fixed short body: the log is a reference, not a page. The
+        // row height is in logical units and scales with the display.
+        logExpander.AddBodyRow(_logHost, fixedLogicalHeight: 96);
         footer.Controls.Add(logExpander, 0, 0);
 
         // Update status line + action row.
@@ -262,9 +269,10 @@ public sealed partial class MainForm : Form
         versionRow.Controls.Add(_lblVersion);
         footer.Controls.Add(versionRow, 0, 3);
 
-        // Scroll host: header, prerequisites, primary action,
-        // advanced container. Header and primary stay visible
-        // above the approval panel; advanced + log collapse.
+        // Scroll host: readiness header, request card, prerequisites,
+        // primary action, advanced disclosure. Everything the owner can
+        // act on lives in here so an expanded Advanced can never push
+        // the last row out of reach.
         _scrollHost = new Panel
         {
             Dock = DockStyle.Fill,
@@ -275,13 +283,13 @@ public sealed partial class MainForm : Form
         {
             Dock = DockStyle.Top,
             ColumnCount = 1,
-            RowCount = 4,
+            RowCount = 5,
             Padding = UiTheme.OuterPadding,
             AutoSize = true,
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
         };
         _rootContent.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        for (var i = 0; i < 4; i++) _rootContent.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        for (var i = 0; i < 5; i++) _rootContent.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
         // Header row: title + readiness status + next action.
         var header = new FlowLayoutPanel
@@ -299,12 +307,15 @@ public sealed partial class MainForm : Form
             AutoSize = true,
             Margin = new Padding(0, 0, 0, 4),
         };
+        // The two readiness lines wrap to whatever width is actually
+        // available (see UpdateRootMaximumSize). A hard pixel cap would
+        // truncate them at 150% DPI or in a narrow window.
         _lblHeader.AutoSize = true;
-        _lblHeader.MaximumSize = new Size(640, 0);
+        _lblHeader.AutoEllipsis = true;
         _lblHeader.Margin = new Padding(0, 0, 0, 2);
         _lblHeader.Text = "Host ready: checking...";
         _lblSubStatus.AutoSize = true;
-        _lblSubStatus.MaximumSize = new Size(640, 0);
+        _lblSubStatus.AutoEllipsis = true;
         _lblSubStatus.Margin = new Padding(0, 0, 0, 8);
         _lblSubStatus.Text = "";
         header.Controls.Add(title);
@@ -313,7 +324,10 @@ public sealed partial class MainForm : Form
         _rootContent.Controls.Add(header, 0, 0);
 
         // Prerequisite panel: visible only when at least one of
-        // Steam / SteamVR / VC++ runtime is missing.
+        // Steam / SteamVR / VC++ runtime is missing. The label column
+        // sizes to its text and the button column takes the rest, so a
+        // larger body font or a 150% DPI window widens the labels
+        // instead of clipping them into an unreadable 220 px strip.
         _prereqPanel = new TableLayoutPanel
         {
             Visible = false,
@@ -324,25 +338,28 @@ public sealed partial class MainForm : Form
             AutoSize = true,
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
         };
-        _prereqPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 220));
+        _prereqPanel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         _prereqPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         for (var i = 0; i < 3; i++) _prereqPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
         _lblSteam.Text = "Steam install: checking...";
         _lblSteam.AutoSize = true;
-        _lblSteam.MaximumSize = new Size(220, 0);
+        _lblSteam.AutoEllipsis = true;
+        _lblSteam.Margin = new Padding(0, 4, 12, 4);
         _btnOpenSteamPage.Text = "Get Steam";
         UiTheme.ApplyButton(_btnOpenSteamPage, UiTheme.ButtonRole.Demoted);
         _btnOpenSteamPage.Enabled = false;
         _lblSteamVr.Text = "SteamVR install: checking...";
         _lblSteamVr.AutoSize = true;
-        _lblSteamVr.MaximumSize = new Size(220, 0);
+        _lblSteamVr.AutoEllipsis = true;
+        _lblSteamVr.Margin = new Padding(0, 4, 12, 4);
         _btnInstallSteamVr.Text = "Install SteamVR";
         UiTheme.ApplyButton(_btnInstallSteamVr, UiTheme.ButtonRole.Demoted);
         _btnInstallSteamVr.Enabled = false;
         _lblVcRedist.Text = "VC++ runtime: checking...";
         _lblVcRedist.AutoSize = true;
-        _lblVcRedist.MaximumSize = new Size(220, 0);
+        _lblVcRedist.AutoEllipsis = true;
+        _lblVcRedist.Margin = new Padding(0, 4, 12, 4);
         _btnVcRedistPage.Text = "Install runtime";
         UiTheme.ApplyButton(_btnVcRedistPage, UiTheme.ButtonRole.Demoted);
 
@@ -358,7 +375,7 @@ public sealed partial class MainForm : Form
             button.AutoSize = true;
             button.Margin = new Padding(0, 4, 0, 4);
         }
-        _rootContent.Controls.Add(_prereqPanel, 0, 1);
+        _rootContent.Controls.Add(_prereqPanel, 0, 2);
 
         // Primary action row: at most one prominent button, with the
         // pairing entry demoted beside it.
@@ -383,39 +400,68 @@ public sealed partial class MainForm : Form
         _btnCompanionToggle.Enabled = false;
         _btnCompanionToggle.Visible = false;
         _primaryRow.Controls.AddRange(new Control[] { _btnSetupNetwork, _btnCompanionToggle, _btnPairHeadset });
-        _rootContent.Controls.Add(_primaryRow, 0, 2);
+        _rootContent.Controls.Add(_primaryRow, 0, 3);
+
+        // The request card sits directly under the readiness header. A
+        // pending Quest is the only thing the owner can act on, so it
+        // must be the first control on screen instead of a strip pinned
+        // to the bottom of the window, where a long readiness line or a
+        // 150% DPI window could push it off the viewport.
+        _rootContent.Controls.Add(_panelApproval, 0, 1);
 
         // Advanced container: real secondary controls. Collapsed
         // by default. Management (Pause / Resume / Turn off /
         // Forget) lives here, not at the bottom of the form.
         _advanced = new ExpanderLikePanel { Text = "Advanced" };
-        var adv = _advanced.InnerPanel;
-        adv.Controls.Add(BuildAdvancedAdapterRow());
-        adv.Controls.Add(BuildAdvancedHostRow());
-        adv.Controls.Add(BuildAdvancedPairingRow());
-        adv.Controls.Add(BuildAdvancedManualSetupRow());
-        adv.Controls.Add(BuildAdvancedDiagnosticsRow());
-        adv.Controls.Add(BuildAdvancedAutoStartRow());
-        _advanced.ExpandedChanged += (_, _) => RefreshAdvancedEnabledState();
-        _rootContent.Controls.Add(_advanced, 0, 3);
+        _advanced.AddBodyRow(BuildAdvancedAdapterRow());
+        _advanced.AddBodyRow(BuildAdvancedHostRow());
+        _advanced.AddBodyRow(BuildAdvancedPairingRow());
+        _advanced.AddBodyRow(BuildAdvancedManualSetupRow());
+        _advanced.AddBodyRow(BuildAdvancedDiagnosticsRow());
+        _advanced.AddBodyRow(BuildAdvancedAutoStartRow());
+        _advanced.ExpandedChanged += OnAdvancedExpandedChanged;
+        _rootContent.Controls.Add(_advanced, 0, 4);
 
         _scrollHost.Controls.Add(_rootContent);
 
-        // Re-pin the root panel to the scroll host width so a
-        // long line wraps rather than horizontally scrolling the
-        // root. The MaximumSize.Width is the host client width
-        // minus the vertical scroll bar (when shown).
+        // Re-pin the root panel to the scroll host width so a long line
+        // wraps rather than horizontally scrolling the root.
         _rootContent.MinimumSize = new Size(0, 0);
         _scrollHost.Resize += (_, _) => UpdateRootMaximumSize();
         UpdateRootMaximumSize();
 
-        // Z-order (WinForms paints the FIRST inserted panel first
-        // and docks later layers on top): footer at the bottom,
-        // then the approval panel (above footer), then the scroll
-        // host fills the remaining area.
+        // The scroll host is the only content layer: the footer docks
+        // under it and the request card lives inside the scrolling root.
         Controls.Add(_scrollHost);
-        Controls.Add(_panelApproval);
         Controls.Add(footer);
+    }
+
+    // Expanding Advanced reveals content below the fold, so bring the
+    // body into view rather than leaving the owner to find it. Focus is
+    // deliberately left alone: an expansion must never move the caret
+    // to a decision button.
+    private void OnAdvancedExpandedChanged(object? sender, EventArgs e)
+    {
+        RefreshAdvancedEnabledState();
+        if (_advanced.Expanded) RevealInScrollHost(_advanced);
+        else if (!_requestDominates) ScrollRootToTop();
+    }
+
+    // Brings a control into view inside the root scroll host. A card
+    // that appears off-screen is indistinguishable from no card.
+    private void RevealInScrollHost(Control control)
+    {
+        if (control is null || !control.Visible || _scrollHost is null) return;
+        if (_scrollHost.ClientSize.Width <= 0) return;
+        try { _scrollHost.ScrollControlIntoView(control); }
+        catch (InvalidOperationException) { }
+    }
+
+    private void ScrollRootToTop()
+    {
+        if (_scrollHost is null) return;
+        try { if (_scrollHost.AutoScrollPosition != Point.Empty) _scrollHost.AutoScrollPosition = Point.Empty; }
+        catch (InvalidOperationException) { }
     }
 
     private FlowLayoutPanel BuildAdvancedAdapterRow()
@@ -510,10 +556,9 @@ public sealed partial class MainForm : Form
 
     private FlowLayoutPanel BuildAdvancedDiagnosticsRow()
     {
-        // Receiving management lives here so the bottom-docked
-        // approval panel stays clean (Approve / Reject / Hide
-        // only while a request is on screen). The labels for
-        // these affordances are preserved.
+        // Receiving management lives here, so the request card only ever
+        // carries the one decision it exists for: the code and
+        // Approve / Reject / Hide.
         var row = new FlowLayoutPanel
         {
             FlowDirection = FlowDirection.LeftToRight,
@@ -554,6 +599,16 @@ public sealed partial class MainForm : Form
         // Single column root: leave the 16 px outer padding visible.
         var max = new Size(width - 32, 0);
         if (_rootContent != null) _rootContent.MaximumSize = max;
+        // The prose lines wrap to the width that is actually available
+        // rather than to a fixed pixel count, so a larger body font, a
+        // 150% DPI window, or a narrow window wraps instead of clipping.
+        // The comparison code is deliberately left uncapped: it is the
+        // one line that must never wrap or be truncated.
+        var textWidth = new Size(Math.Max(120, max.Width), 0);
+        _lblHeader.MaximumSize = textWidth;
+        _lblSubStatus.MaximumSize = textWidth;
+        _lblPanelStatus.MaximumSize = textWidth;
+        _updateStatusLabel.MaximumSize = textWidth;
     }
 
     private void WireEvents()
@@ -635,28 +690,73 @@ public sealed partial class MainForm : Form
         TriggerBackgroundUpdateCheck();
     }
 
+    // An install that did not complete stands in the update footer until
+    // a real update attempt starts. The activity log is collapsed by
+    // default, so a failure that only reached the log was invisible
+    // exactly when it mattered.
+    private string? _priorUpdateNotice;
+    private string? _priorOutcomePath;
+    private DateTime _priorOutcomeStamp;
+    private long _priorOutcomeBytes;
+
+    // Strict success: the outcome file is the only authority, and every
+    // measured value has to agree with this build before the update is
+    // called done.
+    private static bool IsStrictUpdateSuccess(UpdateOutcome outcome)
+        => outcome.Kind == UpdateOutcomeKind.Success
+            && outcome.ExpectedVersion == SignedRelease.CurrentVersion
+            && outcome.InstalledFileVersion == SignedRelease.CurrentVersion
+            && outcome.InstallerExitCode == 0
+            && outcome.VerifyInstallExitCode == 0;
+
     private void SurfacePriorOutcome()
     {
         try
         {
             var path = Program.DefaultOutcomePath();
             if (!File.Exists(path)) return;
+            var info = new FileInfo(path);
             var outcome = UpdateOutcome.TryLoad(path);
-            if (outcome is null) return;
+            if (outcome is null)
+            {
+                LogStatus("Could not read the last update result at " + path + ".");
+                StandPriorUpdateNotice(path, info, RunningNotice(
+                    "The last update result could not be read, so what the last install did is unknown."));
+                return;
+            }
             switch (outcome.Kind)
             {
-                case UpdateOutcomeKind.Success when outcome.ExpectedVersion == SignedRelease.CurrentVersion
-                    && outcome.InstalledFileVersion == SignedRelease.CurrentVersion
-                    && outcome.InstallerExitCode == 0 && outcome.VerifyInstallExitCode == 0:
+                case UpdateOutcomeKind.Success when IsStrictUpdateSuccess(outcome):
                     LogStatus($"Update to {outcome.ExpectedVersion} completed on {outcome.Timestamp.ToLocalTime():yyyy-MM-dd HH:mm}.");
                     if (!string.IsNullOrEmpty(outcome.InstallerLogPath))
                         LogStatus("Installer log: " + outcome.InstallerLogPath);
+                    // A verified success needs no standing notice.
+                    try { File.Move(path, path + ".seen", overwrite: true); } catch { /* keep for retry */ }
                     break;
                 case UpdateOutcomeKind.Success:
+                    // Success reported, but not by a set of measured
+                    // values this build can confirm. The wording never
+                    // names a version it cannot compare, because a
+                    // failed exit or a failed verification can make
+                    // strict success false even when the versions match.
                     LogStatus($"Update needs checking: this manager is {SignedRelease.CurrentVersion}; the requested update was {outcome.ExpectedVersion}.");
+                    StandPriorUpdateNotice(path, info,
+                        "The last update could not be confirmed."
+                        + (string.IsNullOrEmpty(outcome.ExpectedVersion)
+                            || string.Equals(outcome.ExpectedVersion, SignedRelease.CurrentVersion, StringComparison.Ordinal)
+                            ? $" This manager is running {SignedRelease.CurrentVersion}."
+                            : $" This manager is running {SignedRelease.CurrentVersion}, not {outcome.ExpectedVersion}."));
+                    break;
+                case UpdateOutcomeKind.InstallerCanceled:
+                    // A cancelled install is the owner's own action, not
+                    // a failure, and is reported as exactly that.
+                    LogStatus($"Last update to {outcome.ExpectedVersion} was cancelled: {outcome.Detail}");
+                    if (!string.IsNullOrEmpty(outcome.InstallerLogPath))
+                        LogStatus("Installer log: " + outcome.InstallerLogPath);
+                    StandPriorUpdateNotice(path, info, RunningNotice(
+                        $"The last update to {PriorVersion(outcome)} was cancelled before it finished."));
                     break;
                 case UpdateOutcomeKind.InstallerFailed:
-                case UpdateOutcomeKind.InstallerCanceled:
                 case UpdateOutcomeKind.VerificationFailed:
                 case UpdateOutcomeKind.ParentTimeout:
                 case UpdateOutcomeKind.WorkerError:
@@ -664,15 +764,73 @@ public sealed partial class MainForm : Form
                     LogStatus($"Last update to {outcome.ExpectedVersion} failed: {outcome.Detail}");
                     if (!string.IsNullOrEmpty(outcome.InstallerLogPath))
                         LogStatus("Installer log: " + outcome.InstallerLogPath);
+                    StandPriorUpdateNotice(path, info, PriorOutcomeSentence(outcome));
                     break;
             }
-            // Surface once; remove so a later launch starts clean.
-            try { File.Move(path, path + ".seen", overwrite: true); } catch { /* keep for retry */ }
         }
         catch (Exception ex)
         {
             LogStatus("Could not read prior update outcome: " + ex.Message);
         }
+    }
+
+    // The standing notice stays short: the worker's raw detail, exit
+    // codes and installer paths belong in the activity log, which is
+    // where they have always been written.
+    private static string RunningNotice(string lead) =>
+        $"{lead} This manager is running {SignedRelease.CurrentVersion}. See Activity log for details.";
+
+    private static string PriorVersion(UpdateOutcome outcome)
+        => string.IsNullOrEmpty(outcome.ExpectedVersion) ? "the requested release" : outcome.ExpectedVersion;
+
+    // One factual sentence per outcome kind. Nothing here claims the
+    // install was rolled back or left the previous build in place: the
+    // worker does not report that, so the notice must not either.
+    private static string PriorOutcomeSentence(UpdateOutcome outcome) => outcome.Kind switch
+    {
+        UpdateOutcomeKind.VerificationFailed => RunningNotice(
+            "The last update's installation could not be verified."),
+        UpdateOutcomeKind.JobInvalid => RunningNotice(
+            "The last update was rejected as an invalid job, so the installer was never run."),
+        UpdateOutcomeKind.ParentTimeout => RunningNotice(
+            "The last update could not start because the previous manager was still open."),
+        _ => RunningNotice($"The last update to {PriorVersion(outcome)} did not finish."),
+    };
+
+    // Holds the notice and the exact file it came from. The file is
+    // deliberately left in place: the install really did not complete,
+    // so the next launch has to say so again.
+    private void StandPriorUpdateNotice(string path, FileInfo info, string notice)
+    {
+        _priorUpdateNotice = notice;
+        _priorOutcomePath = path;
+        _priorOutcomeStamp = info.LastWriteTimeUtc;
+        _priorOutcomeBytes = info.Length;
+        if (!IsDisposed && !Disposing && IsHandleCreated) RenderUpdateStatusLine(_updateSnapshot);
+    }
+
+    // Called when the flow publishes a real attempt stage. The old notice
+    // is stood down and the exact file read at startup is moved aside -
+    // never a newer one, so a concurrent worker's outcome is untouched.
+    private void AcknowledgePriorUpdateOutcome()
+    {
+        if (_priorUpdateNotice is null && _priorOutcomePath is null) return;
+        var notice = _priorUpdateNotice;
+        var path = _priorOutcomePath;
+        _priorUpdateNotice = null;
+        _priorOutcomePath = null;
+        if (path is not null)
+        {
+            try
+            {
+                var info = new FileInfo(path);
+                if (info.Exists && info.LastWriteTimeUtc == _priorOutcomeStamp && info.Length == _priorOutcomeBytes)
+                    File.Move(path, path + ".seen", overwrite: true);
+            }
+            catch (Exception ex) { LogStatus("Could not clear the previous update result: " + ex.Message); }
+        }
+        if (notice is not null) LogStatus("Previous update result cleared: " + notice);
+        if (!IsDisposed && !Disposing && IsHandleCreated) RenderUpdateStatusLine(_updateSnapshot);
     }
 
     private void OnResize(object? sender, EventArgs e)
@@ -888,17 +1046,17 @@ public sealed partial class MainForm : Form
     private void RefreshPrimaryActionVisibility()
     {
         if (_primaryRow is null) return;
-        // Pending approval dominates: Approve / Reject live in the
-        // bottom approval panel and own the screen while a request
-        // is on screen. Hide every primary-row control so the
-        // owner cannot start a different action in parallel.
-        if (_latestPending is { State: "pending" } pending && !string.IsNullOrEmpty(pending.SessionId))
+        // A pending request owns the screen: its Approve / Reject
+        // decision is the only thing the owner can act on, so the whole
+        // row steps aside instead of offering a parallel action. It
+        // comes back from the real probes below as soon as the request
+        // is resolved or hidden.
+        if (_requestDominates)
         {
-            _btnSetupNetwork.Visible = false;
-            _btnCompanionToggle.Visible = false;
-            _btnPairHeadset.Visible = false;
+            _primaryRow.Visible = false;
             return;
         }
+        _primaryRow.Visible = true;
         bool setupNeeded = IsSetupNeeded();
         bool running = _svc.Companion.IsRunning;
         // Set up VR is the unified setup path: it installs the runtime,
@@ -979,6 +1137,14 @@ public sealed partial class MainForm : Form
     private void RefreshPrereqPanelVisibility()
     {
         if (_prereqPanel is null) return;
+        // Prerequisites are setup instructions, not part of a pairing
+        // decision. They step aside for a pending request and are
+        // re-probed when it resolves.
+        if (_requestDominates)
+        {
+            _prereqPanel.Visible = false;
+            return;
+        }
         bool steamOk = _svc.Steam.Locate().Installed;
         bool steamVrOk = _svc.SteamVr.Discover().SteamVrReady;
         bool runtimeOk = RuntimeReady();
@@ -1356,7 +1522,12 @@ public sealed partial class MainForm : Form
     private void RenderUpdateStatusLine(UpdateRepository.Snapshot s, UpdateFlowState? flow = null)
     {
         flow ??= _updateFlow?.State;
-        string text = UpdateStatusLineRenderer.Render(s, flow);
+        string status = UpdateStatusLineRenderer.Render(s, flow);
+        // A prior install that did not finish is printed above the live
+        // status, not instead of it: the owner needs both the standing
+        // problem and the current state at a glance. The label wraps, so
+        // this stays readable in a narrow window.
+        string text = _priorUpdateNotice is null ? status : _priorUpdateNotice + "\r\n" + status;
         if (_updateStatusLabel.Text != text) _updateStatusLabel.Text = text;
         // Tray notice — only when the form is hidden from the user
         // so a visible window never balloons. HideToTray() (the
@@ -1572,6 +1743,16 @@ public sealed partial class MainForm : Form
             // backwards onto a stage the owner has already left.
             if (_updateFlow is not null && !ReferenceEquals(_updateFlow.State, state)) return;
             _updateBusy = state.Busy;
+            // Only a stage that means the attempt is really moving bytes
+            // or the installer retires the standing notice from the last
+            // attempt. Choosing is deliberately excluded: the coordinator
+            // publishes it before its own busy check, so a click that was
+            // refused did no update work and the previous result is still
+            // the truth about this install. Blocked and Failed are not an
+            // attempt either, and a metadata check never reaches here.
+            if (state.Stage is UpdateFlowStage.Downloading or UpdateFlowStage.Verifying
+                or UpdateFlowStage.HandingOff or UpdateFlowStage.AwaitingSystem)
+                AcknowledgePriorUpdateOutcome();
             if (state.Stage is UpdateFlowStage.Downloading or UpdateFlowStage.Verifying)
                 ApplyUpdateProgress(state);
             RenderUpdateUi();
@@ -1926,17 +2107,60 @@ public static class UpdateHandoff
     }
 }
 
-// Minimal expander-style container used to collapse the
-// secondary management controls (network adapter, dashboard
-// launch, manual export) behind a single disclosure row. This
-// is a tiny purpose-built control because System.Windows.Forms
-// does not ship an Expander; collapsing the secondary rows
-// keeps the approval panel + primary actions visible even when
-// the form is sized near its minimum.
+// Disclosure container for the secondary management controls (network
+// adapter, dashboard launch, manual export, receiving management) and
+// for the activity log. WinForms ships no Expander, so this is a
+// purpose-built control.
+//
+// Sizing is deliberately not automatic. A UserControl that both docks
+// its children and measures itself with AutoSize collapses to a
+// zero-height strip inside an AutoSize table row, which is what made
+// the disclosure itself disappear. Here the panel is a Dock.Top strip
+// whose height is a DPI-scaled toggle row plus the body, and
+// GetPreferredSize reports exactly that.
 public sealed class ExpanderLikePanel : UserControl
 {
-    private readonly CheckBox _toggle = new() { Text = "Advanced", AutoSize = true, Checked = false };
-    private readonly FlowLayoutPanel _inner = new() { Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Visible = false, FlowDirection = FlowDirection.TopDown, WrapContents = true };
+    // A collapsed disclosure must still be a real, clickable, focusable
+    // row. This is a logical height, scaled per display, so a 150% DPI
+    // window gets a taller row instead of a clipped one.
+    private const int MinToggleLogicalHeight = 34;
+
+    // AutoSize is off and the height is ours: a docked AutoSize child
+    // leaves the row height to a font measurement that can collapse.
+    private readonly CheckBox _toggle = new()
+    {
+        Text = "Advanced",
+        AutoSize = false,
+        Dock = DockStyle.Top,
+        TextAlign = ContentAlignment.MiddleLeft,
+    };
+
+    // One control per row. A single-column table gives every row the
+    // full body width, so an expanded Advanced wraps inside a narrow
+    // window instead of running off the side of it.
+    private readonly TableLayoutPanel _inner = new()
+    {
+        Dock = DockStyle.Top,
+        ColumnCount = 1,
+        RowCount = 0,
+        AutoSize = true,
+        AutoSizeMode = AutoSizeMode.GrowAndShrink,
+        GrowStyle = TableLayoutPanelGrowStyle.AddRows,
+        Visible = false,
+        Margin = new Padding(0),
+        Padding = new Padding(2, 0, 0, 0),
+    };
+
+    private int _appliedHeight = -1;
+    private bool _applyingGeometry;
+    // Per body row: the height to hold in logical units, or 0 when the
+    // row grows with its content.
+    private readonly List<int> _fixedRowLogicalHeights = new();
+    // Rows that wrap. Their width is pinned to the body width so an
+    // expanded Advanced reflows inside a narrow window instead of
+    // running off the side of it, whatever the table hands them.
+    private readonly List<Control> _wrappingRows = new();
+
     public Panel InnerPanel => _inner;
     public bool Expanded => _toggle.Checked;
     public event EventHandler? ExpandedChanged;
@@ -1949,19 +2173,104 @@ public sealed class ExpanderLikePanel : UserControl
 
     public ExpanderLikePanel()
     {
-        AutoSize = true;
+        // The parent owns the width (Dock.Top strip); this control owns
+        // its height. No AutoSize on the panel itself, so there is no
+        // measurement loop between it and its container.
+        Dock = DockStyle.Top;
+        AutoSize = false;
         AutoSizeMode = AutoSizeMode.GrowAndShrink;
-        var layout = new TableLayoutPanel { Dock = DockStyle.Top, ColumnCount = 1, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink };
-        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        layout.Controls.Add(_toggle, 0, 0);
-        layout.Controls.Add(_inner, 0, 1);
-        Controls.Add(layout);
+        _inner.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        // Docking runs from the last added control backwards, so the
+        // toggle claims the top strip and the body starts below it.
+        Controls.Add(_inner);
+        Controls.Add(_toggle);
         _toggle.CheckedChanged += (_, _) =>
         {
             _inner.Visible = _toggle.Checked;
+            ApplyGeometry();
             ExpandedChanged?.Invoke(this, EventArgs.Empty);
         };
+        // Body content can change size after the fact: a row that wraps
+        // in a narrower window, a longer status line, a DPI change. Each
+        // of those arrives as a body resize, not as a toggle click.
+        _inner.SizeChanged += (_, _) => ApplyGeometry();
+        DpiChangedAfterParent += (_, _) => { _appliedHeight = -1; ApplyGeometry(); };
+        ApplyGeometry();
     }
+
+    // Appends one full-width row to the body. A row with a fixed logical
+    // height (the activity log host, whose content is a scrolling list)
+    // keeps exactly that height and scales it with the display; every
+    // other row grows with its own content. Rows are added before the
+    // panel is first shown, so an expansion measures real content.
+    public void AddBodyRow(Control row, int fixedLogicalHeight = 0)
+    {
+        ArgumentNullException.ThrowIfNull(row);
+        _fixedRowLogicalHeights.Add(fixedLogicalHeight);
+        _inner.RowStyles.Add(RowStyleFor(fixedLogicalHeight));
+        _inner.Controls.Add(row, 0, _inner.RowCount);
+        _inner.RowCount++;
+        // Anchored to all four edges so the row really fills its cell.
+        row.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Bottom;
+        if (row.AutoSize) _wrappingRows.Add(row);
+        if (Expanded) ApplyGeometry();
+    }
+
+    private RowStyle RowStyleFor(int logicalHeight) => logicalHeight > 0
+        ? new RowStyle(SizeType.Absolute, LogicalToDeviceUnits(logicalHeight))
+        : new RowStyle(SizeType.AutoSize);
+
+    private int ToggleHeight => LogicalToDeviceUnits(Math.Max(MinToggleLogicalHeight, UiTheme.TextHeightLogical() + 8));
+
+    private int BodyHeight
+    {
+        get
+        {
+            if (!_inner.Visible) return 0;
+            // The body is a Dock.Top AutoSize container, so after a
+            // layout pass its own height is the content height. Before
+            // the first pass only the preferred size is meaningful.
+            return Math.Max(_inner.Height, _inner.PreferredSize.Height);
+        }
+    }
+
+    // Single writer for Height and for the body's own geometry. The
+    // guard covers every mutation, because changing a row style or a row
+    // width can raise the body's size change again. Styles are only
+    // written when they are actually wrong, and the height is only
+    // written when it changed, so the cycle settles after one layout.
+    private void ApplyGeometry()
+    {
+        if (_applyingGeometry) return;
+        _applyingGeometry = true;
+        try
+        {
+            for (var i = 0; i < _fixedRowLogicalHeights.Count && i < _inner.RowStyles.Count; i++)
+            {
+                if (_fixedRowLogicalHeights[i] <= 0) continue;
+                var want = RowStyleFor(_fixedRowLogicalHeights[i]);
+                var have = _inner.RowStyles[i];
+                if (have.SizeType == want.SizeType && have.Height == want.Height) continue;
+                _inner.RowStyles[i] = want;
+            }
+            var bodyWidth = _inner.ClientSize.Width;
+            if (bodyWidth > 0)
+                foreach (var row in _wrappingRows)
+                    if (row.MaximumSize.Width != bodyWidth) row.MaximumSize = new Size(bodyWidth, 0);
+            var height = ToggleHeight + BodyHeight;
+            if (height == _appliedHeight) return;
+            _appliedHeight = height;
+            _toggle.Height = ToggleHeight;
+            _toggle.MinimumSize = new Size(0, ToggleHeight);
+            Height = height;
+            // The floor keeps a squeezing parent from clipping the body
+            // back to the toggle row.
+            MinimumSize = new Size(0, height);
+        }
+        finally { _applyingGeometry = false; }
+        PerformLayout();
+    }
+
+    public override Size GetPreferredSize(Size proposedSize)
+        => new(proposedSize.Width, ToggleHeight + BodyHeight);
 }

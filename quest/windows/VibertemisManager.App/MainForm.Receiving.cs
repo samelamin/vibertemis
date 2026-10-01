@@ -49,16 +49,15 @@ public sealed partial class MainForm
         AsOfUtc: DateTime.UtcNow);
 
     private TableLayoutPanel _panelApproval = null!;
-    // _lblHostReady / _lblHostReadyNext are kept as aliases over
-    // the prominent header labels so the controller logic keeps
-    // the same field names; the new quiet header reuses them.
+    // The readiness header owns the quiet posture; these are aliases
+    // over its two prominent labels so the state controller keeps the
+    // same field names.
     private Label _lblHostReady => _lblHeader;
     private Label _lblHostReadyNext => _lblSubStatus;
-    private Label _lblPanelTitle = new() { AutoSize = true, Font = new Font(SystemFonts.MessageBoxFont!, FontStyle.Bold) };
+    private Label _lblPanelTitle = new() { AutoSize = true, Font = UiTheme.SectionFont() };
     private Label _lblPanelCode = new() { AutoSize = true, Font = UiTheme.CodeFont() };
     private Label _lblPanelStatus = new() { AutoSize = true, MaximumSize = new Size(640, 0) };
     private Label _lblPanelExpiry = new() { AutoSize = true };
-    private Label _lblPanelRecovery = new() { AutoSize = true, MaximumSize = new Size(640, 0) };
     private FlowLayoutPanel _panelDecisionRow = null!;
     private Button _btnApprove = new() { Text = "Approve", AutoSize = true, Enabled = false };
     private Button _btnReject = new() { Text = "Reject", AutoSize = true, Enabled = false };
@@ -85,9 +84,10 @@ public sealed partial class MainForm
 
     private void InitializeReceivingUx()
     {
-        // Approve / Reject live in their own row so the
-        // instruction text sits visually above them and the
-        // demoted Hide button trails to the right.
+        // Approve / Reject live in their own row so the code sits above
+        // them and the demoted Hide button trails to the right. No
+        // control here takes focus or acts as a default: the owner has to
+        // read the code on their Quest before deciding.
         _panelDecisionRow = new FlowLayoutPanel
         {
             Dock = DockStyle.Top,
@@ -101,30 +101,30 @@ public sealed partial class MainForm
         UiTheme.ApplyButton(_btnPanelClose, UiTheme.ButtonRole.Demoted);
         _panelDecisionRow.Controls.AddRange(new Control[] { _btnApprove, _btnReject, _btnPanelClose });
 
-        // The bottom-docked panel hosts the dominant pairing
-        // decision (Approve / Reject / Hide). Receiving
-        // management (Pause / Resume / Turn off / Forget) lives
-        // inside Advanced and is reachable without scrolling.
-
+        // The request card is a row of the root scroll content, not a
+        // strip pinned to the bottom of the window: a waiting Quest has
+        // to be the first thing under the readiness header, and the card
+        // is hidden outright when there is no request to answer.
+        // Receiving management (Pause / Resume / Turn off / Forget) lives
+        // in Advanced, so this row only ever carries the one decision.
         _panelApproval = new TableLayoutPanel
         {
             Visible = false,
-            Dock = DockStyle.Bottom,
+            Dock = DockStyle.Top,
             ColumnCount = 1,
-            RowCount = 6,
+            RowCount = 5,
             AutoSize = true,
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
-            Padding = UiTheme.OuterPadding,
+            Padding = UiTheme.CardPadding,
             BorderStyle = BorderStyle.FixedSingle,
         };
         _panelApproval.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        for (var i = 0; i < 6; i++) _panelApproval.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        for (var i = 0; i < 5; i++) _panelApproval.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         _panelApproval.Controls.Add(_lblPanelTitle, 0, 0);
         _panelApproval.Controls.Add(_lblPanelCode, 0, 1);
         _panelApproval.Controls.Add(_lblPanelStatus, 0, 2);
         _panelApproval.Controls.Add(_lblPanelExpiry, 0, 3);
-        _panelApproval.Controls.Add(_lblPanelRecovery, 0, 4);
-        _panelApproval.Controls.Add(_panelDecisionRow, 0, 5);
+        _panelApproval.Controls.Add(_panelDecisionRow, 0, 4);
     }
 
     private void StartReceivingCoordinator()
@@ -211,8 +211,11 @@ public sealed partial class MainForm
         // it outranks even a stale action error.
         if (s.State == "pending" && !string.IsNullOrEmpty(s.SessionId))
         {
-            status = "Host ready: a Quest is waiting for approval. Compare the code, then Approve or Reject.";
-            action = "Next action: click Approve only when the code matches every character on your Quest.";
+            // The card right below carries the code and the decision.
+            // This line only names the posture and points at it, so the
+            // same instruction is not printed twice on screen.
+            status = "Host ready: a Quest is waiting for approval.";
+            action = "Next action: compare the code in the card below with your Quest, then Approve or Reject.";
         }
         // An action that already failed stays on screen. The activity
         // log is collapsed by default, so a failure reported only to
@@ -485,52 +488,59 @@ public sealed partial class MainForm
 
     private void ApplyApprovalModel(ApprovalPanelModel model)
     {
-        if (_panelApproval.Visible != model.PanelVisible)
-        {
-            _panelApproval.Visible = model.PanelVisible;
-        }
-        // The request-specific rows (title/code/status/expiry/recovery)
-        // hide when the controller says no request is on screen.
-        // The action row stays visible so management controls are
-        // reachable.
+        // The card exists only for a request the owner has to answer:
+        // title, code, status (which also carries an action error), the
+        // countdown, and the three decision buttons. The idle postures
+        // (receiving off, paused, waiting) already have a home on the
+        // readiness header, so rendering them here as well only
+        // duplicated the same sentence twice on screen.
         bool requestRows = model.RequestPaneVisible;
+        bool cardVisible = model.PanelVisible && requestRows;
+        bool wasVisible = _panelApproval.Visible;
+        if (wasVisible != cardVisible) _panelApproval.Visible = cardVisible;
+
+        if (_lblPanelTitle.Text != model.Title) _lblPanelTitle.Text = model.Title;
+        if (_lblPanelCode.Text != model.Code) _lblPanelCode.Text = model.Code;
+        // The controller's recovery line is the follow-up for this exact
+        // request (retry, hide), so it rides with the request it belongs
+        // to. It is never used for the idle posture: that card stays
+        // hidden, and the header already carries the next action.
+        var status = requestRows && !string.IsNullOrEmpty(model.Recovery)
+            ? model.Status + " " + model.Recovery
+            : model.Status;
+        if (_lblPanelStatus.Text != status) _lblPanelStatus.Text = status;
+        if (_lblPanelExpiry.Text != model.Expiry) _lblPanelExpiry.Text = model.Expiry;
         _lblPanelTitle.Visible = requestRows;
         _lblPanelCode.Visible = requestRows;
         _lblPanelStatus.Visible = requestRows;
         _lblPanelExpiry.Visible = requestRows;
-        _lblPanelRecovery.Visible = requestRows;
-        if (requestRows)
-        {
-            if (_lblPanelTitle.Text != model.Title) _lblPanelTitle.Text = model.Title;
-            if (_lblPanelCode.Text != model.Code) _lblPanelCode.Text = model.Code;
-            if (_lblPanelStatus.Text != model.Status) _lblPanelStatus.Text = model.Status;
-            if (_lblPanelExpiry.Text != model.Expiry) _lblPanelExpiry.Text = model.Expiry;
-            if (_lblPanelRecovery.Text != model.Recovery) _lblPanelRecovery.Text = model.Recovery;
-        }
-        else
-        {
-            // Status and recovery are always visible to the user;
-            // they describe the current pairing posture and the
-            // next action the owner can take.
-            if (_lblPanelStatus.Text != model.Status) _lblPanelStatus.Text = model.Status;
-            if (_lblPanelRecovery.Text != model.Recovery) _lblPanelRecovery.Text = model.Recovery;
-            _lblPanelStatus.Visible = true;
-            _lblPanelRecovery.Visible = true;
-        }
         _btnApprove.Visible = requestRows;
         _btnReject.Visible = requestRows;
         _btnPanelClose.Visible = requestRows;
         _btnApprove.Enabled = model.ApproveEnabled;
         _btnReject.Enabled = model.RejectEnabled;
         _btnPanelClose.Enabled = model.HideEnabled;
-        // Management controls live inside the panel so they
-        // stay reachable without opening Advanced, but they are
-        // gated by the controller's enabled flags exactly as
-        // before.
+        // Receiving management lives in Advanced; its enabled state comes
+        // from the same controller model as the decision buttons.
         _btnPause.Enabled = model.PauseEnabled;
         _btnResume.Enabled = model.ResumeEnabled;
         _btnTurnOff.Enabled = model.TurnOffEnabled;
         _btnForgetAll.Enabled = model.ForgetEnabled;
+
+        if (_requestDominates != cardVisible)
+        {
+            _requestDominates = cardVisible;
+            // Both rows come back from a fresh readiness probe, so a
+            // resolved or hidden request restores what the owner actually
+            // needs next instead of a remembered guess.
+            RefreshPrereqPanelVisibility();
+            RefreshPrimaryActionVisibility();
+        }
+        // A card that appears while the owner is scrolled elsewhere in
+        // the root is still a real request. Bring it into view without
+        // taking focus from wherever they were.
+        if (cardVisible && !wasVisible) RevealInScrollHost(_panelApproval);
+
         if (model.Kind is ApprovalKind.Pending or ApprovalKind.ActionError or ApprovalKind.PendingBusy)
             _expiryTimer.Start();
         else

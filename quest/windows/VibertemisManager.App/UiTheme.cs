@@ -1,3 +1,4 @@
+using System;
 using System.Drawing;
 using System.Windows.Forms;
 
@@ -9,11 +10,28 @@ internal static class UiTheme
     public static readonly Color AccentText = Color.White;
 
     public static readonly Padding OuterPadding = new(16, 16, 16, 16);
+    public static readonly Padding CardPadding = new(12, 10, 12, 10);
     public static readonly Padding SectionPadding = new(0, 0, 0, 8);
     public static readonly Padding RowPadding = new(0, 4, 0, 4);
 
-    public static Font HeaderFont() => new(SystemFonts.MessageBoxFont!, FontStyle.Bold);
-    public static Font CodeFont() => new("Consolas", 22f, FontStyle.Bold);
+    // One instance per role, shared by every control that asks for it.
+    // Body text is 10.5 pt rather than the system default so the window
+    // stays readable without the owner enlarging it, and Windows DPI
+    // scaling has room to work from there.
+    private static readonly FontFamily UiFontFamily = SystemFonts.MessageBoxFont?.FontFamily ?? FontFamily.GenericSansSerif;
+    private static readonly Font Body = new(UiFontFamily, 10.5f);
+    private static readonly Font Heading = new(UiFontFamily, 13f, FontStyle.Bold);
+    private static readonly Font SectionHeading = new(UiFontFamily, 11f, FontStyle.Bold);
+    private static readonly Font Code = new("Consolas", 22f, FontStyle.Bold);
+
+    public static Font BodyFont() => Body;
+    public static Font HeaderFont() => Heading;
+    public static Font SectionFont() => SectionHeading;
+    public static Font CodeFont() => Code;
+
+    // Height of one body line measured at 96 DPI, so a caller can size a
+    // control in logical units and let the form's DPI scaling apply it.
+    public static int TextHeightLogical() => (int)Math.Ceiling(Body.GetHeight(96f));
 
     public enum ButtonRole { Primary, Secondary, Demoted }
 
@@ -48,7 +66,9 @@ internal static class UiTheme
 
     public static void ApplyForm(Form form)
     {
-        form.Font = SystemFonts.MessageBoxFont;
+        // Controls inherit this, so body text and buttons are one size
+        // everywhere unless a control deliberately overrides it.
+        form.Font = Body;
         form.AutoScaleMode = AutoScaleMode.Dpi;
     }
 
