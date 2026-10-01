@@ -9,8 +9,8 @@ A single arm64 APK shipping two streaming modes from one launcher.
   tracking on Quest3. The PC host runs the ALVR streamer; this APK is
   the headset client. Hardware behavior on Quest3 is UNTESTED.
 
-APK `vibertemis-quest-preview-0.1.0.10.apk`, package
-`com.vibertemis.quest.preview.debug`, version `0.1.0-quest-preview.10`,
+APK `vibertemis-quest-preview-0.1.0.11.apk`, package
+`com.vibertemis.quest.preview.debug`, version `0.1.0-quest-preview.11`,
 `arm64-v8a` only, `minSdk=26`, `targetSdk=34`. No second ALVR headset
 app — the runtime is bundled inside this APK.
 
@@ -20,7 +20,7 @@ app — the runtime is bundled inside this APK.
    <https://developers.meta.com/horizon/documentation/native/android/mobile-device-setup/>.
 2. Connect over USB and accept the "Allow USB debugging?" prompt on
    the headset.
-3. `adb install -r vibertemis-quest-preview-0.1.0.10.apk`.
+3. `adb install -r vibertemis-quest-preview-0.1.0.11.apk`.
 4. Launch Vibertemis from the headset's app list.
 
 ## Screen mode
@@ -74,7 +74,7 @@ is still required; this is an experimental test build.
 ### Windows host setup
 
 1. Keep your existing **Vibeshine** installation unchanged. Run
-   `VibertemisVR-HostManager-Setup-0.1.0.10.exe` in your normal Windows account.
+   `VibertemisVR-HostManager-Setup-0.1.0.11.exe` in your normal Windows account.
    The per-user wizard installs the manager and matching VR runtime. Screen
    streaming still uses your existing Vibeshine; no fork or update is required.
 2. Open **VibertemisVR Host Manager**, then choose **Set up VR**. It detects the

@@ -121,7 +121,7 @@ try {
 } finally { $env:GOOS = $previousGOOS; $env:GOARCH = $previousGOARCH; Pop-Location }
 
 # Helper must exist before the manager embeds its digest. Both are standalone.
-& dotnet publish "$RepoRoot/quest/installer/network-helper/VibertemisNetworkHelper.csproj" -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:Version=0.1.0.10 -o "$OutRoot/helper"
+& dotnet publish "$RepoRoot/quest/installer/network-helper/VibertemisNetworkHelper.csproj" -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:Version=0.1.0.11 -o "$OutRoot/helper"
 Check-Exit 'Helper publish'
 Copy-Item "$OutRoot/helper/VibertemisNetworkHelper.exe" "$StagingRoot/manager/"
 # Download the official vc_redist.x64.exe from the Microsoft aka.ms redirect
@@ -166,7 +166,7 @@ $entries = @($required | ForEach-Object {
 $resource = "$RepoRoot/quest/windows/VibertemisManager.App/Resources/Integrity/integrity.json"
 New-Item -ItemType Directory -Force -Path (Split-Path $resource) | Out-Null
 [IO.File]::WriteAllText($resource, (ConvertTo-Json -InputObject $entries -Depth 5), [Text.UTF8Encoding]::new($false))
-& dotnet publish "$RepoRoot/quest/windows/VibertemisManager.App/VibertemisManager.App.csproj" -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true -p:Version=0.1.0.10 -o "$OutRoot/manager"
+& dotnet publish "$RepoRoot/quest/windows/VibertemisManager.App/VibertemisManager.App.csproj" -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true -p:Version=0.1.0.11 -o "$OutRoot/manager"
 Check-Exit 'Manager publish'
 Copy-Item "$OutRoot/manager/VibertemisManager.App.exe" "$StagingRoot/manager/"
 # Include redistributable notices for the new host manager and discovery stack.
