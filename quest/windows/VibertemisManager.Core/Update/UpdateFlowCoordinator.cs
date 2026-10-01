@@ -11,6 +11,13 @@
 //        preferring a verified cache only when it holds that same
 //        asset (digest + manifest + signature + cached file), so one
 //        click can never leave two different installs on the machine
+//     -> when the snapshot the click acted on holds no installable
+//        target at all, run the final metadata check as part of the
+//        SAME click (Checking) and pin whatever it returns. That is
+//        what removed the second "check" control: one Update action
+//        now covers "nothing is known yet" through to "Windows is
+//        installing it", with no second tap and no check-then-update
+//        round trip.
 //     -> download, unless the pinned target is already cached
 //     -> re-verify the cached bytes at the execution boundary
 //     -> cross the irreversible handoff boundary
@@ -19,6 +26,25 @@
 // Contract notes that the WinForms layer depends on:
 //   - The target is pinned at click. Newer background metadata may
 //     land at any time and is ignored for the rest of the attempt.
+//   - The click's own final check (Checking) is the ONLY place a
+//     target can come from, and it is pinned once, from that single
+//     returned snapshot. The shared repository check it waits on is
+//     never cancelled by this attempt: a cancel here only invalidates
+//     this attempt's wait, so a background tick, a window activation
+//     or a concurrent owner of the same coalesced check still gets
+//     its answer, and no late result can reach a download, a cache
+//     write, or the worker.
+//   - A check that could not answer is an actionable failure, never
+//     "up to date": the owner asked to update and nothing was
+//     checked. A check that succeeded and found nothing installable
+//     is a normal Idle outcome with a notice, not a failure to
+//     retry.
+//   - Busy (SteamVR / ALVR Dashboard / a pending pairing request)
+//     blocks the INSTALL, not the metadata check: checking is
+//     read-only, so it is never refused for a busy machine. Busy is
+//     checked at the start and rechecked immediately before handoff.
+//     Nothing external is ever stopped for the user; the attempt
+//     reports what to close and keeps the cache.
 //   - Nothing installs itself. The OS consent surface (UAC) plus the
 //     system installer remains the only installation consent; the
 //     user-visible Update click is the in-app authorization.
@@ -44,10 +70,6 @@
 //     because the worker may already have been committed.
 //   - A verified cache survives cancel, busy, and failure. Only a
 //     cache whose bytes fail verification is purged.
-//   - Busy (SteamVR / ALVR Dashboard / a pending pairing request)
-//     blocks the attempt at the start and is rechecked immediately
-//     before handoff. Nothing external is ever stopped for the user;
-//     the attempt reports what to close and keeps the cache.
 //
 // The type is deliberately free of WinForms types: every side
 // effect is an injected delegate, so the whole state machine is
@@ -67,6 +89,14 @@ public enum UpdateFlowStage
     Idle,
     /// <summary>Resolving which release this click targets.</summary>
     Choosing,
+    /// <summary>
+    /// The click found no installable target in the snapshot it acted
+    /// on, so it is running the final metadata check itself. Metadata
+    /// only: nothing is downloaded, cached or installed from here
+    /// until a verified target exists. Busy and cancellable exactly
+    /// like a download, because it holds the single attempt slot.
+    /// </summary>
+    Checking,
     /// <summary>Transport is writing the pinned installer to cache.</summary>
     Downloading,
     /// <summary>Re-hashing cached bytes before the handoff.</summary>
@@ -213,6 +243,7 @@ public sealed class UpdateFlowCoordinator : IDisposable
     private readonly Action<UpdateTarget, string> _recordDownloaded;
     private readonly Action<UpdateTarget> _purgeDownloaded;
     private readonly Func<UpdateTarget, CancellationToken, Task<UpdateHandoffOutcome>> _handoff;
+    private readonly Func<CancellationToken, Task<UpdateRepository.Snapshot>>? _check;
     private readonly object _gate = new();
 
     private CancellationTokenSource? _attempt;
@@ -242,6 +273,14 @@ public sealed class UpdateFlowCoordinator : IDisposable
     /// <summary>Raised for operator-facing log lines.</summary>
     public event Action<string>? Notice;
 
+    /// <summary>
+    /// <paramref name="check"/> is the click's own final metadata
+    /// check, used only when the snapshot the click acted on holds no
+    /// installable target. It is optional so existing call sites keep
+    /// compiling; production always wires it, and without it a click
+    /// that has nothing to install stays an explicit, actionable
+    /// refusal instead of a silent no-op.
+    /// </summary>
     public UpdateFlowCoordinator(
         Func<UpdateRepository.Snapshot> snapshot,
         Func<DashboardBusyReport> busy,
@@ -249,7 +288,8 @@ public sealed class UpdateFlowCoordinator : IDisposable
         Func<UpdateTarget, CancellationToken, IProgress<UpdateProgress>?, Task<string>> download,
         Action<UpdateTarget, string> recordDownloaded,
         Action<UpdateTarget> purgeDownloaded,
-        Func<UpdateTarget, CancellationToken, Task<UpdateHandoffOutcome>> handoff)
+        Func<UpdateTarget, CancellationToken, Task<UpdateHandoffOutcome>> handoff,
+        Func<CancellationToken, Task<UpdateRepository.Snapshot>>? check = null)
     {
         _snapshot = snapshot ?? throw new ArgumentNullException(nameof(snapshot));
         _busy = busy ?? throw new ArgumentNullException(nameof(busy));
@@ -258,6 +298,7 @@ public sealed class UpdateFlowCoordinator : IDisposable
         _recordDownloaded = recordDownloaded ?? throw new ArgumentNullException(nameof(recordDownloaded));
         _purgeDownloaded = purgeDownloaded ?? throw new ArgumentNullException(nameof(purgeDownloaded));
         _handoff = handoff ?? throw new ArgumentNullException(nameof(handoff));
+        _check = check;
     }
 
     public bool IsBusy
@@ -267,7 +308,11 @@ public sealed class UpdateFlowCoordinator : IDisposable
 
     /// <summary>
     /// The single user action. Resolves the target, then runs
-    /// download -> verify -> handoff without further prompts.
+    /// download -> verify -> handoff without further prompts. When the
+    /// snapshot the click acted on has no installable target yet, it
+    /// resolves one itself with a final metadata check, so the owner
+    /// never needs a second control to press and never has to guess
+    /// whether the click did anything.
     /// Returns true when an attempt actually started.
     /// </summary>
     public async Task<bool> StartAsync()
@@ -302,15 +347,23 @@ public sealed class UpdateFlowCoordinator : IDisposable
             }
             if (target is null)
             {
-                Fail(generation, "No verified update is ready to install.", retryable: false);
-                return true;
+                // Nothing installable was known when the owner
+                // clicked. That used to be refused here and pushed onto
+                // a second "check" control, which made one intent cost
+                // two taps and two release lookups. The single action
+                // runs the check itself instead.
+                target = await CheckThenPinAsync(generation, cts.Token).ConfigureAwait(false);
+                if (target is null) return true; // a terminal state is already published
             }
 
             Publish(generation, new UpdateFlowState(UpdateFlowStage.Choosing, target.Version,
                 "Updating to " + target.Version + "…", 0, 0, true, false, true, true));
 
-            // Busy is checked before any work so the user is not made
-            // to wait through a download they cannot finish.
+            // Busy is checked before any download so the user is not
+            // made to wait through bytes they cannot finish. The
+            // metadata check above it is deliberately never refused
+            // for this: it only reads and verifies a signed manifest
+            // and changes nothing on the machine.
             var block = Blocked(cts.Token);
             if (block is not null)
             {
@@ -533,6 +586,117 @@ public sealed class UpdateFlowCoordinator : IDisposable
         // Anything else: newer metadata wins so the owner never
         // installs a stale file while a newer release is on offer.
         return available;
+    }
+
+    /// <summary>
+    /// Runs the click's own final metadata check and pins whatever it
+    /// returns, so one Update action covers a machine that knows
+    /// nothing yet. Returns the pinned target, or null when the
+    /// attempt has already published its own terminal state:
+    /// <list type="bullet">
+    ///   <item>cancelled while the check was in flight - nothing was
+    ///     fetched, cached, downloaded or installed, and the attempt's
+    ///     own cleanup publishes the terminal cancelled state;</item>
+    ///   <item>the check threw or reported a recorded failure - an
+    ///     actionable failure the owner can retry, never "up to
+    ///     date";</item>
+    ///   <item>the check succeeded and found nothing installable - a
+    ///     normal up-to-date outcome, published as Idle with a notice
+    ///     rather than as a failure.</item>
+    /// </list>
+    /// </summary>
+    private async Task<UpdateTarget?> CheckThenPinAsync(long generation, CancellationToken token)
+    {
+        // No check source means this install cannot resolve a target on
+        // demand, so the refusal stays explicit and actionable rather
+        // than becoming a silent no-op the owner cannot explain. It is
+        // decided before anything is published, so a refused click
+        // never shows a Checking stage it is not going to run.
+        var check = _check;
+        if (check is null)
+        {
+            Fail(generation, "No verified update is ready to install, and this manager cannot check for one.", retryable: false);
+            return null;
+        }
+
+        // Published BEFORE the await so the owner sees the step that is
+        // actually running and can cancel it. It holds the attempt slot
+        // and reports Busy/Cancellable exactly like a download does.
+        Publish(generation, new UpdateFlowState(UpdateFlowStage.Checking, null,
+            "Checking for updates\u2026", 0, 0, true, false, true, true));
+
+        UpdateRepository.Snapshot? checkedSnapshot;
+        try
+        {
+            checkedSnapshot = await check(token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // A cancel that landed while the check was in flight owns
+            // the outcome: Fail is a no-op for a cancelled attempt, and
+            // the terminal cancelled state is published once this
+            // attempt has unwound. Without a cancel this is a source
+            // that honoured the token itself, which still changed
+            // nothing on disk.
+            Fail(generation, "Update cancelled before anything was downloaded. Your current installation is unchanged.",
+                retryable: true);
+            return null;
+        }
+        catch (Exception ex)
+        {
+            Fail(generation, "Update check failed: " + ex.Message + ". Nothing was changed.", retryable: true);
+            return null;
+        }
+
+        // The generation is rechecked before anything else. A cancel
+        // that arrived while the check was in flight must never reach a
+        // download, a cache write, or the worker, however late the
+        // check's own answer is.
+        if (IsStale(generation)) return null;
+
+        if (checkedSnapshot is null)
+        {
+            Fail(generation, "Update check did not return a result. Nothing was changed.", retryable: true);
+            return null;
+        }
+
+        // The source could not answer. That is an actionable failure,
+        // not an up-to-date machine: the owner asked to update and
+        // nothing was actually checked, so claiming there is nothing
+        // to install would be a lie about the network state.
+        if (!string.IsNullOrEmpty(checkedSnapshot.LastError))
+        {
+            Fail(generation, "Update check failed: " + checkedSnapshot.LastError
+                + ". Nothing was changed. Check this PC's internet connection, then choose Update again.",
+                retryable: true);
+            return null;
+        }
+
+        UpdateTarget? target;
+        try
+        {
+            // Pinned from the check's own snapshot, exactly once. The
+            // live repository is deliberately not re-read here: that is
+            // what used to let the release drift between stages.
+            target = PinTarget(checkedSnapshot);
+        }
+        catch (Exception ex)
+        {
+            Fail(generation, "Update unavailable: " + ex.Message, retryable: false);
+            return null;
+        }
+        if (target is null)
+        {
+            // The check succeeded and there is nothing installable. This
+            // is the ordinary end of the ladder, so it ends Idle with a
+            // notice instead of a failure the owner is asked to retry.
+            // The persistent status line falls back to the metadata
+            // ladder, which reports the successful check as up to date.
+            Publish(generation, new UpdateFlowState(UpdateFlowStage.Idle, null,
+                "No newer verified update is available right now.", 0, 0, false, true, false, false));
+            return null;
+        }
+        return target;
     }
 
     private async Task<string?> DownloadAsync(UpdateTarget target, long generation, CancellationToken token)

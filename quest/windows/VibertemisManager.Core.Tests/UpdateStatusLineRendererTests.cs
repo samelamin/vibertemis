@@ -46,7 +46,11 @@ public class UpdateStatusLineRendererTests
         var text = UpdateStatusLineRenderer.Render(WithFailure(DateTime.UtcNow, "network unreachable"));
         Assert.Contains("check unavailable", text);
         Assert.Contains("network unreachable", text);
-        Assert.Contains("Check for updates to retry", text);
+        // The retry is the one Update action, so the error copy may not
+        // send the owner looking for a check button that no longer
+        // exists.
+        Assert.Contains("Use Update to retry", text);
+        Assert.DoesNotContain("Check for updates", text);
     }
 
     [Fact]
@@ -178,6 +182,7 @@ public class UpdateStatusLineRendererTests
     }
 
     [Theory]
+    [InlineData(UpdateFlowStage.Checking, "Checking\u2026")]
     [InlineData(UpdateFlowStage.AwaitingSystem, "Installing 0.1.0.10\u2026")]
     [InlineData(UpdateFlowStage.Failed, "Retry update to 0.1.0.10")]
     [InlineData(UpdateFlowStage.Blocked, "Retry update to 0.1.0.10")]
@@ -194,12 +199,14 @@ public class UpdateStatusLineRendererTests
     public void UpdateLabelNamesTheVersionItWillInstallOrFetch()
     {
         Assert.Equal("Update to 0.1.0.10", UpdateStatusLineRenderer.ActionLabel(WithAvailable("0.1.0.10")));
-        Assert.Equal("Check for updates", UpdateStatusLineRenderer.ActionLabel(Empty()));
-        Assert.Equal("Checking…", UpdateStatusLineRenderer.ActionLabel(SnapshotChecking()));
+        // Nothing known yet: still one action, and the click itself
+        // runs the check before it installs anything.
+        Assert.Equal("Update", UpdateStatusLineRenderer.ActionLabel(Empty()));
+        Assert.Equal("Checking\u2026", UpdateStatusLineRenderer.ActionLabel(SnapshotChecking()));
     }
 
     [Fact]
-    public void UpdateLabelOnAVerifiedCacheSaysInstallNotUpdate()
+    public void UpdateLabelOnAVerifiedCacheIsStillTheSingleUpdateAction()
     {
         var dir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "renderer-" + Guid.NewGuid().ToString("N"));
         System.IO.Directory.CreateDirectory(dir);
@@ -212,7 +219,12 @@ public class UpdateStatusLineRendererTests
                 new ReleaseAsset("setup.exe", new Uri("https://example.com/setup.exe"), 8L, "0".PadRight(64, '0')));
             var s = new UpdateRepository.Snapshot(release, null, null, release, null, null, file,
                 DateTime.MinValue, DateTime.MinValue, null, false);
-            Assert.Equal("Install update 0.1.0.10", UpdateStatusLineRenderer.ActionLabel(s));
+            var label = UpdateStatusLineRenderer.ActionLabel(s);
+            Assert.Equal("Update to 0.1.0.10", label);
+            // The click that installs those cached bytes is the same
+            // Update click, so the label must never present an install
+            // as a second step the owner still has to reach.
+            Assert.DoesNotContain("Install", label);
         }
         finally
         {
@@ -220,55 +232,59 @@ public class UpdateStatusLineRendererTests
         }
     }
 
-    // ---- One update action, not two identical ones -------------------
-    // The primary action is contextual, so the secondary manual Check
-    // only earns its place while the primary is doing something else.
+    // ---- Exactly one update action ----------------------------------
+    // There is no separate manual check control any more: the click
+    // that cannot find anything to install checks for itself. So no
+    // label may ever name a first step of two.
 
     [Fact]
-    public void TheManualCheckIsOnlyOfferedWhileThePrimaryActionIsSomethingElse()
+    public void NoStateEverOffersASeparateCheckAction()
     {
-        // Nothing on offer: the primary already says "Check for
-        // updates", so a second button with that label would be a
-        // duplicate rather than a choice.
-        Assert.Equal("Check for updates", UpdateStatusLineRenderer.ActionLabel(Empty()));
-        Assert.True(UpdateStatusLineRenderer.PrimaryIsCheck(Empty()));
-        // An in-flight check owns the primary, so it is not a plain
-        // check to offer alongside.
-        Assert.False(UpdateStatusLineRenderer.PrimaryIsCheck(SnapshotChecking()));
-        // A release on offer moves the primary to installing it.
-        Assert.Equal("Update to 0.1.0.10", UpdateStatusLineRenderer.ActionLabel(WithAvailable("0.1.0.10")));
-        Assert.False(UpdateStatusLineRenderer.PrimaryIsCheck(WithAvailable("0.1.0.10")));
+        // At rest, on offer, mid-check, mid-download, and after a
+        // failure: every one of these is the same single control.
+        var resting = UpdateStatusLineRenderer.ActionLabel(Empty());
+        Assert.Equal("Update", resting);
+        Assert.DoesNotContain("Check for updates", resting);
+
+        var offered = UpdateStatusLineRenderer.ActionLabel(WithAvailable("0.1.0.10"));
+        Assert.DoesNotContain("Check for updates", offered);
+
+        var checking = UpdateStatusLineRenderer.ActionLabel(SnapshotChecking());
+        Assert.Equal("Checking\u2026", checking);
+        Assert.DoesNotContain("Check for updates", checking);
+
+        var failed = new UpdateFlowState(UpdateFlowStage.Failed, null, "network unreachable", 0, 0, false, true, false, false);
+        Assert.Equal("Retry update", UpdateStatusLineRenderer.ActionLabel(Empty(), failed));
+        Assert.DoesNotContain("Check for updates", UpdateStatusLineRenderer.ActionLabel(Empty(), failed));
+
+        var idle = new UpdateFlowState(UpdateFlowStage.Idle, null, null, 0, 0, false, true, false, false);
+        Assert.Equal("Update", UpdateStatusLineRenderer.ActionLabel(Empty(), idle));
     }
 
     [Fact]
-    public void ThePrimaryIsNeverPlainCheckWhileAnAttemptOwnsTheAction()
+    public void AFailedAttemptIsAlwaysOfferedAsARetryOfTheSameAction()
     {
-        var failed = new UpdateFlowState(UpdateFlowStage.Failed, "0.1.0.10", "damaged", 0, 0, false, true, false, false);
-        Assert.False(UpdateStatusLineRenderer.PrimaryIsCheck(Empty(), failed));
+        var busy = new UpdateFlowState(UpdateFlowStage.Blocked, "0.1.0.10",
+            "Close SteamVR and ALVR Dashboard (vrserver.exe), then choose Update again.", 0, 0, false, true, false, false);
+        Assert.Equal("Retry update to 0.1.0.10", UpdateStatusLineRenderer.ActionLabel(Empty(), busy));
+        var failed = new UpdateFlowState(UpdateFlowStage.Failed, "0.1.0.10",
+            "Update check failed: network unreachable.", 0, 0, false, true, false, false);
         Assert.Equal("Retry update to 0.1.0.10", UpdateStatusLineRenderer.ActionLabel(Empty(), failed));
-        Assert.True(UpdateStatusLineRenderer.PrimaryIsCheck(Empty(), UpdateFlowState.Idle));
     }
 
     [Fact]
-    public void AVerifiedCacheMakesInstallTheOnlyPrimaryAction()
+    public void ACheckingAttemptSaysCheckingAndNotAVersion()
     {
-        var release = new SignedRelease(
-            SignedRelease.CurrentSequence + 1, "0.1.0.10", SignedRelease.Protocol,
-            new ReleaseAsset("setup.exe", new Uri("https://example.com/setup.exe"), 8L, "0".PadRight(64, '0')));
-        var file = System.IO.Path.Combine(System.IO.Path.GetTempPath(),
-            "renderer-cache-" + Guid.NewGuid().ToString("N") + ".exe");
-        System.IO.File.WriteAllBytes(file, new byte[8]);
-        try
-        {
-            var cached = new UpdateRepository.Snapshot(release, null, null, release, null, null, file,
-                DateTime.MinValue, DateTime.MinValue, null, false);
-            Assert.False(UpdateStatusLineRenderer.PrimaryIsCheck(cached));
-            Assert.Equal("Install update 0.1.0.10", UpdateStatusLineRenderer.ActionLabel(cached));
-        }
-        finally
-        {
-            try { System.IO.File.Delete(file); } catch { }
-        }
+        // No target is known while the click is resolving one, so the
+        // label must not invent a version.
+        var flow = new UpdateFlowState(UpdateFlowStage.Checking, null,
+            "Checking for updates\u2026", 0, 0, true, false, true, true);
+        Assert.Equal("Checking\u2026", UpdateStatusLineRenderer.ActionLabel(Empty(), flow));
+        Assert.Equal("Update status: Checking for updates\u2026", UpdateStatusLineRenderer.Render(Empty(), flow));
+        // With no message of its own the stage phrase still says it is
+        // checking, which is the honest description of the stage.
+        var bare = new UpdateFlowState(UpdateFlowStage.Checking, null, null, 0, 0, true, false, true, true);
+        Assert.Equal("Update status: checking for updates\u2026", UpdateStatusLineRenderer.Render(Empty(), bare));
     }
 
     private static UpdateRepository.Snapshot SnapshotChecking() => new(

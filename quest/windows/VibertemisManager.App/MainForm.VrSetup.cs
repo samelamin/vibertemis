@@ -21,7 +21,6 @@ public sealed partial class MainForm
         // Setup and an update must not run at the same time; the
         // flow state owns the single update action.
         _btnUpdate.Enabled = false;
-        _btnCheckUpdate.Enabled = false;
         _updateActionLocked = true;
         bool suspended = false;
         try

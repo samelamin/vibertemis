@@ -1,6 +1,7 @@
-// One-click update flow: target pinning, deferred-callback
-// orchestration, cancellation, busy gating, cache retention, and the
-// honest "Windows is doing it now" terminal state.
+// One-click update flow: target pinning, the click's own final
+// metadata check, deferred-callback orchestration, cancellation,
+// busy gating, cache retention, and the honest "Windows is doing it
+// now" terminal state.
 //
 // Every stage is an injected delegate, so these tests drive the real
 // coordinator the WinForms layer uses without a filesystem, a
@@ -101,12 +102,16 @@ public sealed class UpdateFlowCoordinatorTests : IDisposable
     /// A repository stand-in plus every coordinator side effect. The
     /// snapshot is rebuilt from the mutable fields on each read so a
     /// test can publish new metadata exactly like a background check.
+    /// <paramref name="check"/> is the click's own final check: null
+    /// models an install with no check source at all, which is what
+    /// keeps the "nothing to install" refusal reachable.
     /// </summary>
     private Harness New(
         SignedRelease? available = null,
         SignedRelease? downloaded = null,
-        string? downloadedPath = null)
-        => new(_states, _notices)
+        string? downloadedPath = null,
+        Func<CancellationToken, Task<UpdateRepository.Snapshot>>? check = null)
+        => new(_states, _notices, check)
         {
             Available = available,
             Downloaded = downloaded,
@@ -120,6 +125,21 @@ public sealed class UpdateFlowCoordinatorTests : IDisposable
     private static UpdateRepository.Snapshot WithAvailable(SignedRelease release) => new(
         release, new byte[] { 1 }, new byte[] { 2 }, null, null, null, null,
         DateTime.MinValue, DateTime.MinValue, null, false);
+
+    /// <summary>A check that succeeded and found nothing newer.</summary>
+    private static UpdateRepository.Snapshot WithSuccess(DateTime at) => new(
+        null, null, null, null, null, null, null,
+        at, DateTime.MinValue, null, false);
+
+    /// <summary>
+    /// A check that could not answer. The repository keeps whatever it
+    /// already knew and adds the recorded failure, so this can carry a
+    /// previously known release as well.
+    /// </summary>
+    private static UpdateRepository.Snapshot WithError(SignedRelease? known, string error) => new(
+        known, known is null ? null : new byte[] { 1 }, known is null ? null : new byte[] { 2 },
+        null, null, null, null,
+        DateTime.MinValue, DateTime.UtcNow, error, false);
 
     private sealed class Harness
     {
@@ -146,13 +166,28 @@ public sealed class UpdateFlowCoordinatorTests : IDisposable
         public TaskCompletionSource DownloadEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource DownloadRelease = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public CancellationToken LastDownloadToken;
+        public CancellationToken LastCheckToken;
 
         public UpdateFlowCoordinator Flow { get; }
 
-        public Harness(List<UpdateFlowState> states, List<string> notices)
+        public Harness(List<UpdateFlowState> states, List<string> notices,
+            Func<CancellationToken, Task<UpdateRepository.Snapshot>>? check)
         {
             _states = states;
             _notices = notices;
+            // Null means this install has no check source at all, which
+            // is exactly the case the "nothing to install" refusal has
+            // to keep covering.
+            Func<CancellationToken, Task<UpdateRepository.Snapshot>>? wiredCheck = null;
+            if (check is not null)
+            {
+                var source = check;
+                wiredCheck = token =>
+                {
+                    LastCheckToken = token;
+                    return source(token);
+                };
+            }
             Flow = new UpdateFlowCoordinator(
                 snapshot: () => new UpdateRepository.Snapshot(
                     Available, AvailableManifest, AvailableSignature,
@@ -186,7 +221,8 @@ public sealed class UpdateFlowCoordinatorTests : IDisposable
                 {
                     HandedOff.Add(target);
                     return Task.FromResult(HandoffOutcome);
-                });
+                },
+                check: wiredCheck);
             Flow.StateChanged += s => { lock (_states) _states.Add(s); };
             Flow.Notice += n => { lock (_notices) _notices.Add(n); };
         }
@@ -230,6 +266,225 @@ public sealed class UpdateFlowCoordinatorTests : IDisposable
         Assert.Equal(UpdateFlowStage.AwaitingSystem, Last.Stage);
         Assert.DoesNotContain("installed", Last.Message!, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(installed, h.HandedOff[0].CachedFilePath);
+    }
+
+    // ---- One action, from "nothing known" to "Windows is doing it" --
+    // The snapshot the owner clicked had nothing installable in it -
+    // the state a manager is in at launch - and that used to need a
+    // separate "Check for updates" tap before the real click. These
+    // pin the single action end to end.
+
+    [Fact]
+    public async Task OneClickChecksThenDownloadsVerifiesAndHandsOffWithoutASecondTap()
+    {
+        var release = ReleasableWithInstaller(NextVersion, SignedRelease.CurrentSequence + 1);
+        var h = New(check: _ => Task.FromResult(WithAvailable(release)));
+        string? installed = null;
+        h.DownloadBody = (target, _) =>
+        {
+            installed = WriteInstaller(target.Release);
+            return Task.FromResult(installed);
+        };
+
+        Assert.True(await h.Flow.StartAsync());
+
+        Assert.Single(h.Downloads);
+        Assert.Single(h.Recorded);
+        Assert.Single(h.HandedOff);
+        Assert.Equal(NextVersion, h.HandedOff[0].Version);
+        Assert.Equal(installed, h.HandedOff[0].CachedFilePath);
+        // One attempt, one visible sequence: the check is published
+        // before it is awaited, so the owner watches the whole thing.
+        Assert.Equal(new[]
+        {
+            UpdateFlowStage.Checking,
+            UpdateFlowStage.Choosing,
+            UpdateFlowStage.Downloading,
+            UpdateFlowStage.Downloading,
+            UpdateFlowStage.Verifying,
+            UpdateFlowStage.HandingOff,
+            UpdateFlowStage.AwaitingSystem,
+        }, Stages);
+        Assert.Equal(UpdateFlowStage.AwaitingSystem, Last.Stage);
+        // The check is a real stage of a real attempt: it holds the
+        // attempt slot and offers the cancel that can end it.
+        var checking = _states.Single(s => s.Stage == UpdateFlowStage.Checking);
+        Assert.True(checking.Busy);
+        Assert.True(checking.CanCancel);
+        Assert.False(checking.CanRetry);
+        Assert.Contains("Checking", checking.Message!, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task ASuccessfulCheckThatFindsNothingNewerIsAnOrdinaryUpToDateOutcomeNotAFailure()
+    {
+        var h = New(check: _ => Task.FromResult(WithSuccess(DateTime.UtcNow)));
+
+        Assert.True(await h.Flow.StartAsync());
+
+        Assert.Equal(UpdateFlowStage.Idle, Last.Stage);
+        Assert.Equal("No newer verified update is available right now.", Last.Message);
+        Assert.False(Last.Busy);
+        Assert.Empty(h.Downloads);
+        Assert.Empty(h.HandedOff);
+        Assert.Empty(h.Purged);
+        // No failure to retry, and the one action is offered again.
+        Assert.False(h.Flow.IsBusy);
+        Assert.Equal(UpdateFlowStage.Idle, h.Flow.State.Stage);
+    }
+
+    [Fact]
+    public async Task ACheckThatCouldNotAnswerIsAnActionableFailureAndNeverInstalls()
+    {
+        var release = ReleasableWithInstaller(NextVersion, SignedRelease.CurrentSequence + 1);
+        // The failed check's snapshot still carries what the repository
+        // already knew, so "there is a release in here" and "the check
+        // failed" have to be resolved the honest way: report the
+        // failure, install nothing.
+        var h = New(check: _ => Task.FromResult(WithError(release, "network unreachable")));
+        h.DownloadBody = (target, _) => Task.FromResult(WriteInstaller(target.Release));
+
+        Assert.True(await h.Flow.StartAsync());
+
+        Assert.Equal(UpdateFlowStage.Failed, Last.Stage);
+        Assert.Contains("network unreachable", Last.Message!);
+        Assert.Contains("Update again", Last.Message!);
+        Assert.True(Last.CanRetry);
+        Assert.Empty(h.Downloads);
+        Assert.Empty(h.Recorded);
+        Assert.Empty(h.HandedOff);
+        // Nothing was checked, so nothing may claim the machine is
+        // current or that there is simply nothing to install.
+        Assert.DoesNotContain("up to date", Last.Message!, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("nothing to install", Last.Message!, StringComparison.OrdinalIgnoreCase);
+        Assert.False(h.Flow.IsBusy);
+    }
+
+    [Fact]
+    public async Task ACancelDuringTheCheckInstallsNothingEvenWhenTheResultArrivesLate()
+    {
+        var release = ReleasableWithInstaller(NextVersion, SignedRelease.CurrentSequence + 1);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var late = new TaskCompletionSource<UpdateRepository.Snapshot>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        // A source that ignores the token and answers after the fact,
+        // exactly like an uncooperative transport.
+        var h = New(check: _ => { entered.TrySetResult(); return late.Task; });
+        h.DownloadBody = (target, _) => Task.FromResult(WriteInstaller(target.Release));
+
+        var attempt = h.Flow.StartAsync();
+        await entered.Task;
+        Assert.Equal(UpdateFlowStage.Checking, h.Flow.State.Stage);
+        Assert.True(h.Flow.Cancel());
+        late.TrySetResult(WithAvailable(release));
+        await attempt;
+
+        Assert.Empty(h.Downloads);
+        Assert.Empty(h.Recorded);
+        Assert.Empty(h.HandedOff);
+        Assert.Empty(h.Purged);
+        Assert.Equal(UpdateFlowStage.Failed, h.Flow.State.Stage);
+        Assert.Equal(UpdateFlowCoordinator.CancelledMessage, h.Flow.State.Message);
+        Assert.False(h.Flow.IsBusy);
+        Assert.False(h.Flow.State.Busy);
+        Assert.True(h.Flow.State.CanRetry);
+    }
+
+    [Fact]
+    public async Task ASecondTapWhileTheCheckIsInFlightCoalescesIntoOneCheck()
+    {
+        var release = ReleasableWithInstaller(NextVersion, SignedRelease.CurrentSequence + 1);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var gate = new TaskCompletionSource<UpdateRepository.Snapshot>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var checks = 0;
+        var h = New(check: _ =>
+        {
+            Interlocked.Increment(ref checks);
+            entered.TrySetResult();
+            return gate.Task;
+        });
+        h.DownloadBody = (target, _) => Task.FromResult(WriteInstaller(target.Release));
+
+        var first = h.Flow.StartAsync();
+        await entered.Task;
+        // The owner taps again while the check is still running: the
+        // attempt slot is already held, so there is nothing to run.
+        Assert.False(await h.Flow.StartAsync());
+        Assert.Equal(1, Volatile.Read(ref checks));
+
+        gate.TrySetResult(WithAvailable(release));
+        Assert.True(await first);
+
+        Assert.Equal(1, checks);
+        Assert.Single(h.Downloads);
+        Assert.Single(h.HandedOff);
+        Assert.Equal(UpdateFlowStage.AwaitingSystem, Last.Stage);
+    }
+
+    [Fact]
+    public async Task AnAlreadyOfferedTargetIsPinnedImmediatelyAndNeverRunsTheClickCheck()
+    {
+        var offered = ReleasableWithInstaller(NextVersion, SignedRelease.CurrentSequence + 1);
+        var checks = 0;
+        var h = New(available: offered, check: _ =>
+        {
+            Interlocked.Increment(ref checks);
+            return Task.FromResult(WithAvailable(offered));
+        });
+        h.DownloadBody = (target, _) => Task.FromResult(WriteInstaller(target.Release));
+
+        Assert.True(await h.Flow.StartAsync());
+
+        // Something was already on offer when the owner clicked, so the
+        // click pins that target directly: no second lookup, and
+        // therefore no way for the release to drift under the download.
+        Assert.Equal(0, checks);
+        Assert.DoesNotContain(UpdateFlowStage.Checking, Stages);
+        Assert.Single(h.Downloads);
+        Assert.Single(h.HandedOff);
+        Assert.Equal(NextVersion, h.HandedOff[0].Version);
+        Assert.Equal(offered.Windows.Sha256, h.HandedOff[0].Release.Windows.Sha256);
+    }
+
+    [Fact]
+    public async Task ABusyMachineStillRunsTheMetadataCheckButBlocksTheInstall()
+    {
+        var release = ReleasableWithInstaller(NextVersion, SignedRelease.CurrentSequence + 1);
+        var checks = 0;
+        var h = New(check: _ =>
+        {
+            Interlocked.Increment(ref checks);
+            return Task.FromResult(WithAvailable(release));
+        });
+        h.Busy = new DashboardBusyReport(DashboardBusyReason.SteamvrBusy, new[] { "vrserver.exe" });
+        h.DownloadBody = (target, _) => Task.FromResult(WriteInstaller(target.Release));
+
+        Assert.True(await h.Flow.StartAsync());
+
+        // Checking is read-only, so SteamVR running is never a reason
+        // to refuse it: the owner still learns what is on offer. What
+        // it does block is the install itself.
+        Assert.Equal(1, checks);
+        Assert.Contains(UpdateFlowStage.Checking, Stages);
+        Assert.Equal(UpdateFlowStage.Blocked, Last.Stage);
+        Assert.Contains("SteamVR", Last.Message!);
+        Assert.Contains("vrserver.exe", Last.Message!);
+        Assert.True(Last.CanRetry);
+        Assert.Empty(h.Downloads);
+        Assert.Empty(h.HandedOff);
+        Assert.Empty(h.Purged);
+        Assert.False(h.Flow.IsBusy);
+
+        // The same single action installs it once SteamVR is closed.
+        // Nothing was cached by the blocked attempt, so this click
+        // resolves its target with its own check again.
+        h.Busy = DashboardBusyReport.Idle();
+        Assert.True(await h.Flow.StartAsync());
+        Assert.Equal(2, checks);
+        Assert.Single(h.Downloads);
+        Assert.Single(h.HandedOff);
+        Assert.Equal(UpdateFlowStage.AwaitingSystem, Last.Stage);
     }
 
     [Fact]
@@ -604,6 +859,11 @@ public sealed class UpdateFlowCoordinatorTests : IDisposable
     [Fact]
     public async Task NothingToInstallIsReportedWithoutAnAttempt()
     {
+        // No check source at all: an install that cannot resolve a
+        // target on demand. The refusal has to stay explicit and
+        // actionable - never a silent no-op the owner cannot explain,
+        // and never a claim that the machine is up to date when
+        // nothing was checked at all.
         var h = New();
         h.LastSuccess = DateTime.UtcNow;
 
@@ -613,6 +873,12 @@ public sealed class UpdateFlowCoordinatorTests : IDisposable
         Assert.Empty(h.Downloads);
         Assert.Empty(h.HandedOff);
         Assert.False(Last.CanRetry);
+        Assert.Contains("Update", Last.Message!, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("cannot check", Last.Message!);
+        Assert.DoesNotContain("up to date", Last.Message!, StringComparison.OrdinalIgnoreCase);
+        // A refused click never claims to be checking, because nothing
+        // was going to run.
+        Assert.DoesNotContain(UpdateFlowStage.Checking, Stages);
     }
 
     [Fact]

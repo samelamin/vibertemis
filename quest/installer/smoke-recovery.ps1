@@ -931,9 +931,15 @@ try {
     Assert-FullyOnScreen -Hwnd $restartNotice -Label 'prior update notice after restart' -MinWidth 120 -MinHeight 24
     if (-not (Test-Path $script:priorOutcomePath)) { throw 'The incomplete prior update outcome was discarded' }
     # The standing notice must not take the next update away: the one
-    # update action is present, enabled and pressable.
-    $updateAction = [RecoverySmokeUi]::FindRegexVisible($script:managerProcess.Id, '^(Check for updates|Update to .+|Install update .+|Retry update.*)$')
+    # update action is present, enabled and pressable. There is no
+    # separate "Check for updates" control any more - a click that
+    # finds nothing to install checks for itself - so these are exactly
+    # the at-rest labels of that single action.
+    $updateAction = [RecoverySmokeUi]::FindRegexVisible($script:managerProcess.Id, '^(Update|Update to .+|Retry update.*)$')
     Assert-FullyOnScreen -Hwnd $updateAction -Label 'the single update action' -MinWidth 90 -MinHeight 24
+    if ([RecoverySmokeUi]::FindVisible($script:managerProcess.Id, 'Check for updates') -ne [IntPtr]::Zero) {
+        throw 'A second "Check for updates" control is present beside the single update action'
+    }
 
     # Kill only the exact child owned by this test manager; it must recover.
     $oldId = $script:child.ProcessId
