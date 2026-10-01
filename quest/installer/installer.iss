@@ -44,8 +44,8 @@ Source: "{#MyStagingRoot}\runtime\driver.vrdrivermanifest"; DestDir: "{app}\runt
 Source: "{#MyStagingRoot}\runtime\bin\win64\driver_alvr_server.dll"; DestDir: "{app}\runtime\bin\win64"; Flags: ignoreversion
 Source: "{#MyStagingRoot}\runtime\bin\win64\openvr_api.dll"; DestDir: "{app}\runtime\bin\win64"; Flags: ignoreversion
 Source: "{#MyStagingRoot}\runtime\bin\win64\pyrowave-shared.dll"; DestDir: "{app}\runtime\bin\win64"; Flags: ignoreversion
-Source: "{#MyStagingRoot}\runtime\bin\win64\alvr_server_openvr.pdb"; DestDir: "{app}\runtime\bin\win64"; Flags: ignoreversion
-Source: "{#MyStagingRoot}\runtime\SOURCE.txt"; DestDir: "{app}\runtime"; Flags: ignoreversion
+Source: "{#MyStagingRoot}\runtime\SOURCE_SHA256"; DestDir: "{app}\runtime"; Flags: ignoreversion
+Source: "{#MyStagingRoot}\runtime\SHA256SUMS"; DestDir: "{app}\runtime"; Flags: ignoreversion
 Source: "{#MyStagingRoot}\runtime\licenses\*"; DestDir: "{app}\runtime\licenses"; Flags: ignoreversion recursesubdirs
 
 [Icons]
