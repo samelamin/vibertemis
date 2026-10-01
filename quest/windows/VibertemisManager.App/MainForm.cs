@@ -2348,10 +2348,14 @@ public sealed class ExpanderLikePanel : UserControl
         get
         {
             if (!_inner.Visible) return 0;
-            // The body is a Dock.Top AutoSize container, so after a
-            // layout pass its own height is the content height. Before
-            // the first pass only the preferred size is meaningful.
-            return Math.Max(_inner.Height, _inner.PreferredSize.Height);
+            // The preferred height is the authority here. The body's own
+            // Height is only the leftover of the layout it already has:
+            // it is measured against the current width, but it survives a
+            // re-measure at a different width. Taking the larger of the
+            // two therefore pinned this panel to an obsolete wrapped
+            // height that could never shrink again once the content
+            // reflowed to fewer lines.
+            return _inner.PreferredSize.Height;
         }
     }
 
@@ -2390,6 +2394,37 @@ public sealed class ExpanderLikePanel : UserControl
         }
         finally { _applyingGeometry = false; }
         PerformLayout();
+    }
+
+    // The toggle is a Dock.Top strip, so WinForms is expected to re-dock
+    // it to this panel's client width on every layout pass. It does not:
+    // on a real installed build the toggle was measured 17 px wider than
+    // the parent that actually contained it, after a window resize, after
+    // an expansion, and after the startup checkbox settled - a stale
+    // child dock inside the disclosure, not a stale root viewport. So the
+    // width is re-pinned from this panel's own client area on every pass
+    // and the overflow cannot survive the next layout.
+    //
+    // ClientSize is used as-is: it is already this panel's real client
+    // area, so nothing is deducted for a scrollbar. Any allowance added
+    // here would be a guess, and a guess is what produced the wrong
+    // width in the first place.
+    protected override void OnLayout(LayoutEventArgs e)
+    {
+        base.OnLayout(e);
+        // A layout pass can arrive before the field initializer has
+        // finished (the base UserControl constructor drives layout), so
+        // the toggle is treated as optional here.
+        if (_toggle is null) return;
+        // The same guard ApplyGeometry uses, so a width write can never
+        // re-enter this hook.
+        if (_applyingGeometry) return;
+        // Written only on a real change: an identical width write would
+        // restart layout and cost a pass for nothing.
+        if (_toggle.Width == ClientSize.Width) return;
+        _applyingGeometry = true;
+        try { _toggle.Width = ClientSize.Width; }
+        finally { _applyingGeometry = false; }
     }
 
     public override Size GetPreferredSize(Size proposedSize)
