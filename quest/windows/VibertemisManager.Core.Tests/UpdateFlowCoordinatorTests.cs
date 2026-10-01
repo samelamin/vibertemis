@@ -68,6 +68,36 @@ public sealed class UpdateFlowCoordinatorTests : IDisposable
     }
 
     /// <summary>
+    /// The first candidate a real install could offer: the installed
+    /// reference with its revision advanced. A literal would be wrong
+    /// the moment the installed revision moves, because the flow
+    /// refuses anything that is not strictly newer and would then be
+    /// handed the build that is already running.
+    /// </summary>
+    private static string NextVersion => FutureRevision(1);
+
+    /// <summary>
+    /// The candidate published after <see cref="NextVersion"/>, so a
+    /// check that lands mid-attempt still has somewhere newer to move.
+    /// </summary>
+    private static string LaterVersion => FutureRevision(2);
+
+    /// <summary>
+    /// The installed reference's own major/minor/build, revision moved
+    /// <paramref name="revisionsAhead"/>, rendered as a four-part
+    /// version so the candidate never collapses to a shorter form.
+    /// </summary>
+    private static string FutureRevision(int revisionsAhead)
+    {
+        var installed = new Version(SignedRelease.CurrentVersion);
+        return new Version(
+            installed.Major,
+            installed.Minor,
+            installed.Build,
+            installed.Revision + revisionsAhead).ToString(4);
+    }
+
+    /// <summary>
     /// A repository stand-in plus every coordinator side effect. The
     /// snapshot is rebuilt from the mutable fields on each read so a
     /// test can publish new metadata exactly like a background check.
@@ -168,7 +198,7 @@ public sealed class UpdateFlowCoordinatorTests : IDisposable
     [Fact]
     public async Task OneClickRunsDownloadVerifyThenHandoffWithoutASecondPrompt()
     {
-        var release = ReleasableWithInstaller("0.1.0.10", SignedRelease.CurrentSequence + 1);
+        var release = ReleasableWithInstaller(NextVersion, SignedRelease.CurrentSequence + 1);
         var h = New(available: release);
         string? installed = null;
         h.DownloadBody = (target, _) =>
@@ -185,7 +215,7 @@ public sealed class UpdateFlowCoordinatorTests : IDisposable
         Assert.Single(h.Downloads);
         Assert.Single(h.Recorded);
         Assert.Single(h.HandedOff);
-        Assert.Equal("0.1.0.10", h.HandedOff[0].Version);
+        Assert.Equal(NextVersion, h.HandedOff[0].Version);
         // Exactly one owner-visible attempt, and the second
         // Downloading entry is the real byte tick from the transport.
         Assert.Equal(new[]
@@ -205,7 +235,7 @@ public sealed class UpdateFlowCoordinatorTests : IDisposable
     [Fact]
     public async Task CachedMatchingReleaseSkipsTheDownloadEntirely()
     {
-        var release = ReleasableWithInstaller("0.1.0.10", SignedRelease.CurrentSequence + 1);
+        var release = ReleasableWithInstaller(NextVersion, SignedRelease.CurrentSequence + 1);
         var path = Path.Combine(_dir, release.Windows.Filename);
         var h = New(downloaded: release, downloadedPath: path);
 
@@ -220,7 +250,7 @@ public sealed class UpdateFlowCoordinatorTests : IDisposable
     [Fact]
     public async Task TargetIsPinnedAtClickSoNewerMetadataCannotSwapTheFile()
     {
-        var pinned = ReleasableWithInstaller("0.1.0.10", SignedRelease.CurrentSequence + 1);
+        var pinned = ReleasableWithInstaller(NextVersion, SignedRelease.CurrentSequence + 1);
         var h = New(available: pinned);
         h.DownloadBody = (target, _) => Task.FromResult(WriteInstaller(target.Release));
 
@@ -229,7 +259,7 @@ public sealed class UpdateFlowCoordinatorTests : IDisposable
 
         // A background check publishes a newer release and a newer
         // available manifest mid-attempt.
-        var newer = ReleasableWithInstaller("0.1.0.11", SignedRelease.CurrentSequence + 2);
+        var newer = ReleasableWithInstaller(LaterVersion, SignedRelease.CurrentSequence + 2);
         h.Available = newer;
         h.AvailableManifest = new byte[] { 9 };
         h.AvailableSignature = new byte[] { 9 };
@@ -237,7 +267,7 @@ public sealed class UpdateFlowCoordinatorTests : IDisposable
         await attempt;
 
         Assert.Single(h.HandedOff);
-        Assert.Equal("0.1.0.10", h.HandedOff[0].Version);
+        Assert.Equal(NextVersion, h.HandedOff[0].Version);
         Assert.Equal(pinned.Windows.Sha256, h.HandedOff[0].Release.Windows.Sha256);
         Assert.Equal(new byte[] { 1 }, h.HandedOff[0].ManifestBytes);
     }
@@ -245,7 +275,7 @@ public sealed class UpdateFlowCoordinatorTests : IDisposable
     [Fact]
     public async Task CancelDuringDownloadStopsTheAttemptAndNothingRunsLater()
     {
-        var release = ReleasableWithInstaller("0.1.0.10", SignedRelease.CurrentSequence + 1);
+        var release = ReleasableWithInstaller(NextVersion, SignedRelease.CurrentSequence + 1);
         var h = New(available: release);
         h.DownloadBody = async (target, token) =>
         {
@@ -272,7 +302,7 @@ public sealed class UpdateFlowCoordinatorTests : IDisposable
     [Fact]
     public async Task CancelHoldsTheSlotUntilAnUncooperativeTransportUnwindsAndOnlyThenAllowsARetry()
     {
-        var release = ReleasableWithInstaller("0.1.0.10", SignedRelease.CurrentSequence + 1);
+        var release = ReleasableWithInstaller(NextVersion, SignedRelease.CurrentSequence + 1);
         var h = New(available: release);
         string? slowFile = null;
         // A transport that ignores its cancellation token and keeps
@@ -326,7 +356,7 @@ public sealed class UpdateFlowCoordinatorTests : IDisposable
     {
         // A cached release goes straight to verification, so the cancel
         // races the last pre-handoff stage instead of the download.
-        var release = ReleasableWithInstaller("0.1.0.10", SignedRelease.CurrentSequence + 1);
+        var release = ReleasableWithInstaller(NextVersion, SignedRelease.CurrentSequence + 1);
         var path = Path.Combine(_dir, release.Windows.Filename);
         var h = New(downloaded: release, downloadedPath: path);
         void CancelWhileVerifying(UpdateFlowState state)
@@ -358,7 +388,7 @@ public sealed class UpdateFlowCoordinatorTests : IDisposable
     [Fact]
     public async Task CancelSignalThatUnwindsTheAttemptInlineStillEndsOnATerminalRetryableState()
     {
-        var release = ReleasableWithInstaller("0.1.0.10", SignedRelease.CurrentSequence + 1);
+        var release = ReleasableWithInstaller(NextVersion, SignedRelease.CurrentSequence + 1);
         var h = New(available: release);
         // A transport whose download completes from inside its own
         // cancellation callback, on a task that allows inline
@@ -412,7 +442,7 @@ public sealed class UpdateFlowCoordinatorTests : IDisposable
     [Fact]
     public async Task CancelAfterTheHandoffBoundaryIsRefusedAndClaimsNothing()
     {
-        var release = ReleasableWithInstaller("0.1.0.10", SignedRelease.CurrentSequence + 1);
+        var release = ReleasableWithInstaller(NextVersion, SignedRelease.CurrentSequence + 1);
         var h = New(available: release);
         h.DownloadBody = (target, _) => Task.FromResult(WriteInstaller(target.Release));
         bool boundaryCancelRefused = false;
@@ -449,7 +479,7 @@ public sealed class UpdateFlowCoordinatorTests : IDisposable
     [Fact]
     public async Task BusyMachineBlocksBeforeAnyDownloadAndKeepsTheCache()
     {
-        var release = ReleasableWithInstaller("0.1.0.10", SignedRelease.CurrentSequence + 1);
+        var release = ReleasableWithInstaller(NextVersion, SignedRelease.CurrentSequence + 1);
         var path = Path.Combine(_dir, release.Windows.Filename);
         var h = New(downloaded: release, downloadedPath: path);
         h.Busy = new DashboardBusyReport(DashboardBusyReason.SteamvrBusy, new[] { "vrserver.exe" });
@@ -475,7 +505,7 @@ public sealed class UpdateFlowCoordinatorTests : IDisposable
     [Fact]
     public async Task PendingPairingRequestDefersTheAttemptWithoutLosingTheCache()
     {
-        var release = ReleasableWithInstaller("0.1.0.10", SignedRelease.CurrentSequence + 1);
+        var release = ReleasableWithInstaller(NextVersion, SignedRelease.CurrentSequence + 1);
         var path = Path.Combine(_dir, release.Windows.Filename);
         var h = New(downloaded: release, downloadedPath: path);
         h.BlockReason = "A headset pairing request is waiting for a decision.";
@@ -495,7 +525,7 @@ public sealed class UpdateFlowCoordinatorTests : IDisposable
     [Fact]
     public async Task BusyOnRecheckBeforeHandoffStopsTheInstallAndKeepsTheCache()
     {
-        var release = ReleasableWithInstaller("0.1.0.10", SignedRelease.CurrentSequence + 1);
+        var release = ReleasableWithInstaller(NextVersion, SignedRelease.CurrentSequence + 1);
         var h = New(available: release);
         h.DownloadBody = (target, _) =>
         {
@@ -511,7 +541,7 @@ public sealed class UpdateFlowCoordinatorTests : IDisposable
         Assert.Empty(h.HandedOff);
         Assert.Empty(h.Purged);
         Assert.Single(h.Recorded);
-        Assert.Equal("0.1.0.10", h.Flow.State.Version);
+        Assert.Equal(NextVersion, h.Flow.State.Version);
         Assert.True(File.Exists(h.Recorded[0].CachedFilePath!));
     }
 
@@ -521,7 +551,7 @@ public sealed class UpdateFlowCoordinatorTests : IDisposable
         // Metadata claims the good digest; the bytes on disk are then
         // damaged, so only the execution-boundary re-verify can catch
         // it. That is the case that must purge rather than keep.
-        var release = ReleasableWithInstaller("0.1.0.10", SignedRelease.CurrentSequence + 1);
+        var release = ReleasableWithInstaller(NextVersion, SignedRelease.CurrentSequence + 1);
         var path = Path.Combine(_dir, release.Windows.Filename);
         File.WriteAllBytes(path, Enumerable.Repeat((byte)'Z', (int)release.Windows.Bytes).ToArray());
         var h = New(downloaded: release, downloadedPath: path);
@@ -537,7 +567,7 @@ public sealed class UpdateFlowCoordinatorTests : IDisposable
     [Fact]
     public async Task HandoffFailureKeepsTheVerifiedCacheAndRetrySkipsRedownload()
     {
-        var release = ReleasableWithInstaller("0.1.0.10", SignedRelease.CurrentSequence + 1);
+        var release = ReleasableWithInstaller(NextVersion, SignedRelease.CurrentSequence + 1);
         var h = New(available: release);
         h.DownloadBody = (target, _) => Task.FromResult(WriteInstaller(target.Release));
         // The worker started but never accepted the install signal.
@@ -559,7 +589,7 @@ public sealed class UpdateFlowCoordinatorTests : IDisposable
     [Fact]
     public async Task PermissionRefusalFromWindowsIsAFailureNotASuccess()
     {
-        var release = ReleasableWithInstaller("0.1.0.10", SignedRelease.CurrentSequence + 1);
+        var release = ReleasableWithInstaller(NextVersion, SignedRelease.CurrentSequence + 1);
         var h = New(available: release);
         h.DownloadBody = (target, _) => Task.FromResult(WriteInstaller(target.Release));
         h.HandoffOutcome = UpdateHandoffOutcome.Failed("the installer was declined at the system prompt");
@@ -588,7 +618,7 @@ public sealed class UpdateFlowCoordinatorTests : IDisposable
     [Fact]
     public async Task DisposeCancelsTheInFlightTokenAndTheAttemptFinishesInsteadOfHanging()
     {
-        var release = Release("0.1.0.10", SignedRelease.CurrentSequence + 1);
+        var release = Release(NextVersion, SignedRelease.CurrentSequence + 1);
         var h = New(available: release);
         h.DownloadBody = async (target, token) =>
         {
@@ -619,7 +649,7 @@ public sealed class UpdateFlowCoordinatorTests : IDisposable
     [Fact]
     public async Task ProgressReportsRealBytesAndNeverInventsAVerificationPercent()
     {
-        var release = ReleasableWithInstaller("0.1.0.10", SignedRelease.CurrentSequence + 1, bytes: 4096);
+        var release = ReleasableWithInstaller(NextVersion, SignedRelease.CurrentSequence + 1, bytes: 4096);
         var h = New(available: release);
         h.DownloadBody = (target, _) => Task.FromResult(WriteInstaller(target.Release));
 
@@ -640,7 +670,7 @@ public sealed class UpdateFlowCoordinatorTests : IDisposable
     [Fact]
     public async Task ConcurrentClickWhileAnAttemptIsLiveIsIgnored()
     {
-        var release = Release("0.1.0.10", SignedRelease.CurrentSequence + 1);
+        var release = Release(NextVersion, SignedRelease.CurrentSequence + 1);
         var h = New(available: release);
         h.DownloadBody = async (target, token) =>
         {
@@ -660,10 +690,10 @@ public sealed class UpdateFlowCoordinatorTests : IDisposable
     [Fact]
     public void NewerAvailableMetadataWinsOverAnOlderCache()
     {
-        var cached = Release("0.1.0.10", SignedRelease.CurrentSequence + 1);
+        var cached = Release(NextVersion, SignedRelease.CurrentSequence + 1);
         var path = Path.Combine(_dir, "cached.exe");
         File.WriteAllBytes(path, new byte[16]);
-        var newer = Release("0.1.0.11", SignedRelease.CurrentSequence + 2);
+        var newer = Release(LaterVersion, SignedRelease.CurrentSequence + 2);
         var snap = new UpdateRepository.Snapshot(
             newer, new byte[] { 1 }, new byte[] { 2 },
             cached, new byte[] { 3 }, new byte[] { 4 }, path,
@@ -675,7 +705,7 @@ public sealed class UpdateFlowCoordinatorTests : IDisposable
         // wins, so the owner cannot end up holding two different
         // installers and choosing between them later.
         Assert.NotNull(target);
-        Assert.Equal("0.1.0.11", target!.Version);
+        Assert.Equal(LaterVersion, target!.Version);
         Assert.False(target.HasCachedFile);
         Assert.Equal(new byte[] { 1 }, target.ManifestBytes);
         Assert.Equal(new byte[] { 2 }, target.SignatureBytes);
@@ -684,7 +714,7 @@ public sealed class UpdateFlowCoordinatorTests : IDisposable
     [Fact]
     public async Task ACachedCopyOfTheNewestReleaseIsInstalledWithoutDownloadingAgain()
     {
-        var release = ReleasableWithInstaller("0.1.0.10", SignedRelease.CurrentSequence + 1);
+        var release = ReleasableWithInstaller(NextVersion, SignedRelease.CurrentSequence + 1);
         var path = Path.Combine(_dir, release.Windows.Filename);
         var h = New(available: release, downloaded: release, downloadedPath: path);
 
@@ -699,7 +729,7 @@ public sealed class UpdateFlowCoordinatorTests : IDisposable
     [Fact]
     public void PinnedTargetCopiesTheSignedBytesSoALaterSnapshotMutationCannotReachIt()
     {
-        var release = Release("0.1.0.10", SignedRelease.CurrentSequence + 1);
+        var release = Release(NextVersion, SignedRelease.CurrentSequence + 1);
         var manifest = new byte[] { 1, 2, 3 };
         var signature = new byte[] { 4, 5, 6 };
         var snap = new UpdateRepository.Snapshot(
