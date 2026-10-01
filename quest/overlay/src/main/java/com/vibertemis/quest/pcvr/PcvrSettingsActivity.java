@@ -14,15 +14,28 @@ import java.util.concurrent.Executors;
 /** Small native panel: pairing first, codec choices second; advanced host tuning stays in ALVR. */
 public final class PcvrSettingsActivity extends Activity {
   public static final String EXTRA_MANUAL_PAIRING = "manual_pairing";
+  public static final String EXTRA_FOCUS = "focus_setting";
+  public static final String FOCUS_CODEC = "codec";
+  public static final String FOCUS_BITRATE = "bitrate";
+  public static final int ID_CODEC_GROUP = 720;
+  public static final int ID_HOME_BITRATE = 721;
+  public static final int ID_TRAVEL_BITRATE = 722;
+  public static final int ID_TRAVEL_SWITCH = 723;
+  public static final int ID_PYRO_SWITCH = 724;
+  public static final int ID_MANUAL_COLLAPSE = 725;
   private static final int IMPORT = 604;
   private final ExecutorService worker = Executors.newSingleThreadExecutor();
   private TextView status;
   private PairingStore store;
   private PcvrOptions options;
   private LinearLayout body;
+  private ScrollView scrollView;
+  private RadioGroup codecGroup;
+  private Button homeBitrate;
   private volatile boolean destroyed;
   private AlertDialog pairingDialog;
   private Button forgetButton;
+  private android.view.ViewTreeObserver.OnGlobalLayoutListener pendingFocusLayout;
 
   @Override
   public void onCreate(Bundle state) {
@@ -37,24 +50,23 @@ public final class PcvrSettingsActivity extends Activity {
     root.setOrientation(LinearLayout.VERTICAL);
     Button back = button("Back", () -> finish());
     root.addView(back);
-    ScrollView scroll = new ScrollView(this);
+    scrollView = new ScrollView(this);
     body = new LinearLayout(this);
     body.setOrientation(LinearLayout.VERTICAL);
     int padding = dp(20);
     body.setPadding(padding, padding, padding, padding);
-    scroll.addView(body);
-    root.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
+    scrollView.addView(body);
+    root.addView(scrollView, new LinearLayout.LayoutParams(-1, 0, 1));
     setContentView(root);
     label("PCVR connection", 24);
-    label(
-        "In Windows VR Host Manager, choose Setup VR, then Pair headset. Here, return home and choose Setup VR. Compare the code and approve once on the PC. Vibeshine stays unchanged. Connect starts SteamVR for this headset.",
-        16);
+    label("Choose Setup VR on the home screen. Confirm the matching code on your PC.", 16);
     status = label("Checking pairing…", 16);
     LinearLayout manualPairing = new LinearLayout(this);
     manualPairing.setOrientation(LinearLayout.VERTICAL);
     boolean showManual = getIntent().getBooleanExtra(EXTRA_MANUAL_PAIRING, false);
     manualPairing.setVisibility(showManual ? android.view.View.VISIBLE : android.view.View.GONE);
     Button advanced = button(showManual ? "Hide manual pairing" : "Advanced: manual pairing", () -> {});
+    advanced.setId(ID_MANUAL_COLLAPSE);
     advanced.setOnClickListener(v -> {
       boolean visible = manualPairing.getVisibility() != android.view.View.VISIBLE;
       manualPairing.setVisibility(visible ? android.view.View.VISIBLE : android.view.View.GONE);
@@ -107,9 +119,11 @@ public final class PcvrSettingsActivity extends Activity {
     if (lastCodec != null) label("Last decoded codec: " + lastCodec, 16);
     label("Streaming mode", 20);
     Switch travel = new Switch(this);
+    travel.setId(ID_TRAVEL_SWITCH);
     travel.setText("Travel — use standard codec");
     travel.setMinHeight(dp(56));
     travel.setChecked(options.travel());
+    travel.setLayoutParams(spacedParams());
     body.addView(travel);
     travel.setOnCheckedChangeListener((v, checked) -> options.travel(checked));
     label(
@@ -117,10 +131,12 @@ public final class PcvrSettingsActivity extends Activity {
             + " existing VPN; internet speed alone does not determine latency.",
         16);
     Switch pyro = new Switch(this);
+    pyro.setId(ID_PYRO_SWITCH);
     pyro.setText("PyroWave (experimental)");
     pyro.setMinHeight(dp(56));
     pyro.setChecked(options.pyro());
     pyro.setEnabled(PcvrOptions.PYROWAVE_BUILD);
+    pyro.setLayoutParams(spacedParams());
     body.addView(pyro);
     label(
         PcvrOptions.PYROWAVE_BUILD
@@ -131,6 +147,8 @@ public final class PcvrSettingsActivity extends Activity {
     pyro.setOnCheckedChangeListener((v, checked) -> options.pyro(checked));
     label("Standard codec", 20);
     RadioGroup codecs = new RadioGroup(this);
+    codecGroup = codecs;
+    codecs.setId(ID_CODEC_GROUP);
     String[] titles = {"Auto — keep host preference", "AV1", "HEVC"};
     String[] values = {"auto", "AV1", "Hevc"};
     for (int n = 0; n < values.length; n++) {
@@ -138,6 +156,9 @@ public final class PcvrSettingsActivity extends Activity {
       choice.setId(700 + n);
       choice.setText(titles[n]);
       choice.setMinHeight(dp(56));
+      LinearLayout.LayoutParams choiceParams = new LinearLayout.LayoutParams(-1, -2);
+      choiceParams.bottomMargin = dp(8);
+      choice.setLayoutParams(choiceParams);
       codecs.addView(choice);
       if (values[n].equals(options.standardCodec())) choice.setChecked(true);
     }
@@ -165,10 +186,84 @@ public final class PcvrSettingsActivity extends Activity {
             + " eye-tracking hardware.",
         16);
     worker.execute(this::refreshPairing);
+    focusSetting(getIntent());
+  }
+
+  @Override
+  protected void onNewIntent(Intent intent) {
+    super.onNewIntent(intent);
+    setIntent(intent);
+    focusSetting(intent);
+  }
+
+  private void focusSetting(Intent intent) {
+    if (intent == null) return;
+    String which = intent.getStringExtra(EXTRA_FOCUS);
+    if (which == null) return;
+    android.view.View target;
+    if (FOCUS_CODEC.equals(which)) target = focusedCodec();
+    else if (FOCUS_BITRATE.equals(which)) target = homeBitrate;
+    else return;
+    if (target == null) return;
+    clearPendingFocus();
+    if (target.isLaidOut() && target.getHeight() > 0) {
+      scrollToTarget(target);
+      return;
+    }
+    android.view.ViewTreeObserver observer = body.getViewTreeObserver();
+    if (!observer.isAlive()) {
+      target.post(() -> scrollToTarget(target));
+      return;
+    }
+    pendingFocusLayout =
+        new android.view.ViewTreeObserver.OnGlobalLayoutListener() {
+          @Override
+          public void onGlobalLayout() {
+            if (!target.isLaidOut() || target.getHeight() == 0) return;
+            clearPendingFocus();
+            scrollToTarget(target);
+          }
+        };
+    observer.addOnGlobalLayoutListener(pendingFocusLayout);
+  }
+
+  private android.view.View focusedCodec() {
+    if (codecGroup == null) return null;
+    android.view.View checked = codecGroup.findViewById(codecGroup.getCheckedRadioButtonId());
+    return checked != null ? checked : codecGroup.getChildAt(0);
+  }
+
+  private void clearPendingFocus() {
+    if (pendingFocusLayout == null) return;
+    if (body != null) {
+      android.view.ViewTreeObserver observer = body.getViewTreeObserver();
+      if (observer.isAlive()) observer.removeOnGlobalLayoutListener(pendingFocusLayout);
+    }
+    pendingFocusLayout = null;
+  }
+
+  private void scrollToTarget(android.view.View target) {
+    if (destroyed || scrollView == null || body == null) return;
+    target.requestFocus();
+    int y = topInBody(target) - scrollView.getHeight() / 3;
+    scrollView.smoothScrollTo(0, Math.max(0, y));
+  }
+
+  private int topInBody(android.view.View view) {
+    int top = 0;
+    android.view.View current = view;
+    while (current != null && current != body) {
+      top += current.getTop();
+      current = current.getParent() instanceof android.view.View
+          ? (android.view.View) current.getParent()
+          : null;
+    }
+    return top;
   }
 
   private void bitrateButton(boolean travel) {
     Button button = button("", () -> {});
+    button.setId(travel ? ID_TRAVEL_BITRATE : ID_HOME_BITRATE);
     Runnable refresh =
         () ->
             button.setText(
@@ -176,28 +271,33 @@ public final class PcvrSettingsActivity extends Activity {
                     + (travel ? options.travelMbps() : options.homeMbps())
                     + " Mbps");
     refresh.run();
-    button.setEnabled(PcvrOptions.PYROWAVE_BUILD);
     button.setOnClickListener(
         v -> {
           NumberPicker picker = new NumberPicker(this);
+          picker.setMinimumHeight(dp(144));
           picker.setMinValue(5);
           picker.setMaxValue(travel ? 45 : 200);
           picker.setValue(travel ? options.travelMbps() : options.homeMbps());
           picker.setWrapSelectorWheel(false);
-          new AlertDialog.Builder(this)
-              .setTitle(travel ? "Travel bitrate limit" : "Home bitrate limit")
-              .setView(picker)
-              .setNegativeButton("Cancel", null)
-              .setPositiveButton(
-                  "Save",
-                  (d, w) -> {
-                    picker.clearFocus();
-                    options.bitrate(travel, picker.getValue());
-                    refresh.run();
-                  })
-              .show();
+          AlertDialog dialog =
+              new AlertDialog.Builder(this)
+                  .setTitle(travel ? "Travel bitrate limit" : "Home bitrate limit")
+                  .setView(picker)
+                  .setNegativeButton("Cancel", null)
+                  .setPositiveButton(
+                      "Save",
+                      (d, w) -> {
+                        picker.clearFocus();
+                        options.bitrate(travel, picker.getValue());
+                        refresh.run();
+                      })
+                  .create();
+          dialog.show();
+          dialog.getButton(AlertDialog.BUTTON_POSITIVE).setMinHeight(dp(48));
+          dialog.getButton(AlertDialog.BUTTON_NEGATIVE).setMinHeight(dp(48));
         });
     body.addView(button);
+    if (!travel) homeBitrate = button;
   }
 
   private void refreshPairing() {
@@ -316,8 +416,17 @@ public final class PcvrSettingsActivity extends Activity {
     Button button = new Button(this);
     button.setText(text);
     button.setMinHeight(dp(56));
+    button.setMinWidth(dp(48));
     button.setOnClickListener(v -> action.run());
+    button.setLayoutParams(spacedParams());
     return button;
+  }
+
+  private LinearLayout.LayoutParams spacedParams() {
+    LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, -2);
+    params.topMargin = dp(8);
+    params.bottomMargin = dp(8);
+    return params;
   }
 
   private int dp(int value) {
@@ -331,6 +440,7 @@ public final class PcvrSettingsActivity extends Activity {
   @Override
   protected void onDestroy() {
     destroyed = true;
+    clearPendingFocus();
     if (pairingDialog != null) {
       pairingDialog.dismiss();
       pairingDialog = null;
