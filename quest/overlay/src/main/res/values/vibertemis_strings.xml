@@ -68,6 +68,7 @@
     <string name="hub_error_identity">Could not verify PC identity. Retry, or pair again if this PC has changed.</string>
     <string name="hub_error_pc_unsupported">PC needs an update. Update Windows VR Host Manager and retry.</string>
     <string name="hub_error_setup_first">Pair your PC with Set up PC before connecting for VR.</string>
+    <string name="hub_error_pairing_changed">Your PC pairing changed while that connection was waiting. Tap Connect again to pair the PC you want.</string>
 
     <!-- VR setup picker and pairing dialog bodies. Copy only: dialog
          titles and button flows stay in MainHubActivity. The Windows
@@ -78,11 +79,14 @@
     <string name="hub_vr_setup_contacting_host">Contacting %1$s. Windows Set up VR enables pairing automatically. If receiving is off, choose Pair headset on the PC.</string>
     <string name="hub_vr_setup_save_failed">Could not save VR pairing. Choose Set up PC to try again.</string>
 
-    <!-- Connect restart consent. Surfaced only when the PC reports
-         vrserver=true (SteamVR is already running) so the user gets
-         an explicit Restart VR / Cancel choice. -->
+    <!-- Connect restart consent. Surfaced ONLY when the native runtime
+         reports that the running SteamVR session does not match the
+         headset / codec settings this dispatch asked for, so the reason
+         is a SETTINGS reason, not "SteamVR happens to be running" —
+         "SteamVR is running" alone is not a reason to interrupt anyone.
+         A warm vrserver=true probe therefore never reaches this body. -->
     <string name="hub_restart_title">Restart VR</string>
-    <string name="hub_restart_message">SteamVR is running on your PC. Connecting may restart it to apply this headset’s settings. Save any VR game in progress first.</string>
+    <string name="hub_restart_message">Your VR settings need SteamVR to restart on the PC. Save any VR game in progress first.</string>
     <string name="hub_restart_confirm">Restart VR</string>
     <string name="hub_restart_cancel">Cancel</string>
 

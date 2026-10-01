@@ -47,9 +47,12 @@ import org.json.JSONObject;
  *             120-second restart-consent window and proceed straight
  *             to the start request. No modal dialog.</li>
  *         <li>{@code vrserver=true} — SteamVR is already running on
- *             the PC: we surface an explicit <b>Restart VR / Cancel</b>
- *             consent dialog. The user must confirm before we set the
- *             consent window and start the request.</li>
+ *             the PC. That is a <b>normal, idempotent</b> connection:
+ *             we issue the start request and dispatch with
+ *             {@code vq_pcvr_allow_restart=false} and a zero restart
+ *             deadline. No prompt — a warm server is not a
+ *             discrepancy, and restarting a perfectly good session
+ *             would be the surprising behaviour.</li>
  *         <li>missing / non-boolean {@code vrserver} — fail closed:
  *             an inline error is drawn into the card with a Retry
  *             chip. We never invent a decision on an unknown state.</li>
@@ -65,6 +68,73 @@ import org.json.JSONObject;
  *       because the flat path does not need it.</li>
  * </ul>
  *
+ * <p><b>Restart consent is only for real mismatches.</b> The
+ * <b>Restart VR / Cancel</b> dialog is no longer produced by a warm
+ * {@code vrserver=true} probe. It appears only when the native runtime
+ * itself reports that the running SteamVR session does not match the
+ * settings this dispatch asked for — the authentic
+ * {@link SteamVrActivity#onPcvrConnectionIssue(String) onPcvrConnectionIssue}
+ * callback, and only after the old immersive process is provably gone.
+ * Until then the warm path is a plain connection with no restart
+ * permission and no deadline.
+ *
+ * <p><b>The native return contract.</b> Every immersive dispatch mints
+ * a random one-shot nonce and passes it with the public pairing
+ * certificate pin (never a credential) in the launch Intent.
+ * {@link SteamVrActivity} echoes both back, plus its own pid, in an
+ * explicit hub Intent ({@code CLEAR_TOP|SINGLE_TOP}) when native
+ * reports {@code restart_required} or {@code restart_failed}. The hub
+ * consumes that callback exactly once and only after validating the
+ * nonce against its pending expectation and the pin against the
+ * pairing it holds <i>now</i>; a missing, forged, stale, duplicate or
+ * host-changed callback is inert. Nothing is dispatched automatically:
+ * a valid {@code restart_required} surfaces the existing Restart VR /
+ * Cancel dialog, and a valid {@code restart_failed} surfaces a concise
+ * Retry / Cancel error. A positive restart consent is never persisted
+ * across recreation, so a recreated hub can still recognise the
+ * callback but can never act on a forgotten "yes".
+ *
+ * <p><b>Real process gate, no human-timing guesswork.</b> Before any
+ * new immersive dispatch — including the re-probe behind a Restart
+ * tap — the hub proves through {@link ActivityManager#getRunningAppProcesses()}
+ * that no process of its own UID with the exact
+ * {@code <package>:pcvr} name and the old pid is still running, polling
+ * a bounded budget. This never relies on how fast the user reacts or on
+ * an arbitrary debounce: if the process state cannot be established the
+ * gate fails clearly and no launch happens. The gate's answer is
+ * delivered asynchronously and is treated as untrusted: it carries a
+ * gate identity and the {@code connectGeneration} it was started for,
+ * and both must still match before anything is launched, prompted or
+ * re-probed. A Cancel, a Destroy or a newer attempt invalidates that
+ * identity, so a poll already in flight cannot resurrect an abandoned
+ * attempt, and a superseded completion never clears the running flag of
+ * a gate that replaced it.
+ *
+ * <p><b>A gate that finishes while the hub is paused is parked, not
+ * dropped.</b> Dropping it would strand the attempt, and running it
+ * immediately would return without any resume continuation. So the
+ * outcome is queued together with its gate identity and generation and
+ * executed on the next resume, exactly once, and only if the hub is
+ * still alive, still a headset, still holds the microphone, the
+ * generation has not moved, and any restart consent the attempt
+ * required is still inside its window. Cancel and Destroy clear the
+ * parked outcome, and it is never persisted: a recreated hub cancels
+ * rather than replaying a forgotten positive consent.
+ *
+ * <p><b>A restart consent is spent on one named host.</b> The public
+ * pairing pin that the validated native callback carried is retained
+ * from the moment the callback is accepted until the Restart tap has
+ * finished. The live pairing is compared against it before the gate,
+ * after it, after the fresh probe, and immediately before the dispatch;
+ * the start request is issued against the very pairing the probe
+ * authenticated rather than a reloaded one. A host that merely changed
+ * address keeps the pin and is rediscovery, not a re-pair; a changed pin
+ * cancels the attempt with a "pairing changed" notice, so a restart is
+ * never granted on a machine the user never agreed to. The pin the
+ * dispatch carries comes from the current attempt only — a background
+ * worker's cached pin is published solely on the UI thread, inside that
+ * attempt's generation check.
+ *
  * <p>Connection progress and errors are drawn INTO the connection card
  * as an inline phase line and an inline error block. The hub never
  * stacks transient dialogs on success, never asks the user to confirm
@@ -75,17 +145,24 @@ import org.json.JSONObject;
  * attempt that completes while the hub is paused (the user took the
  * headset off briefly) does not dispatch VR until the next resume,
  * and even then only if the hub is still alive, still a headset,
- * still has microphone permission, and the restart-consent window
- * has not silently expired. The continuation is bound to the
+ * still has microphone permission, and any restart consent this attempt
+ * required has not silently expired. A warm, normal connection carries
+ * no restart consent at all and is therefore never blocked by consent
+ * expiry; a cold or explicitly consented attempt that expires is
+ * dropped with an inline error so the user must reconnect and reconfirm
+ * — consent is never silently renewed. The continuation is bound to the
  * current {@code connectGeneration}; a Cancel / Destroy / new tap
  * bumps the generation and any queued continuation is dropped.
  *
- * <p>The hub never auto-launches from {@code onResume}. Only an
- * explicit user tap can dispatch a target activity or a queued
- * continuation, and the hub guards each tap against in-flight
- * permission requests and pending launches so a rapid double-tap or
- * an asynchronous permission result for a different request cannot
- * start two activities at once.
+ * <p>The hub never auto-launches from {@code onResume} out of nothing.
+ * The only things a resume may continue are the ones an explicit user
+ * action started and that were waiting: a paused microphone grant, a
+ * connect attempt whose start already returned, and a process-gate
+ * outcome that settled while the hub was paused. Each is consumed
+ * exactly once and re-checks that it still belongs to this attempt. The
+ * hub guards every tap against in-flight permission requests and pending
+ * launches so a rapid double-tap or an asynchronous permission result
+ * for a different request cannot start two activities at once.
  *
  * <p><b>Microphone requests carry an explicit target.</b> Setup no
  * longer asks for the microphone up front, so the two headset actions
@@ -108,15 +185,64 @@ public class MainHubActivity extends Activity {
 
     private static final String STATE_REQUEST_PENDING = "vq_hub_request_pending";
 
+    /* ---- Native return contract (Java <-> JNI boundary) ---- */
+
+    /** Action of the explicit Intent {@link SteamVrActivity} sends back
+     *  to this hub when the native runtime reports a real connection
+     *  issue. Deliberately explicit so no unrelated Intent can be
+     *  mistaken for a native report. */
+    static final String ACTION_PCVR_RETURN = "com.vibertemis.quest.hub.action.PCVR_RETURN";
+
+    /** One of {@link PcvrReturnGate#ISSUE_RESTART_REQUIRED} /
+     *  {@link PcvrReturnGate#ISSUE_RESTART_FAILED}. */
+    static final String EXTRA_PCVR_ISSUE = "vq_pcvr_issue";
+
+    /** Random one-shot nonce minted per immersive dispatch. It is a
+     *  correlation id, not a credential. */
+    static final String EXTRA_PCVR_LAUNCH_NONCE = "vq_pcvr_launch_nonce";
+
+    /** Public pairing certificate pin (SHA-256 of the host
+     *  certificate). Public identity, deliberately never the pairing
+     *  auth token: no credential is ever placed in an Intent. */
+    static final String EXTRA_PCVR_HOST_PIN = "vq_pcvr_host_pin";
+
+    /** Pid of the {@code :pcvr} process that is reporting, so the hub
+     *  can prove it is gone before any new immersive dispatch. */
+    static final String EXTRA_PCVR_OLD_PID = "vq_pcvr_old_pid";
+
+    /* ---- Saved instance state ---- */
+
+    private static final String STATE_PCVR_LAUNCH_NONCE = "vq_hub_pcvr_nonce";
+    private static final String STATE_PCVR_HOST_PIN = "vq_hub_pcvr_pin";
+    private static final String STATE_PCVR_ISSUE = "vq_hub_pcvr_issue";
+    private static final String STATE_PCVR_OLD_PID = "vq_hub_pcvr_old_pid";
+    private static final String STATE_PCVR_ACCEPTED_PIN = "vq_hub_pcvr_accepted_pin";
+
+    /** Bounded budget for proving the old {@code :pcvr} process is
+     *  gone. This is a process-identity wait, not a UX delay: the poll
+     *  returns the moment the kernel stops reporting that pid, and
+     *  exhausts only when the process is genuinely still there. */
+    static final long PCVR_EXIT_GATE_MS = 10000L;
+    /** Poll interval of the exit gate. */
+    private static final long PCVR_EXIT_POLL_MS = 100L;
+
     /** No microphone permission request is in flight. */
     private static final int MIC_TARGET_NONE = 0;
     /** The primary Connect action on a paired host: the grant
-     *  continues through the authenticated probe and the cold start. */
+     *  continues through the authenticated probe and the start. */
     private static final int MIC_TARGET_CONNECT = 1;
     /** The manual VR fallback (Advanced → Manual VR, Connection
      *  options → Open PCVR manually): the grant continues through the
      *  explicit legacy restart consent, never straight to a launch. */
     private static final int MIC_TARGET_MANUAL_VR = 2;
+
+    /** Probe path: a warm server is a normal idempotent connection, a
+     *  cold server opens the 120s restart-consent window itself. */
+    private static final int PROBE_MODE_CONNECT = 0;
+    /** Probe path taken behind an explicit Restart tap: the user has
+     *  already said yes, so the window is opened whichever way the
+     *  fresh probe resolves. */
+    private static final int PROBE_MODE_AFTER_RESTART_CONSENT = 1;
 
     /** Width of the restart-consent window. The same value is used by
      *  the manual VR fallback so a single numeric constant governs
@@ -148,6 +274,82 @@ public class MainHubActivity extends Activity {
     private int permissionContinuationTarget = MIC_TARGET_NONE;
     private boolean connectPending;
     private long restartConsentUntil;
+    /**
+     * True only while THIS attempt actually needs positive restart
+     * consent (a cold PC, an explicit Restart tap, the manual VR
+     * legacy consent). A warm {@code vrserver=true} probe is a normal
+     * connection: it needs no consent, so it dispatches with
+     * {@code vq_pcvr_allow_restart=false} and a zero deadline and is
+     * never blocked by consent expiry.
+     *
+     * <p>Deliberately not persisted: a positive restart consent must
+     * not survive a recreation.
+     */
+    private boolean restartConsentRequired;
+    /** A {@link PcvrReturnGate} owns the one-shot launch nonce and the
+     *  public pin it must come back with. */
+    private final PcvrReturnGate returnGate = new PcvrReturnGate();
+    /** A validated native issue waiting to be surfaced. Survives
+     *  recreation through {@link #STATE_PCVR_ISSUE} so a hub that was
+     *  destroyed behind the system dialog can still show the prompt
+     *  exactly once. */
+    private String pendingPcvrIssue;
+    /**
+     * The public pairing certificate pin that the accepted native
+     * callback was validated against, retained from the moment the
+     * callback is accepted until the Restart tap has finished (or been
+     * abandoned).
+     *
+     * <p>It exists so a positive restart consent is spent on the host
+     * the user actually said yes to. The consent is captured here, NOT
+     * re-derived from {@link #pendingHostPin} (which belongs to a
+     * connect worker's generation and may be a different attempt) and
+     * never from a background generation that has since been cancelled.
+     * Public identity, never a credential.
+     */
+    private String pendingIssueHostPin;
+    /** Pid reported by the native callback, awaited by the exit gate.
+     *  {@code <= 0} means "unknown", which fails closed. */
+    private int pendingOldPcvrPid;
+    /** True while the real process-liveness gate is polling the old
+     *  {@code :pcvr} pid. Blocks taps and dispatch so nothing races the
+     *  teardown. */
+    private boolean pcvrExitGateRunning;
+    /**
+     * Monotonic identity of the exit gate. Every gate bumps it, and
+     * {@link #cancelHostConnection()} bumps it too, so a completion
+     * that was already in flight can tell that it has been superseded.
+     * A stale completion MUST leave {@link #pcvrExitGateRunning} alone:
+     * the flag may by then belong to a newer gate.
+     */
+    private int pcvrExitGateId;
+    /**
+     * The poll task of the gate that is currently running, so a Cancel /
+     * Destroy can interrupt the wait instead of only ignoring it.
+     */
+    private java.util.concurrent.Future<?> pcvrExitGateFuture;
+    /**
+     * A gate outcome that proved a process fact while the hub was
+     * paused, parked until the next resume. It is bound to the gate
+     * identity and the generation it was produced for, so a Cancel /
+     * Destroy / new attempt drops it instead of replaying a stale
+     * launch or a stale prompt. Deliberately not persisted: a recreated
+     * hub cancels rather than re-runs a forgotten positive consent.
+     */
+    private Runnable pendingGateContinuation;
+    private int pendingGateContinuationId = -1;
+    private int pendingGateContinuationGeneration = -1;
+    /** Public pairing certificate pin the current attempt authenticated,
+     *  so the dispatch does not have to touch the keystore on the UI
+     *  thread. Never a credential.
+     *
+     *  <p>Published on the UI thread only, and only from inside the
+     *  {@code connectGeneration} check of the probe callback, so a
+     *  superseded worker can never hand its pin to the attempt that
+     *  replaced it. Attempt-local: {@code null} again once the attempt
+     *  ends, and a path that skipped the probe (manual VR) re-reads the
+     *  store instead. */
+    private String pendingHostPin;
     private boolean resumed;
     private boolean restartPromptPending;
     private volatile int connectGeneration;
@@ -170,10 +372,11 @@ public class MainHubActivity extends Activity {
     private Button errorRetryBtn;
     private Button errorCancelBtn;
     private android.app.AlertDialog connectDialog;
-    /** Dialog shown to the user when the authenticated probe reports
-     *  {@code vrserver=true} so SteamVR must be restarted. The user
-     *  must press Restart VR before we set the consent window and
-     *  start. */
+    /** The Restart VR / Cancel consent. It is shown ONLY for a real
+     *  native mismatch report ({@code restart_required}) after the old
+     *  immersive process is provably gone — a warm probe never prompts
+     *  on its own. The user must press Restart VR before we re-probe,
+     *  open the 120s consent window and start. */
     private android.app.AlertDialog restartVrDialog;
     private final java.util.concurrent.ExecutorService connectWorker = java.util.concurrent.Executors.newSingleThreadExecutor();
     /**
@@ -218,6 +421,24 @@ public class MainHubActivity extends Activity {
 
         if (savedInstanceState != null) {
             requestPending = savedInstanceState.getBoolean(STATE_REQUEST_PENDING, false);
+            // Only the correlation identity and the validated issue
+            // cross a recreation. A positive restart consent does NOT:
+            // a recreated hub must be able to recognise the callback
+            // but is never allowed to act on a forgotten "yes".
+            returnGate.restorePending(
+                    savedInstanceState.getString(STATE_PCVR_LAUNCH_NONCE),
+                    savedInstanceState.getString(STATE_PCVR_HOST_PIN));
+            pendingPcvrIssue = PcvrReturnGate.normalizeIssue(
+                    savedInstanceState.getString(STATE_PCVR_ISSUE));
+            pendingOldPcvrPid = savedInstanceState.getInt(STATE_PCVR_OLD_PID, 0);
+            // The public pin the accepted callback was validated against
+            // is correlation identity, not consent, so it may cross a
+            // recreation. It is useless on its own: the Restart tap still
+            // has to re-compare it against the live pairing, and no
+            // positive consent is restored with it.
+            pendingIssueHostPin = PcvrReturnGate.isPublicPin(
+                    savedInstanceState.getString(STATE_PCVR_ACCEPTED_PIN))
+                    ? savedInstanceState.getString(STATE_PCVR_ACCEPTED_PIN) : null;
         }
 
         setContentView(R.layout.vibertemis_hub);
@@ -340,6 +561,12 @@ public class MainHubActivity extends Activity {
         if (errorCancelBtn != null) {
             errorCancelBtn.setOnClickListener(v -> cancelHostConnection());
         }
+        // A hub that was recreated with the native return Intent as its
+        // own Intent must still process the callback exactly like an
+        // onNewIntent delivery. Validation is view-free and idempotent
+        // (the nonce is one-shot), and the prompt itself waits for the
+        // first resume.
+        handlePcvrReturn(getIntent());
     }
 
     /**
@@ -350,7 +577,7 @@ public class MainHubActivity extends Activity {
      * asks for it because the flat PcView path does not need it.
      */
     private void onConnectTapped() {
-        if (launchPending || requestPending || connectPending) {
+        if (launchPending || requestPending || connectPending || pcvrExitGateRunning) {
             return;
         }
         if (!VrCapabilities.isHeadset(this)) {
@@ -381,6 +608,18 @@ public class MainHubActivity extends Activity {
     protected void onSaveInstanceState(Bundle outState) {
         super.onSaveInstanceState(outState);
         outState.putBoolean(STATE_REQUEST_PENDING, requestPending);
+        // Persist ONLY the native-return correlation identity and a
+        // validated-but-not-yet-surfaced issue. The restart-consent
+        // window is intentionally absent: positive restart consent must
+        // be given again after a recreation.
+        if (returnGate.awaitingCallback()) {
+            outState.putString(STATE_PCVR_LAUNCH_NONCE, returnGate.pendingNonce());
+            outState.putString(STATE_PCVR_HOST_PIN, returnGate.pendingPin());
+        }
+        outState.putString(STATE_PCVR_ISSUE, pendingPcvrIssue == null ? "" : pendingPcvrIssue);
+        outState.putInt(STATE_PCVR_OLD_PID, pendingOldPcvrPid);
+        outState.putString(STATE_PCVR_ACCEPTED_PIN,
+                pendingIssueHostPin == null ? "" : pendingIssueHostPin);
     }
 
     @Override
@@ -398,6 +637,20 @@ public class MainHubActivity extends Activity {
             launchPending = false;
             launchLeftHub = false;
         }
+        // A process-liveness gate that finished while the hub was paused
+        // parked its continuation instead of dropping it. Run it first,
+        // and exactly once, so the attempt that was waiting on the old
+        // process continues on this resume rather than stranding
+        // connectPending. The continuation re-checks its own gate
+        // identity, generation, device class, microphone permission and
+        // any consent it needed; a Cancel / Destroy / new attempt while
+        // paused means there is nothing here to run.
+        drainPendingGateContinuation();
+        // A validated native issue that arrived while the hub was paused
+        // (or behind a recreation) is surfaced here, and only here: the
+        // prompt itself waits until the hub is resumed, and for the old
+        // immersive process to be provably gone.
+        advancePendingPcvrIssue();
         // Continue only an explicit Connect (or an explicit Manual VR
         // entry) whose permission result arrived while paused, and only
         // into the action that actually asked for the microphone. An
@@ -418,20 +671,23 @@ public class MainHubActivity extends Activity {
         // Drain a queued continuation that landed while paused. The
         // continuation is dropped if the generation moved on, the
         // hub is finishing/destroyed, the device is no longer a
-        // headset, the microphone permission has been revoked, or
-        // the restart-consent window has silently expired. A valid
-        // continuation dispatches SteamVrActivity exactly once.
+        // headset, the microphone permission has been revoked, or a
+        // restart consent this attempt required has silently expired.
+        // A valid continuation dispatches SteamVrActivity exactly once
+        // through the real process gate.
         if (pendingContinuation
                 && pendingContinuationGeneration == connectGeneration
                 && !isFinishing() && !isDestroyed()
                 && VrCapabilities.isHeadset(this)
                 && hasMicPermission()
-                && (!usesNativeRuntime() || restartConsentValid())) {
+                && consentSatisfied()) {
             pendingContinuation = false;
             dispatchSteamVr();
         } else if (pendingContinuation) {
             // Drop the queued continuation: a Cancel / Destroy /
             // permission loss / consent expiry happened while paused.
+            // An expired consent surfaces an error so the user has to
+            // reconnect and reconfirm; it is never renewed silently.
             cancelHostConnection();
             showInlineError(hasMicPermission() ? R.string.hub_error_consent_expired
                     : R.string.hub_error_mic_required);
@@ -748,9 +1004,15 @@ public class MainHubActivity extends Activity {
      *             running, so a cold start cannot disrupt a live VR
      *             session.</li>
      *         <li>{@code vrserver=true} (boolean) — SteamVR is
-     *             running: surface an explicit Restart VR / Cancel
-     *             consent dialog. Only the user's Restart VR tap
-     *             sets the consent window and continues.</li>
+     *             already running, so this is an ordinary idempotent
+     *             connection: issue the start request and dispatch with
+     *             {@code vq_pcvr_allow_restart=false} and a zero
+     *             restart deadline. <b>No prompt.</b> A warm server is
+     *             not a discrepancy. If the running session does not
+     *             match the settings this dispatch asked for, the
+     *             native runtime reports that itself through
+     *             {@link SteamVrActivity#onPcvrConnectionIssue(String)}
+     *             and only then is the user asked about a restart.</li>
      *         <li>missing or non-boolean — fail closed: draw an
      *             inline error into the card and surface an inline
      *             Retry chip. We never invent a decision on an
@@ -764,8 +1026,9 @@ public class MainHubActivity extends Activity {
      *       generation; if the hub is paused when the success
      *       lands, the next resume dispatches SteamVrActivity
      *       exactly once and only if the hub is still alive, still
-     *       a headset, still has microphone permission, and the
-     *       restart-consent window has not silently expired.</li>
+     *       a headset, still has microphone permission, and any
+     *       restart consent this attempt required has not silently
+     *       expired.</li>
      * </ol>
      *
      * <p>The legacy "confirm then start" two-step is intentionally
@@ -777,21 +1040,76 @@ public class MainHubActivity extends Activity {
      * still get it.
      */
     private void launchSteamVr() {
-        if (launchPending || connectPending || !VrCapabilities.isHeadset(this) || !hasMicPermission()) return;
+        if (launchPending || connectPending || pcvrExitGateRunning
+                || !VrCapabilities.isHeadset(this) || !hasMicPermission()) return;
         if (!hasPairedHost()) { showVrSetup(); return; }
         connectPending = true;
         final int generation = ++connectGeneration;
         pendingContinuation = false;
+        // A fresh attempt supersedes whatever the previous session left
+        // behind: no callback expectation, no un-surfaced native issue,
+        // no accepted host pin, no parked gate continuation, and no
+        // restart consent (the probe below re-decides all of them).
+        returnGate.clearPending();
+        pendingPcvrIssue = null;
+        pendingOldPcvrPid = 0;
+        pendingIssueHostPin = null;
+        dropPendingGateContinuation();
+        restartConsentRequired = false;
+        restartConsentUntil = 0;
         // Drop the queued continuation: a fresh tap supersedes any
         // pending dispatch from an earlier in-flight attempt.
         final HostClient client = createHostClient();
         hostClient = client;
         showInlinePhase(R.string.hub_phase_probing);
         clearInlineError();
+        probeAndContinue(generation, client, PROBE_MODE_CONNECT, null);
+    }
+
+    /**
+     * Run the authenticated {@code GET /status} probe on the connect
+     * worker and hand the verified {@code vrserver} verdict to the
+     * connect state machine on the UI thread.
+     *
+     * <p>The pairing is re-loaded here on every pass, so an explicit
+     * Restart tap re-reads the stored identity and re-checks its pin
+     * instead of trusting anything captured earlier. On an unreachable
+     * saved address the bounded LAN rediscovery helper runs against the
+     * paired TLS pin and the probe is retried once the hint verifies;
+     * because the pin travels with the pairing, a host that merely
+     * changed address keeps its identity and needs no new consent.
+     *
+     * <p>When {@code requiredPin} is set, the attempt is pinned to one
+     * host: the pin is compared before the probe is issued, again after
+     * it returns, and again before the start request and the dispatch.
+     * A host that merely moved keeps the pin and passes; a re-pair
+     * changes it and the attempt is cancelled with a "pairing changed"
+     * notice instead of granting a restart against a machine the user
+     * never consented to. The pairing the probe authenticated is handed
+     * forward to the start request, so the start can never be issued
+     * against a different store entry than the one the probe verified.
+     *
+     * @param mode {@link #PROBE_MODE_CONNECT} for a plain tap, or
+     *             {@link #PROBE_MODE_AFTER_RESTART_CONSENT} behind an
+     *             explicit Restart tap where consent is already given
+     * @param requiredPin public pin this attempt must stay pinned to, or
+     *                    {@code null} for a plain connect
+     */
+    private void probeAndContinue(final int generation, final HostClient client, final int mode,
+                                  final String requiredPin) {
         connectWorker.execute(() -> {
             try {
                 HostPairing pairing = loadHostPairing();
                 if (pairing == null) throw new HostClient.Failure("PAIRING", "Pair your PC again.");
+                if (requiredPin != null && !requiredPin.equals(pairing.pin)) {
+                    // Before the probe: the host moved to a different
+                    // identity while the consent was being collected.
+                    runOnUiThread(() -> {
+                        if (generation != connectGeneration || isFinishing() || isDestroyed()) return;
+                        cancelForPairingChange();
+                    });
+                    return;
+                }
                 if (client.isCancelled()) throw new java.io.IOException("Cancelled");
                 JSONObject status;
                 try {
@@ -802,13 +1120,13 @@ public class MainHubActivity extends Activity {
                             getApplicationContext(), pairing, client);
                     status = client.request(candidate, "GET", "/status", new byte[0]);
                     if (client.isCancelled()) throw new java.io.IOException("Cancelled");
+                    // Address rediscovery is not a pairing change: the
+                    // candidate is only accepted because it presents the
+                    // pinned certificate, so the accepted pin is unchanged.
                     createPairingStore().updateAddress(pairing, candidate);
                 }
                 if (client.isCancelled()) throw new java.io.IOException("Cancelled");
                 if (usesNativeRuntime()) client.setHeadsetHostname(loadNativeHeadsetIdentity());
-                boolean vrserver = status.opt("vrserver") instanceof Boolean
-                        && status.getBoolean("vrserver");
-                if (client.isCancelled()) throw new java.io.IOException("Cancelled");
                 if (status.isNull("vrserver") || !(status.opt("vrserver") instanceof Boolean)) {
                     // Fail closed on missing/non-boolean. We do NOT
                     // pretend a missing field is "false"; an unknown
@@ -821,27 +1139,58 @@ public class MainHubActivity extends Activity {
                     }
                     return;
                 }
-                if (!vrserver) {
-                    // Cold server. The probe already proved the PC
-                    // is reachable and SteamVR is not running, so a
-                    // cold start cannot disrupt a live VR session.
-                    // Set the consent window and continue — no modal
-                    // dialog.
-                    runOnUiThread(() -> {
-                        if (generation != connectGeneration || isFinishing() || isDestroyed()) return;
-                        restartConsentUntil = android.os.SystemClock.elapsedRealtime() + RESTART_CONSENT_WINDOW_MS;
-                        startPcvrConnection(generation);
-                    });
-                } else {
-                    // Warm server. Surface an explicit Restart VR /
-                    // Cancel dialog. Only the user's tap sets the
-                    // consent window and continues; Cancel drops
-                    // the attempt.
-                    runOnUiThread(() -> {
-                        if (generation != connectGeneration || isFinishing() || isDestroyed()) return;
-                        showRestartVrConsent(generation);
-                    });
-                }
+                final boolean vrserver = status.getBoolean("vrserver");
+                if (client.isCancelled()) throw new java.io.IOException("Cancelled");
+                // The pin this attempt is pinned to, and the pairing the
+                // probe just authenticated. Both are captured here and
+                // carried forward instead of being re-read mid-attempt.
+                final String probedPin = pairing.pin;
+                runOnUiThread(() -> {
+                    if (generation != connectGeneration || isFinishing() || isDestroyed()) return;
+                    // After the probe: the pairing may have been replaced
+                    // while the request was in flight.
+                    if (requiredPin != null && !pairedPinMatches(requiredPin)) {
+                        cancelForPairingChange();
+                        return;
+                    }
+                    // Publish the public pin to the UI only here, on the
+                    // UI thread, inside the generation check — so a
+                    // superseded worker can never hand its pin to the
+                    // attempt that replaced it.
+                    pendingHostPin = probedPin;
+                    if (mode == PROBE_MODE_AFTER_RESTART_CONSENT) {
+                        // The user already confirmed a restart for THIS
+                        // attempt, so the window opens whichever way the
+                        // fresh probe resolved — a host that came back
+                        // cold simply starts normally. No second prompt:
+                        // repeating the dialog without a fresh native
+                        // mismatch would be a loop, not a decision.
+                        restartConsentRequired = true;
+                        restartConsentUntil =
+                                android.os.SystemClock.elapsedRealtime() + RESTART_CONSENT_WINDOW_MS;
+                        startPcvrConnection(generation, requiredPin, pairing);
+                        return;
+                    }
+                    if (!vrserver) {
+                        // Cold server. The probe already proved the PC
+                        // is reachable and SteamVR is not running, so a
+                        // cold start cannot disrupt a live VR session.
+                        // Set the consent window and continue — no modal
+                        // dialog.
+                        restartConsentRequired = true;
+                        restartConsentUntil =
+                                android.os.SystemClock.elapsedRealtime() + RESTART_CONSENT_WINDOW_MS;
+                        startPcvrConnection(generation, requiredPin, pairing);
+                    } else {
+                        // Warm server: a normal, idempotent connection.
+                        // No restart consent at all, so the dispatch
+                        // carries vq_pcvr_allow_restart=false with a
+                        // zero deadline and the user is never prompted.
+                        restartConsentRequired = false;
+                        restartConsentUntil = 0;
+                        startPcvrConnection(generation, requiredPin, pairing);
+                    }
+                });
             } catch (Exception e) {
                 final String message = e instanceof HostClient.Failure ? e.getMessage()
                         : "Could not reach your PC. Check the companion, address and network, then retry.";
@@ -849,11 +1198,123 @@ public class MainHubActivity extends Activity {
                     if (generation != connectGeneration) return;
                     connectPending = false;
                     hostClient = null;
+                    pendingHostPin = null;
                     clearInlinePhase();
                     showInlineError(message);
                 });
             }
         });
+    }
+
+    /**
+     * Restart tap behind a real native mismatch, pinned to the host the
+     * user was actually asked about.
+     *
+     * <p>{@code acceptedPin} is the public pin the validated callback
+     * carried and the hub verified at accept time. It is retained
+     * through the dialog and this whole sequence, and the live pairing is
+     * compared against it three times: before the exit gate, after it,
+     * and again after the fresh probe (see
+     * {@link #probeAndContinue}). A host that merely changed address
+     * keeps the pin and continues; a re-pair changes it, and the attempt
+     * is cancelled with a "pairing changed" notice so a restart is never
+     * granted on a machine the user never consented to.
+     *
+     * <p>The attempt is otherwise rebuilt from scratch: a <b>new</b>
+     * {@link HostClient} (the stale one belongs to the session that
+     * failed), a fresh authenticated probe against the pairing as it is
+     * stored right now, and then the existing 120-second consent + start
+     * flow. Nothing here can skip a network round-trip, and the consent
+     * window opens only after that probe succeeded.
+     */
+    private void startAfterRestartConsent(final String acceptedPin) {
+        if (!resumed || isFinishing() || isDestroyed()
+                || launchPending || connectPending || pcvrExitGateRunning) return;
+        if (!PcvrReturnGate.isPublicPin(acceptedPin)) {
+            // No nameable host means no restart to consent to.
+            cancelHostConnection();
+            showInlineError(R.string.hub_error_pairing_changed);
+            return;
+        }
+        if (!VrCapabilities.isHeadset(this) || !hasMicPermission()) {
+            cancelHostConnection();
+            showInlineError(R.string.hub_error_mic_required);
+            return;
+        }
+        if (!hasPairedHost()) {
+            cancelHostConnection();
+            showInlineError(R.string.hub_error_setup_first);
+            return;
+        }
+        // Before the gate: the paired host must still be the host this
+        // consent was given for.
+        if (!pairedPinMatches(acceptedPin)) {
+            cancelForPairingChange();
+            return;
+        }
+        // The old immersive process must still be gone at the moment we
+        // act, not merely when the prompt appeared.
+        final int gatePid = pendingOldPcvrPid;
+        runPcvrExitGate(gatePid, liveness -> {
+            if (liveness != PcvrReturnGate.LIVENESS_GONE) {
+                handlePcvrExitGateFailure(liveness);
+                return;
+            }
+            // After the gate, before the probe: re-check the pin, so a
+            // re-pair that happened while the prompt was open (or while
+            // the gate polled) cannot turn into a fresh probe.
+            if (!pairedPinMatches(acceptedPin)) {
+                cancelForPairingChange();
+                return;
+            }
+            pendingOldPcvrPid = 0;
+            connectPending = true;
+            final int generation = ++connectGeneration;
+            pendingContinuation = false;
+            pendingPcvrIssue = null;
+            // The consumed callback can never be replayed, and the
+            // accepted pin is now carried by the attempt itself.
+            returnGate.clearPending();
+            pendingIssueHostPin = acceptedPin;
+            restartConsentRequired = false;
+            restartConsentUntil = 0;
+            final HostClient client = createHostClient();
+            hostClient = client;
+            showInlinePhase(R.string.hub_phase_probing);
+            clearInlineError();
+            probeAndContinue(generation, client, PROBE_MODE_AFTER_RESTART_CONSENT, acceptedPin);
+        });
+    }
+
+    /**
+     * True only when the pairing the hub holds <i>right now</i> is the
+     * exact public identity this attempt was pinned to. Addresses are
+     * deliberately not compared: a host that moved keeps its
+     * certificate, and rediscovery of that host is allowed. An
+     * unreadable store counts as "changed", because the hub can no
+     * longer prove which host it is talking to.
+     */
+    private boolean pairedPinMatches(String expectedPin) {
+        if (!PcvrReturnGate.isPublicPin(expectedPin)) return false;
+        try {
+            HostPairing pairing = loadHostPairing();
+            return pairing != null && expectedPin.equals(pairing.pin);
+        } catch (Exception e) {
+            Log.w(TAG, "Could not read the pairing to compare it: " + e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Abandon an attempt whose host no longer matches the one the user
+     * consented to. Nothing is dispatched, no restart permission is
+     * granted, and the user is told plainly that the pairing changed so
+     * a fresh tap (and a fresh decision) is what comes next.
+     */
+    private void cancelForPairingChange() {
+        cancelHostConnection();
+        showInlineError(R.string.hub_error_pairing_changed);
+        Log.w(TAG, "PCVR attempt cancelled: the paired host changed under it");
     }
 
     /** Fail-closed handler for an unknown probe state. Draws an
@@ -864,18 +1325,37 @@ public class MainHubActivity extends Activity {
         if (generation != connectGeneration || isFinishing() || isDestroyed()) return;
         connectPending = false;
         hostClient = null;
+        pendingHostPin = null;
+        pendingIssueHostPin = null;
+        // An unknown state cannot carry a restart consent forward.
+        restartConsentRequired = false;
+        restartConsentUntil = 0;
         clearInlinePhase();
         showInlineError(getString(R.string.hub_error_state_unknown));
     }
 
-    /** Surface the Restart VR / Cancel consent dialog for the warm
-     *  server case. The dialog is generation-scoped so a Cancel /
-     *  Destroy / new tap during the dialog cancels the in-flight
-     *  attempt. Only Restart VR sets the consent window and
-     *  continues. */
+    /**
+     * Surface the Restart VR / Cancel consent for a <b>real</b> native
+     * mismatch report. A warm {@code vrserver=true} probe never reaches
+     * this dialog; only {@link SteamVrActivity#onPcvrConnectionIssue}
+     * reporting {@code restart_required}, after the old immersive
+     * process is provably gone, does.
+     *
+     * <p>The dialog is generation-scoped so a Cancel / Destroy / new tap
+     * during the dialog cancels the in-flight attempt. Only Restart VR
+     * continues, and it continues through
+     * {@link #startAfterRestartConsent(String)} — a fresh authenticated
+     * re-probe with a new client, never the stale one, pinned to the host
+     * the accepted callback named.
+     */
     private void showRestartVrConsent(int generation) {
         if (generation != connectGeneration || !connectPending || isFinishing() || isDestroyed()) return;
         if (!resumed) { restartPromptPending = true; return; }
+        // The host this consent is about, captured from the validated
+        // native callback. It is the ONLY source for the restart attempt:
+        // re-deriving it from the connect worker's cached pin would let a
+        // background generation decide which machine gets restarted.
+        final String acceptedPin = pendingIssueHostPin;
         restartPromptPending = false;
         if (restartVrDialog != null) {
             try { restartVrDialog.dismiss(); } catch (Exception ignored) { }
@@ -892,12 +1372,16 @@ public class MainHubActivity extends Activity {
                         // while the dialog was up; refuse to start.
                         connectPending = false;
                         hostClient = null;
+                        pendingHostPin = null;
                         clearInlinePhase();
                         showInlineError(R.string.hub_error_mic_required);
                         return;
                     }
-                    restartConsentUntil = android.os.SystemClock.elapsedRealtime() + RESTART_CONSENT_WINDOW_MS;
-                    startPcvrConnection(generation);
+                    // Close out the prompt's own attempt before the
+                    // re-probe: the new attempt owns connectPending from
+                    // here on.
+                    finishHostConnection();
+                    startAfterRestartConsent(acceptedPin);
                 })
                 .setNegativeButton(R.string.hub_restart_cancel, (d, w) -> {
                     if (generation != connectGeneration) return;
@@ -920,8 +1404,9 @@ public class MainHubActivity extends Activity {
      * dispatch is queued as a continuation tied to the current
      * generation; the next resume fires it exactly once, only if
      * the hub is still alive, still a headset, still has microphone
-     * permission, and the restart-consent window has not silently
-     * expired.
+     * permission, and any restart consent this attempt required has
+     * not silently expired. An attempt that required no consent (a
+     * warm, normal connection) is never blocked by consent state.
      *
      * <p>The incoming generation is consumed atomically by the first
      * accepted start, after the prerequisite and client checks. A
@@ -932,9 +1417,17 @@ public class MainHubActivity extends Activity {
      * its own guard instead of queueing a second start request. Every
      * async callback and the queued continuation bind to the fresh
      * generation captured below.
+     *
+     * <p>{@code authenticated} is the very {@link HostPairing} the probe
+     * verified, handed forward instead of reloading the store mid
+     * attempt: reloading could pick up a different entry, so the start
+     * would be signed for a host the probe never authenticated. When a
+     * pairing has to be read instead, its pin is compared against
+     * {@code requiredPin} first.
      */
-    private void startPcvrConnection(int generation) {
-        if (generation != connectGeneration || !connectPending || launchPending) return;
+    private void startPcvrConnection(int generation, final String requiredPin,
+                                     final HostPairing authenticated) {
+        if (generation != connectGeneration || !connectPending || launchPending || pcvrExitGateRunning) return;
         if (!VrCapabilities.isHeadset(this) || !hasMicPermission()) {
             cancelHostConnection();
             showInlineError(R.string.hub_error_mic_required);
@@ -952,8 +1445,15 @@ public class MainHubActivity extends Activity {
         clearInlineError();
         connectWorker.execute(() -> {
             try {
-                HostPairing pairing = loadHostPairing();
+                HostPairing pairing = authenticated != null ? authenticated : loadHostPairing();
                 if (pairing == null) throw new HostClient.Failure("PAIRING", "Pair your PC again.");
+                if (requiredPin != null && !requiredPin.equals(pairing.pin)) {
+                    runOnUiThread(() -> {
+                        if (startGeneration != connectGeneration || isFinishing() || isDestroyed()) return;
+                        cancelForPairingChange();
+                    });
+                    return;
+                }
                 if (client.isCancelled()) throw new java.io.IOException("Cancelled");
                 client.start(pairing, new PcvrOptions(getApplicationContext()).requestedCodec());
                 runOnUiThread(() -> {
@@ -964,13 +1464,25 @@ public class MainHubActivity extends Activity {
                         // attempt; the user sees the inline error.
                         connectPending = false;
                         hostClient = null;
+                        pendingHostPin = null;
                         clearInlinePhase();
                         showInlineError(R.string.hub_error_mic_required);
                         return;
                     }
-                    if (usesNativeRuntime() && !restartConsentValid()) {
+                    if (requiredPin != null && !pairedPinMatches(requiredPin)) {
+                        // Last gate before anything is dispatched: the
+                        // host must still be the one the user said yes to.
+                        cancelForPairingChange();
+                        return;
+                    }
+                    if (usesNativeRuntime() && !consentSatisfied()) {
+                        // A positive consent this attempt required
+                        // expired while the host was starting. Fail
+                        // closed with an error: the user must reconnect
+                        // and reconfirm. Consent is never renewed here.
                         connectPending = false;
                         hostClient = null;
+                        pendingHostPin = null;
                         clearInlinePhase();
                         showInlineError(R.string.hub_error_consent_expired);
                         return;
@@ -990,6 +1502,7 @@ public class MainHubActivity extends Activity {
                     if (startGeneration != connectGeneration) return;
                     connectPending = false;
                     hostClient = null;
+                    pendingHostPin = null;
                     clearInlinePhase();
                     showInlineError(message);
                 });
@@ -997,10 +1510,31 @@ public class MainHubActivity extends Activity {
         });
     }
 
+    /**
+     * The restart-consent gate for one attempt.
+     *
+     * <ul>
+     *   <li>An attempt that required NO positive consent — a warm
+     *       {@code vrserver=true} probe, i.e. a normal idempotent
+     *       connection — is always allowed through, and dispatches with
+     *       {@code vq_pcvr_allow_restart=false} plus a zero deadline.
+     *       Consent state can neither block nor fake it.</li>
+     *   <li>An attempt that DID require consent (cold PC, explicit
+     *       Restart tap, manual VR legacy consent) must still be inside
+     *       its 120-second window. A silent expiry between the decision
+     *       and the dispatch must never produce a launch; the caller
+     *       surfaces an error so the user reconnects and reconfirms.</li>
+     * </ul>
+     */
+    private boolean consentSatisfied() {
+        if (!restartConsentRequired) return true;
+        return restartConsentValid();
+    }
+
     /** True if the consent window is still in the future. The window
-     *  starts when Restart VR is confirmed or the cold probe
-     *  succeeds and ends two minutes later. A silent expiry between
-     *  confirmation and dispatch must never produce a launch. */
+     *  starts when Restart VR is confirmed (or the cold probe passes)
+     *  and ends two minutes later. Only consulted for attempts that
+     *  actually required consent — see {@link #consentSatisfied()}. */
     private boolean restartConsentValid() {
         long until = restartConsentUntil;
         if (until <= 0L) return false;
@@ -1040,7 +1574,7 @@ public class MainHubActivity extends Activity {
      */
     private void startManualVr() {
         if (!resumed || isFinishing() || isDestroyed()) return;
-        if (connectPending || launchPending || requestPending) return;
+        if (connectPending || launchPending || requestPending || pcvrExitGateRunning) return;
         if (!VrCapabilities.isHeadset(this)) return;
         if (!hasMicPermission()) {
             requestMicForSteamVr(MIC_TARGET_MANUAL_VR);
@@ -1235,6 +1769,17 @@ public class MainHubActivity extends Activity {
 
     void enrollVrHost(String host, int port) {
         if (connectPending || launchPending || !resumed || requestPending) return;
+        // Pairing with a PC changes which host the hub speaks to, so any
+        // callback expectation from the previous pairing is dropped: a
+        // return from the old machine must never drive a restart here.
+        returnGate.clearPending();
+        pendingPcvrIssue = null;
+        pendingOldPcvrPid = 0;
+        pendingIssueHostPin = null;
+        pendingHostPin = null;
+        dropPendingGateContinuation();
+        restartConsentRequired = false;
+        restartConsentUntil = 0;
         connectPending=true;
         final int generation=++connectGeneration;
         final com.vibertemis.quest.pcvr.PairingSession bootstrap =
@@ -1347,6 +1892,7 @@ public class MainHubActivity extends Activity {
                 if (generation != connectGeneration || !connectPending) return;
                 finishHostConnection();
                 if (!resumed || isFinishing() || isDestroyed() || !VrCapabilities.isHeadset(this) || !hasMicPermission()) return;
+                restartConsentRequired = usesNativeRuntime();
                 restartConsentUntil = android.os.SystemClock.elapsedRealtime() + RESTART_CONSENT_WINDOW_MS;
                 connect.run();
             }).show());
@@ -1376,12 +1922,36 @@ public class MainHubActivity extends Activity {
         ++connectGeneration;
         pendingContinuation = false;
         restartPromptPending = false;
+        // Invalidate the running process gate before anything else. The
+        // bump means a poll already in flight sees a superseded gate and
+        // runs nothing, and the running flag is cleared HERE so the
+        // stale completion cannot clear a newer gate's flag instead. The
+        // queued outcome is dropped, and the poll is interrupted so the
+        // wait ends immediately rather than at its budget.
+        ++pcvrExitGateId;
+        pcvrExitGateRunning = false;
+        java.util.concurrent.Future<?> gatePoll = pcvrExitGateFuture;
+        pcvrExitGateFuture = null;
+        dropPendingGateContinuation();
+        // No restart consent survives a cancel, and no callback
+        // expectation, un-surfaced native issue or accepted host pin does
+        // either: whatever the abandoned session was going to say is no
+        // longer ours.
+        restartConsentRequired = false;
         restartConsentUntil = 0;
+        returnGate.clearPending();
+        pendingPcvrIssue = null;
+        pendingOldPcvrPid = 0;
+        pendingIssueHostPin = null;
+        pendingHostPin = null;
         // An explicit Cancel abandons the action that was waiting on a
         // paused permission grant, so the queued continuation and the
         // target that identifies it are both dropped here.
         permissionContinuationPending = false;
         permissionContinuationTarget = MIC_TARGET_NONE;
+        if (gatePoll != null) {
+            try { gatePoll.cancel(true); } catch (Exception ignored) { }
+        }
         if (hostClient != null) hostClient.cancel();
         if (vrBootstrap != null) vrBootstrap.cancel();
         finishHostConnection();
@@ -1392,11 +1962,12 @@ public class MainHubActivity extends Activity {
     /** Re-attempt a connect after an inline error. The retry path
      *  bumps the generation and re-runs {@link #launchSteamVr}; the
      *  probe runs again and the consent decision is re-evaluated
-     *  from the current PC state. The retry button is hidden on the
-     *  rare consent-expiry case where the user must explicitly
-     *  confirm Restart VR again before continuing. */
+     *  from the current PC state. Nothing is carried over: a retry is
+     *  a fresh tap, not a resumed consent, so it can neither re-open
+     *  the Restart prompt without a fresh native mismatch nor inherit
+     *  a deadline from the attempt that failed. */
     private void retryConnect() {
-        if (launchPending || requestPending || connectPending) return;
+        if (launchPending || requestPending || connectPending || pcvrExitGateRunning) return;
         if (!VrCapabilities.isHeadset(this) || !hasMicPermission()) {
             showInlineError(R.string.hub_error_mic_required);
             return;
@@ -1410,6 +1981,9 @@ public class MainHubActivity extends Activity {
     }
 
     @Override protected void onDestroy() {
+        // Hard cancel: this also invalidates the exit gate and drops any
+        // parked gate outcome, so nothing a late worker reports can
+        // dispatch or prompt on a destroyed hub.
         cancelHostConnection();
         cancelVrSetupDiscovery();
         permissionContinuationPending = false;
@@ -1431,19 +2005,77 @@ public class MainHubActivity extends Activity {
         super.onDestroy();
     }
 
+    /**
+     * Dispatch the immersive PCVR activity.
+     *
+     * <p>Before anything is dispatched the hub proves, through the real
+     * process table, that no process of its own UID with the exact
+     * {@code <package>:pcvr} name and the last known pcvr pid is still
+     * running. That wait is bounded by {@link #PCVR_EXIT_GATE_MS} and
+     * ends the moment the process is gone; it is never a guess about
+     * how long a person takes to read a dialog. When the old pid cannot
+     * be proven gone, nothing launches and the failure is explicit.
+     */
     private void dispatchSteamVr() {
-        if (!resumed || isFinishing() || isDestroyed() || launchPending || !hasMicPermission()) return;
+        if (!resumed || isFinishing() || isDestroyed() || launchPending
+                || !hasMicPermission() || pcvrExitGateRunning) return;
         if (!VrCapabilities.isHeadset(this)) {
             Toast.makeText(this, R.string.hub_steamvr_unsupported,
                     Toast.LENGTH_LONG).show();
             return;
         }
-        if (usesNativeRuntime() && !restartConsentValid()) {
+        if (pendingIssueHostPin != null && !pairedPinMatches(pendingIssueHostPin)) {
+            // This attempt carries an accepted restart consent for one
+            // specific host; if the pairing moved underneath it, there is
+            // nothing left to dispatch.
+            cancelForPairingChange();
+            return;
+        }
+        if (usesNativeRuntime() && !consentSatisfied()) {
             // A silent expiry between confirmation and dispatch must
             // never produce a launch. Surface the inline error so the
             // user can confirm Restart VR again on the same attempt.
             connectPending = false;
             hostClient = null;
+            pendingHostPin = null;
+            clearInlinePhase();
+            showInlineError(R.string.hub_error_consent_expired);
+            return;
+        }
+        final int gatePid = pendingOldPcvrPid;
+        runPcvrExitGate(gatePid, liveness -> {
+            if (liveness != PcvrReturnGate.LIVENESS_GONE) {
+                handlePcvrExitGateFailure(liveness);
+                return;
+            }
+            pendingOldPcvrPid = 0;
+            dispatchSteamVrIntent();
+        });
+    }
+
+    /**
+     * The actual immersive dispatch. Only reached once
+     * {@link #dispatchSteamVr()} established that the old pcvr process
+     * is gone.
+     */
+    private void dispatchSteamVrIntent() {
+        if (!resumed || isFinishing() || isDestroyed() || launchPending
+                || !hasMicPermission() || pcvrExitGateRunning) return;
+        if (!VrCapabilities.isHeadset(this)) {
+            Toast.makeText(this, R.string.hub_steamvr_unsupported,
+                    Toast.LENGTH_LONG).show();
+            return;
+        }
+        if (pendingIssueHostPin != null && !pairedPinMatches(pendingIssueHostPin)) {
+            // Immediately before the dispatch, the host is still the one
+            // the user was asked about.
+            cancelForPairingChange();
+            return;
+        }
+        if (usesNativeRuntime() && !consentSatisfied()) {
+            connectPending = false;
+            hostClient = null;
+            pendingHostPin = null;
             clearInlinePhase();
             showInlineError(R.string.hub_error_consent_expired);
             return;
@@ -1458,29 +2090,424 @@ public class MainHubActivity extends Activity {
             i.addCategory("org.khronos.openxr.intent.category.IMMERSIVE_HMD");
             i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             PcvrOptions options = new PcvrOptions(this);
+            // Restart permission is passed ONLY when this attempt holds a
+            // live positive consent. A warm, normal connection therefore
+            // carries allow_restart=false and a zero deadline, so the
+            // native side can never restart a healthy VR session.
+            boolean allowRestart = usesNativeRuntime() && restartConsentRequired
+                    && android.os.SystemClock.elapsedRealtime() < restartConsentUntil;
             i.putExtra("vq_pcvr_codec", options.requestedCodec());
             i.putExtra("vq_pcvr_fallback", options.standardCodec());
             i.putExtra("vq_pcvr_travel", options.travel());
             i.putExtra("vq_pcvr_bitrate_mbps", options.bitrateMbps());
-            i.putExtra("vq_pcvr_allow_restart", usesNativeRuntime() && android.os.SystemClock.elapsedRealtime() < restartConsentUntil);
-            i.putExtra("vq_pcvr_restart_until_ms", restartConsentUntil);
+            i.putExtra("vq_pcvr_allow_restart", allowRestart);
+            i.putExtra("vq_pcvr_restart_until_ms", allowRestart ? restartConsentUntil : 0L);
+            // Correlation identity for the native return contract: a
+            // random one-shot nonce plus the PUBLIC pairing certificate
+            // pin. No credential is ever placed in an Intent.
+            i.putExtra(EXTRA_PCVR_LAUNCH_NONCE, returnGate.beginDispatch(currentPairedPin()));
+            i.putExtra(EXTRA_PCVR_HOST_PIN, returnGate.pendingPin());
             connectPending = false;
             hostClient = null;
+            pendingHostPin = null;
+            // The attempt is spent: the host it was pinned to is not
+            // carried into whatever the user does next.
+            pendingIssueHostPin = null;
             clearInlinePhase();
             clearInlineError();
             launchPending = true;
             startActivity(i);
         } catch (ActivityNotFoundException e) {
             launchPending = false;
+            // Nothing can come back through the return contract now.
+            returnGate.clearPending();
             Log.w(TAG, "SteamVrActivity not available: " + e.getMessage());
             Toast.makeText(this, R.string.hub_steamvr_unsupported,
                     Toast.LENGTH_LONG).show();
         } catch (SecurityException e) {
             launchPending = false;
+            returnGate.clearPending();
             Log.w(TAG, "SteamVrActivity dispatch security exception: "
                     + e.getMessage());
             Toast.makeText(this, R.string.hub_steamvr_unsupported,
                     Toast.LENGTH_LONG).show();
+        }
+    }
+
+    /**
+     * The pairing certificate pin the hub holds right now. The probe
+     * caches the public pin for the attempt it authenticated, so the
+     * common path never touches the keystore on the UI thread; a dispatch
+     * that skipped the probe (manual VR) re-reads it here. Never a token.
+     */
+    private String currentPairedPin() {
+        String cached = pendingHostPin;
+        if (cached != null) return cached;
+        try {
+            HostPairing pairing = loadHostPairing();
+            return pairing == null ? null : pairing.pin;
+        } catch (Exception e) {
+            Log.w(TAG, "Could not read the pairing pin: " + e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Prove the old immersive process is gone before anything new is
+     * dispatched.
+     *
+     * <p>The poll runs on the connect worker (never the UI thread) and
+     * asks {@link ActivityManager#getRunningAppProcesses()} for a
+     * snapshot this hub turns into own-UID rows. {@link
+     * PcvrReturnGate#liveness} then decides:
+     * <ul>
+     *   <li>{@link PcvrReturnGate#LIVENESS_GONE} — the process really
+     *       is gone; the continuation runs.</li>
+     *   <li>{@link PcvrReturnGate#LIVENESS_ALIVE} — still there; keep
+     *       polling until the budget runs out.</li>
+     *   <li>{@link PcvrReturnGate#LIVENESS_UNKNOWN} — the platform
+     *       could not answer (or the name is live under a different
+     *       pid). Stop immediately and fail clearly: an unknown state
+     *       must never become an automatic launch.</li>
+     * </ul>
+     *
+     * <p><b>The completion is guarded, not trusted.</b> A gate is
+     * identified by {@link #pcvrExitGateId} and by the
+     * {@code connectGeneration} that was current when it started, and
+     * both are re-checked on the UI thread before {@code outcome} runs:
+     * a Cancel / Destroy / new attempt bumps the identity, so a poll
+     * that was already in flight can neither launch VR nor prompt
+     * anything for an attempt the user has abandoned. A completion that
+     * has been superseded also never clears
+     * {@link #pcvrExitGateRunning}, because by then the flag may
+     * belong to a newer gate.
+     */
+    private void runPcvrExitGate(final int targetPid,
+                                 final java.util.function.IntConsumer outcome) {
+        final int ownUid = android.os.Process.myUid();
+        final String expected = getPackageName() + SteamVrActivity.PROCESS_SUFFIX;
+        final int gateId = ++pcvrExitGateId;
+        final int gateGeneration = connectGeneration;
+        pcvrExitGateRunning = true;
+        java.util.concurrent.Future<?> poll = null;
+        try {
+            poll = connectWorker.submit((Runnable) () -> {
+                int liveness = PcvrReturnGate.LIVENESS_UNKNOWN;
+                long deadline = android.os.SystemClock.elapsedRealtime() + PCVR_EXIT_GATE_MS;
+                while (true) {
+                    liveness = PcvrReturnGate.liveness(readPcvrProcesses(), ownUid, expected, targetPid);
+                    if (liveness != PcvrReturnGate.LIVENESS_ALIVE) break;
+                    if (android.os.SystemClock.elapsedRealtime() >= deadline) break;
+                    try {
+                        Thread.sleep(PCVR_EXIT_POLL_MS);
+                    } catch (InterruptedException e) {
+                        // A Cancel / Destroy interrupted the wait: the
+                        // answer no longer matters, and the completion
+                        // below sees a superseded gate and drops it.
+                        Thread.currentThread().interrupt();
+                        liveness = PcvrReturnGate.LIVENESS_UNKNOWN;
+                        break;
+                    }
+                }
+                final int result = liveness;
+                runOnUiThread(() -> {
+                    if (gateId != pcvrExitGateId) {
+                        // Superseded (Cancel, Destroy, or a newer gate).
+                        // Return without touching the running flag: it
+                        // may already belong to that newer gate.
+                        return;
+                    }
+                    pcvrExitGateRunning = false;
+                    pcvrExitGateFuture = null;
+                    if (gateGeneration != connectGeneration
+                            || isFinishing() || isDestroyed()) return;
+                    // The process fact is settled. If the hub is paused,
+                    // park the continuation for the next resume instead
+                    // of dropping it (a dropped launch would strand
+                    // connectPending) and instead of running it now (an
+                    // unresumed dispatch would return without a resume
+                    // continuation).
+                    pendingGateContinuation = () -> outcome.accept(result);
+                    pendingGateContinuationId = gateId;
+                    pendingGateContinuationGeneration = gateGeneration;
+                    drainPendingGateContinuation();
+                });
+            });
+            pcvrExitGateFuture = poll;
+        } catch (java.util.concurrent.RejectedExecutionException rejected) {
+            // The worker is gone (the hub was torn down). Fail closed: no
+            // continuation runs, so nothing is dispatched or prompted.
+            pcvrExitGateRunning = false;
+            pcvrExitGateFuture = null;
+            Log.w(TAG, "PCVR exit gate could not start: " + rejected.getMessage());
+        }
+    }
+
+    /**
+     * Run a gate outcome that landed while the hub was paused — once,
+     * and only after it has re-proved that the continuation still
+     * belongs to this attempt.
+     *
+     * <p>Every check here is the paused-window equivalent of a guard the
+     * synchronous path already makes: the gate identity (a Cancel /
+     * Destroy / newer gate bumps it), the {@code connectGeneration}, the
+     * activity still being alive and resumed, the device still being a
+     * headset, the microphone permission still held, and any restart
+     * consent this attempt required still inside its window. A consent
+     * that expired while the hub was paused is dropped with an inline
+     * error rather than renewed.
+     *
+     * <p>The continuation is consumed before it runs, so a second resume
+     * can never replay it.
+     */
+    private void drainPendingGateContinuation() {
+        if (pendingGateContinuation == null) return;
+        if (!resumed || isFinishing() || isDestroyed()) return;
+        if (pendingGateContinuationId != pcvrExitGateId
+                || pendingGateContinuationGeneration != connectGeneration) {
+            // The attempt this outcome belonged to is gone.
+            dropPendingGateContinuation();
+            return;
+        }
+        if (!VrCapabilities.isHeadset(this) || !hasMicPermission()) {
+            dropPendingGateContinuation();
+            cancelHostConnection();
+            showInlineError(R.string.hub_error_mic_required);
+            return;
+        }
+        if (usesNativeRuntime() && !consentSatisfied()) {
+            dropPendingGateContinuation();
+            cancelHostConnection();
+            showInlineError(R.string.hub_error_consent_expired);
+            return;
+        }
+        final Runnable continuation = pendingGateContinuation;
+        dropPendingGateContinuation();
+        continuation.run();
+    }
+
+    /** Forget a parked gate outcome. Nothing to run, nothing to replay. */
+    private void dropPendingGateContinuation() {
+        pendingGateContinuation = null;
+        pendingGateContinuationId = -1;
+        pendingGateContinuationGeneration = -1;
+    }
+
+    /**
+     * Fail closed when the old immersive process cannot be proven gone.
+     * The user is told plainly, and nothing is launched: an unknown
+     * process state must never turn into an automatic VR start.
+     */
+    private void handlePcvrExitGateFailure(int liveness) {
+        connectPending = false;
+        hostClient = null;
+        pendingHostPin = null;
+        // The attempt is over, so the host it was pinned to is no longer
+        // this hub's business.
+        pendingIssueHostPin = null;
+        clearInlinePhase();
+        showInlineError(liveness == PcvrReturnGate.LIVENESS_ALIVE
+                ? "The previous VR session on this headset is still closing. Leave it, then tap Connect again."
+                : "Could not confirm the previous VR session closed. Leave this headset's VR app, then tap Connect again.");
+        Log.w(TAG, "PCVR exit gate did not prove the old process gone (liveness="
+                + liveness + ")");
+    }
+
+    /* ------------------------------------------------------------
+     * Native return contract (Java side of the JNI boundary).
+     * ------------------------------------------------------------ */
+
+    /**
+     * A {@link SteamVrActivity} that reported a native issue comes back
+     * with {@code CLEAR_TOP|SINGLE_TOP}, so this hub may be either
+     * brought forward ({@code onNewIntent}) or recreated
+     * ({@code onCreate}, which also calls {@link #handlePcvrReturn}).
+     */
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        handlePcvrReturn(intent);
+    }
+
+    /**
+     * Validate and consume one native return callback.
+     *
+     * <p>Validation happens BEFORE anything is consumed or shown, and it
+     * is entirely view-free so it is safe to run from {@code onCreate}:
+     * <ul>
+     *   <li>the action must be {@link #ACTION_PCVR_RETURN};</li>
+     *   <li>the issue must be one of the two known native values;</li>
+     *   <li>the echoed nonce must match the pending expectation exactly
+     *       — a missing, forged, stale or already-spent nonce is
+     *       rejected;</li>
+     *   <li>the echoed pin must match the pin the dispatch carried AND
+     *       the pairing the hub holds right now, so a callback produced
+     *       against a since-re-paired PC cannot drive anything here.</li>
+     * </ul>
+     * A rejected callback is inert: no prompt, no error, no launch.
+     */
+    private void handlePcvrReturn(Intent intent) {
+        if (intent == null || isFinishing() || isDestroyed()) return;
+        if (!ACTION_PCVR_RETURN.equals(intent.getAction())) return;
+        String livePin;
+        try {
+            HostPairing pairing = loadHostPairing();
+            livePin = pairing == null ? null : pairing.pin;
+        } catch (Exception e) {
+            // An unreadable pairing store is a changed host as far as
+            // this callback is concerned.
+            livePin = null;
+        }
+        int verdict = returnGate.accept(
+                intent.getStringExtra(EXTRA_PCVR_ISSUE),
+                intent.getStringExtra(EXTRA_PCVR_LAUNCH_NONCE),
+                intent.getStringExtra(EXTRA_PCVR_HOST_PIN),
+                livePin);
+        if (verdict == PcvrReturnGate.ACCEPT_RESTART_REQUIRED) {
+            acceptPcvrIssue(PcvrReturnGate.ISSUE_RESTART_REQUIRED,
+                    intent.getIntExtra(EXTRA_PCVR_OLD_PID, 0), livePin);
+            return;
+        }
+        if (verdict == PcvrReturnGate.ACCEPT_RESTART_FAILED) {
+            acceptPcvrIssue(PcvrReturnGate.ISSUE_RESTART_FAILED,
+                    intent.getIntExtra(EXTRA_PCVR_OLD_PID, 0), null);
+            return;
+        }
+        Log.i(TAG, "Ignoring PCVR return callback (verdict=" + verdict + ")");
+    }
+
+    /**
+     * A validated native issue. Nothing is started here: the attempt
+     * that produced the callback is abandoned, every trace of positive
+     * restart consent is dropped, and the issue waits for
+     * {@link #advancePendingPcvrIssue()} — which only runs while the hub
+     * is resumed.
+     *
+     * @param acceptedPin the public pin this callback was validated
+     *                    against, retained so the Restart tap is spent on
+     *                    that exact host. Only a real mismatch carries
+     *                    one, and {@code null} is treated as "no host to
+     *                    restart" when the user confirms.
+     */
+    private void acceptPcvrIssue(String issue, int oldPid, String acceptedPin) {
+        if (hostClient != null) {
+            try { hostClient.cancel(); } catch (Exception ignored) { }
+        }
+        hostClient = null;
+        pendingHostPin = null;
+        connectPending = false;
+        pendingContinuation = false;
+        // A callback never leaves a restart consent standing.
+        restartConsentRequired = false;
+        restartConsentUntil = 0;
+        pendingPcvrIssue = issue;
+        pendingOldPcvrPid = oldPid;
+        pendingIssueHostPin = PcvrReturnGate.isPublicPin(acceptedPin) ? acceptedPin : null;
+        advancePendingPcvrIssue();
+    }
+
+    /**
+     * Surface a validated native issue, once, on a resumed hub.
+     *
+     * <ul>
+     *   <li>{@code restart_failed} — a concise Retry / Cancel error. The
+     *       native side already tried and failed, so the hub never
+     *       restarts anything on its own.</li>
+     *   <li>{@code restart_required} — the old Restart VR / Cancel
+     *       dialog, but only after the real process gate proves the
+     *       reporting {@code :pcvr} process is gone. A pid we cannot
+     *       trust fails closed with an explicit message instead of a
+     *       prompt, and a host we cannot name fails closed too: the
+     *       accepted public pin is what the prompt's Restart tap is
+     *       later spent on.</li>
+     * </ul>
+     */
+    private void advancePendingPcvrIssue() {
+        final String issue = pendingPcvrIssue;
+        if (issue == null) return;
+        if (!resumed || isFinishing() || isDestroyed() || pcvrExitGateRunning) return;
+        if (pendingGateContinuation != null) {
+            // A gate already proved a process fact for this issue and is
+            // waiting for the next resume. Starting a second gate here
+            // would race that parked continuation.
+            return;
+        }
+        if (PcvrReturnGate.ISSUE_RESTART_FAILED.equals(issue)) {
+            pendingPcvrIssue = null;
+            showPcvrRestartFailed();
+            return;
+        }
+        if (pendingOldPcvrPid <= 0) {
+            // Without the reporting pid there is nothing to prove, and a
+            // prompt the hub cannot verify would be a guess.
+            pendingPcvrIssue = null;
+            clearInlinePhase();
+            showInlineError("SteamVR needs a restart, but this headset could not confirm its VR session closed. Leave this headset's VR app, then tap Connect again.");
+            Log.w(TAG, "PCVR restart_required without a usable pid; refusing to prompt");
+            return;
+        }
+        // No prompt and no dispatch until the gate answers; the wait is a
+        // process fact, not a UX beat, so no phase line is faked here.
+        runPcvrExitGate(pendingOldPcvrPid, liveness -> {
+            if (liveness != PcvrReturnGate.LIVENESS_GONE) {
+                pendingPcvrIssue = null;
+                handlePcvrExitGateFailure(liveness);
+                return;
+            }
+            pendingOldPcvrPid = 0;
+            pendingPcvrIssue = null;
+            // The prompt runs as a fresh attempt so its generation guard
+            // covers a Cancel / new tap exactly like any other dialog.
+            connectPending = true;
+            ++connectGeneration;
+            showRestartVrConsent(connectGeneration);
+        });
+    }
+
+    /** Concise Retry / Cancel error for a native restart that failed.
+     *  Consent is already cleared by {@link #acceptPcvrIssue}: Retry is
+     *  a fresh connect (fresh probe, fresh consent), never a replay of
+     *  the old one. */
+    private void showPcvrRestartFailed() {
+        if (isFinishing() || isDestroyed()) return;
+        clearInlinePhase();
+        clearInlineError();
+        android.app.AlertDialog.Builder b = new android.app.AlertDialog.Builder(this)
+                .setTitle("VR restart failed")
+                .setMessage("SteamVR could not be restarted on your PC. Check the PC, then retry.")
+                .setPositiveButton("Retry", (d, w) -> retryConnect())
+                .setNegativeButton("Cancel", (d, w) -> cancelHostConnection());
+        if (restartVrDialog != null) {
+            try { restartVrDialog.dismiss(); } catch (Exception ignored) { }
+        }
+        android.app.AlertDialog dialog = b.show();
+        restartVrDialog = dialog;
+        trackDialog(dialog);
+    }
+
+    /**
+     * Process snapshot the exit gate reads, reduced to own-UID rows.
+     * Production always uses
+     * {@link ActivityManager#getRunningAppProcesses()}; {@code null}
+     * means "the platform could not answer", which the gate treats as
+     * unknown (fail closed). Tests override this to drive the gate
+     * deterministically.
+     */
+    protected java.util.List<PcvrReturnGate.ProcRow> readPcvrProcesses() {
+        java.util.List<PcvrReturnGate.ProcRow> rows = new java.util.ArrayList<>();
+        try {
+            ActivityManager manager = (ActivityManager) getSystemService(ACTIVITY_SERVICE);
+            if (manager == null) return null;
+            List<ActivityManager.RunningAppProcessInfo> processes = manager.getRunningAppProcesses();
+            if (processes == null) return null;
+            for (ActivityManager.RunningAppProcessInfo p : processes) {
+                if (p == null) continue;
+                rows.add(new PcvrReturnGate.ProcRow(p.uid, p.processName, p.pid));
+            }
+            return rows;
+        } catch (Throwable t) {
+            return null;
         }
     }
 

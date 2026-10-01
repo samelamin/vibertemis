@@ -69,11 +69,15 @@ import static org.junit.Assert.assertTrue;
  *       {@code onRequestPermissionsResult} seam, the real
  *       {@link #REQ_MIC_FOR_STEAMVR} request code, and the real
  *       {@code loadNativeHeadsetIdentity} seam, but a deterministic
- *       {@link FakeHost} returning an authenticated
- *       {@code vrserver:false} probe. Permission, lifecycle,
- *       duplication, denial and launch-guard behaviour is only
- *       reachable through this fixture, because Connect no longer
- *       asks for the microphone on the unpaired setup path.</li>
+ *       {@link FakeHost} whose {@code vrserver} answer each test
+ *       chooses. Permission, lifecycle, duplication, denial and
+ *       launch-guard behaviour is only reachable through this fixture,
+ *       because Connect no longer asks for the microphone on the
+ *       unpaired setup path. {@link NativePairedHub} is the same hub on
+ *       the native runtime, where the restart-consent contract applies,
+ *       {@link ProcessAwareHub} adds a controllable process
+ *       snapshot, and {@link SwappablePairingHub} adds a pairing the
+ *       test can replace while an attempt is in flight.</li>
  * </ul>
  *
  * <p><b>Harness rules.</b>
@@ -104,8 +108,8 @@ import static org.junit.Assert.assertTrue;
  *       without asking for mic permission,</li>
  *   <li>on an unpaired headset, discover and pair before asking for the
  *       microphone,</li>
- *   <li>guard against in-flight permission requests and pending
- *       launches so rapid taps and duplicate callbacks cannot start two
+ *   <li>guard against in-flight permission requests and pending launches
+ *       so rapid taps and duplicate callbacks cannot start two
  *       activities at once,</li>
  *   <li>never auto-launch from {@code onResume} after returning from
  *       Streaming settings, a permission dialog, or a recreation — but
@@ -114,9 +118,46 @@ import static org.junit.Assert.assertTrue;
  *       permission name, current headset status, and current grant
  *       state before launching PCVR,</li>
  *   <li>request the microphone for Manual VR when it is missing, and
- *       still require the explicit legacy restart consent afterwards.</li>
+ *       still require the explicit legacy restart consent afterwards,</li>
+ *   <li>treat a WARM {@code vrserver=true} probe as a normal idempotent
+ *       connection — one probe, one start, one dispatch, no prompt, and
+ *       {@code vq_pcvr_allow_restart=false} with a zero deadline,</li>
+ *   <li>keep the existing cold {@code vrserver=false} behaviour: open
+ *       the 120-second consent window and start without a prompt,</li>
+ *   <li>accept a native restart callback only when it echoes the
+ *       pending launch nonce and the pairing pin the hub holds right
+ *       now, and treat a missing, forged, stale, duplicate or
+ *       host-changed callback as inert,</li>
+ *   <li>never restart automatically after a native report: a
+ *       {@code restart_required} surfaces the Restart / Cancel dialog
+ *       only once the old {@code :pcvr} process is provably gone, and a
+ *       Restart tap re-probes the SAME pairing with a NEW client
+ *       before setting the consent window,</li>
+ *   <li>keep no positive restart consent across a recreation, and</li>
+ *   <li>refuse to dispatch while a previous immersive process of our own
+ *       uid is still running, failing clearly instead of guessing;</li>
+ *   <li>treat the process gate's answer as untrusted: a Cancel, a
+ *       Destroy or a newer attempt must invalidate a poll that is already
+ *       in flight, and a gate that finishes while the hub is paused must
+ *       be parked and continued exactly once on the next resume, never
+ *       dropped, never run early and never replayed;</li>
+ *   <li>spend a Restart consent only on the host the accepted native
+ *       callback named: a pairing replaced while the prompt is open or
+ *       during the fresh probe must yield no probe, no start, no
+ *       dispatch and no restart permission, while a host that merely
+ *       changed address (same pin) is still restartable.</li>
  * </ul>
+ *
+ * <p><b>Process gate.</b> Robolectric does not model a running
+ * {@code :pcvr} process, so the hub's exit gate reads a snapshot through
+ * the {@code readPcvrProcesses} seam. The default fixture answers "no
+ * process of ours is running" (the real situation before a launch);
+ * {@link ProcessAwareHub} lets a test keep an old pid alive and assert
+ * that nothing is dispatched until the process fact changes — which is
+ * how the tests prove the gate waits on process identity rather than on
+ * a debounce.
  */
+
 @RunWith(RobolectricTestRunner.class)
 @Config(shadows = ShadowMoonBridge.class)
 public class MainHubActivityTest {
@@ -132,21 +173,40 @@ public class MainHubActivityTest {
 
     /**
      * Deterministic stand-in for the authenticated host. It answers the
-     * probe with {@code vrserver:false} (a cold PC: no consent dialog,
-     * the probe itself is the consent) and counts probes and start
-     * requests so a test can prove how many attempts reached the host.
-     * {@link #release} can be held open to keep an attempt in flight
-     * while the test taps again.
+     * probe with a caller-chosen {@code vrserver} value (a cold PC is the
+     * default: the probe itself opens the consent window and no modal
+     * dialog appears) and counts probes and start requests so a test can
+     * prove how many attempts reached the host.
+     * {@link #release} can be held open to keep a start request in flight
+     * while the test taps again, and {@link #probeRelease} does the same
+     * for the probe itself so a test can change the pairing while a
+     * request is genuinely on the wire.
      */
     static class FakeHost extends HostClient {
         final JSONObject status = new JSONObject();
         final AtomicInteger probes = new AtomicInteger();
         final AtomicInteger starts = new AtomicInteger();
+        final AtomicInteger clients = new AtomicInteger();
+        /** Counts probes that have been ENTERED, before the release
+         *  latch. A test that has to change something while the request
+         *  is genuinely in flight waits on this, not on {@link #probes},
+         *  which only advances once the host has answered. */
+        final AtomicInteger probeEntries = new AtomicInteger();
         volatile CountDownLatch release = new CountDownLatch(0);
+        /** Held open to keep a probe in flight while the test changes
+         *  the pairing underneath it. */
+        volatile CountDownLatch probeRelease = new CountDownLatch(0);
         FakeHost() throws org.json.JSONException { status.put("vrserver", false); }
-        @Override public JSONObject request(HostPairing p, String method, String path, byte[] body) {
+        /** Answer the next probe with a warm or a cold vrserver state. */
+        void setVrserver(boolean warm) throws org.json.JSONException { status.put("vrserver", warm); }
+        @Override public JSONObject request(HostPairing p, String method, String path, byte[] body)
+                throws Exception {
             assertEquals("GET", method);
             assertEquals("/status", path);
+            probeEntries.incrementAndGet();
+            if (!probeRelease.await(5, TimeUnit.SECONDS)) {
+                throw new java.io.IOException("fake probe timed out");
+            }
             probes.incrementAndGet();
             return status;
         }
@@ -156,6 +216,33 @@ public class MainHubActivityTest {
                 throw new Exception("fake host start timed out");
             }
         }
+
+        /**
+         * One attempt's client: a NEW {@link HostClient} per
+         * {@code createHostClient} call, exactly as production builds
+         * one per attempt. The cancellation flag is inherited private
+         * state, so the {@code cancel()} that abandons a superseded
+         * attempt can never leave the NEXT attempt holding an
+         * already-cancelled client.
+         *
+         * <p>Both calls are delegated to the shared {@link FakeHost},
+         * so the counters and the release latches a test drives stay
+         * the single source of truth for what really reached the wire.
+         */
+        static final class Attempt extends HostClient {
+            private final FakeHost shared;
+            Attempt(FakeHost shared) { this.shared = shared; }
+            @Override public JSONObject request(
+                    HostPairing p, String method, String path, byte[] body) throws Exception {
+                return shared.request(p, method, path, body);
+            }
+            @Override public void start(HostPairing p, String codec) throws Exception {
+                shared.start(p, codec);
+            }
+        }
+
+        /** A fresh, not-yet-cancelled client for a single attempt. */
+        Attempt newAttempt() { return new Attempt(this); }
     }
 
     @Before
@@ -190,7 +277,13 @@ public class MainHubActivityTest {
      *  is a Robolectric no-op and would otherwise pin tests for
      *  the 8-second browse budget. It keeps the real
      *  {@code loadNativeHeadsetIdentity} seam so the native SNI path
-     *  is exercised where the runtime asks for it. */
+     *  is exercised where the runtime asks for it.
+     *
+     *  <p>It also pins the process-liveness gate: the default snapshot is
+     *  an empty list, i.e. no {@code :pcvr} process of ours is running,
+     *  so the gate reports GONE on its first read and every dispatch
+     *  behaves as it does on a real headset. Tests that care about a live
+     *  old process use {@link ProcessAwareHub} instead. */
     public static class FakeNsdHub extends MainHubActivity {
         static volatile VrSetupDiscovery.Factory sharedFactory;
         @Override protected VrSetupDiscovery createVrSetupDiscovery() {
@@ -199,23 +292,84 @@ public class MainHubActivityTest {
             return super.createVrSetupDiscovery();
         }
         @Override protected String loadNativeHeadsetIdentity() { return "test.client"; }
+        @Override protected java.util.List<PcvrReturnGate.ProcRow> readPcvrProcesses() {
+            return new java.util.ArrayList<>();
+        }
     }
 
     /** Paired headset hub: the primary Connect runs the authenticated
      *  probe + start against the {@link FakeHost}. The native headset
      *  identity seam is preserved so a native runtime still gets its
      *  SNI name, and the fake NSD driver keeps any setup discovery in
-     *  these tests deterministic. */
+     *  these tests deterministic. Every dispatch must additionally walk
+     *  {@code createHostClient}, because a Restart tap must never reuse
+     *  the client of the session that failed. What it hands out is a
+     *  fresh {@link FakeHost.Attempt} every time, so a Cancel that
+     *  abandons one attempt cannot strand the next one on a cancelled
+     *  client. */
     public static class PairedHub extends FakeNsdHub {
         @Override protected boolean hasPairedHost() { return true; }
         @Override protected HostPairing loadHostPairing() { return pairing; }
-        @Override protected HostClient createHostClient() { return host; }
+        @Override protected HostClient createHostClient() {
+            FakeHost shared = host;
+            shared.clients.incrementAndGet();
+            return shared.newAttempt();
+        }
+    }
+
+    /** Paired hub on the native runtime build, where the restart-consent
+     *  and {@code vq_pcvr_allow_restart} contract is mandatory. */
+    public static class NativePairedHub extends PairedHub {
+        @Override protected boolean usesNativeRuntime() { return true; }
     }
 
     /** Paired hub on the native runtime build, where the legacy
      *  explicit restart consent is mandatory before a manual start. */
-    public static class ManualVrHub extends PairedHub {
-        @Override protected boolean usesNativeRuntime() { return true; }
+    public static class ManualVrHub extends NativePairedHub {
+    }
+
+    /** Paired native hub whose process snapshot the test controls, so the
+     *  exit gate can be observed rather than assumed.
+     *
+     *  <p>The first {@link #aliveReads} snapshots report a live
+     *  {@code <package>:pcvr} process owned by our own uid running under
+     *  {@link #livePid}; after that the hub reports whatever
+     *  {@link #procRows} holds (an empty list by default). Setting
+     *  {@link #procRows} to {@code null} makes the platform answer
+     *  unknowable, which the gate must treat as a failure rather than as
+     *  permission to launch. */
+    public static class ProcessAwareHub extends NativePairedHub {
+        volatile java.util.List<PcvrReturnGate.ProcRow> procRows = new java.util.ArrayList<>();
+        final AtomicInteger processReads = new AtomicInteger();
+        volatile int aliveReads = 0;
+        volatile int livePid = 4242;
+        volatile String liveProcessName = "";
+        @Override protected java.util.List<PcvrReturnGate.ProcRow> readPcvrProcesses() {
+            int read = processReads.incrementAndGet();
+            if (read <= aliveReads && liveProcessName != null && !liveProcessName.isEmpty()) {
+                return java.util.Collections.singletonList(new PcvrReturnGate.ProcRow(
+                        android.os.Process.myUid(), liveProcessName, livePid));
+            }
+            return procRows;
+        }
+    }
+
+    /**
+     * Paired native hub whose pairing the test can replace while an
+     * attempt is in flight, so a re-pair can be observed at a precise
+     * moment — while the Restart prompt is open, or while the fresh
+     * probe is in flight — instead of only at a convenient boundary.
+     *
+     * <p>The process snapshot is the default empty list, so the exit gate
+     * resolves immediately and these tests isolate the pinning rules
+     * from the process wait.
+     */
+    public static class SwappablePairingHub extends NativePairedHub {
+        volatile HostPairing currentPairing;
+        @Override protected HostPairing loadHostPairing() {
+            HostPairing current = currentPairing;
+            return current != null ? current : super.loadHostPairing();
+        }
     }
 
     /** Driver that fires {@code onDiscoveryStopped} immediately
@@ -264,12 +418,76 @@ public class MainHubActivityTest {
                 .create().start().resume();
     }
 
+    /** Paired headset on the native runtime, where the restart-consent
+     *  contract (and {@code vq_pcvr_allow_restart}) applies. */
+    private ActivityController<NativePairedHub> startNativePairedHub() {
+        useEmptyNsd();
+        return Robolectric.buildActivity(NativePairedHub.class)
+                .create().start().resume();
+    }
+
+    /** Paired headset on the native runtime with a controllable process
+     *  snapshot, for the exit-gate tests. */
+    private ActivityController<ProcessAwareHub> startProcessAwareHub() {
+        useEmptyNsd();
+        ActivityController<ProcessAwareHub> c =
+                Robolectric.buildActivity(ProcessAwareHub.class).create().start().resume();
+        c.get().liveProcessName = c.get().getPackageName() + SteamVrActivity.PROCESS_SUFFIX;
+        return c;
+    }
+
     /** Paired headset on the native runtime, where the legacy explicit
      *  restart consent is mandatory. */
     private ActivityController<ManualVrHub> startManualHub() {
         useEmptyNsd();
         return Robolectric.buildActivity(ManualVrHub.class)
                 .create().start().resume();
+    }
+
+    /** Paired native hub whose pairing the test controls, for the
+     *  "the host changed under this consent" tests. */
+    private ActivityController<SwappablePairingHub> startSwappablePairingHub() {
+        useEmptyNsd();
+        ActivityController<SwappablePairingHub> c =
+                Robolectric.buildActivity(SwappablePairingHub.class).create().start().resume();
+        c.get().currentPairing = pairing;
+        return c;
+    }
+
+    /** A public pin that is NOT the paired host's: what a re-pair to a
+     *  different PC leaves behind. */
+    private static final String OTHER_PIN =
+            "3333333333333333333333333333333333333333333333333333333333333333";
+
+    /**
+     * Build a pairing that names a different host. The production parser
+     * only ever accepts a pin that matches its own certificate, and a
+     * re-pair really does produce a different certificate, so the test
+     * constructs the value through the same package-private shape the
+     * factory fills in. Address and pin are independent: the same helper
+     * also produces a host that merely MOVED, which keeps its pin.
+     */
+    private static HostPairing pairingFor(String address, String pin) throws Exception {
+        java.lang.reflect.Constructor<HostPairing> ctor = HostPairing.class
+                .getDeclaredConstructor(String.class, String.class, String.class,
+                        String.class, String.class, String.class, String.class);
+        ctor.setAccessible(true);
+        return ctor.newInstance(address, pin,
+                "0000000000000000000000000000000000000000000000000000000000000009",
+                "", "", "", "");
+    }
+
+    /** Read the private restart-consent deadline and overwrite it, so a
+     *  test can make a consent window expire while the hub is paused. */
+    private static void setRestartConsentUntil(MainHubActivity hub, long value) {
+        try {
+            java.lang.reflect.Field f =
+                    MainHubActivity.class.getDeclaredField("restartConsentUntil");
+            f.setAccessible(true);
+            f.setLong(hub, value);
+        } catch (Exception e) {
+            throw new AssertionError("cannot write restartConsentUntil", e);
+        }
     }
 
     /**
@@ -332,12 +550,115 @@ public class MainHubActivityTest {
         }
     }
 
+    /** Read the private restart-consent deadline so a test can prove
+     *  that a positive consent is (a) opened for a cold start or an
+     *  explicit Restart tap and (b) never granted or retained silently,
+     *  including across a recreation. */
+    private static long restartConsentUntil(MainHubActivity hub) {
+        try {
+            java.lang.reflect.Field f =
+                    MainHubActivity.class.getDeclaredField("restartConsentUntil");
+            f.setAccessible(true);
+            return f.getLong(hub);
+        } catch (Exception e) {
+            throw new AssertionError("cannot read restartConsentUntil", e);
+        }
+    }
+
+    /** The launch-nonce expectation the hub is currently holding, so a
+     *  test can build a callback that the hub will accept (and one it
+     *  will reject). */
+    private static String pendingNonce(MainHubActivity hub) {
+        try {
+            java.lang.reflect.Field f = MainHubActivity.class.getDeclaredField("returnGate");
+            f.setAccessible(true);
+            return ((PcvrReturnGate) f.get(hub)).pendingNonce();
+        } catch (Exception e) {
+            throw new AssertionError("cannot read the return gate", e);
+        }
+    }
+
+    /**
+     * Whether the hub currently believes a process-liveness gate is
+     * polling. Read only to pin the ONE invariant a user cannot see
+     * directly: while a gate is waiting, a superseded gate's completion
+     * must not clear this flag, or a second attempt could be started
+     * against a process that is still shutting down. Everything else
+     * these tests assert is observed through intents, probes and
+     * dialogs.
+     */
+    private static boolean exitGateRunning(MainHubActivity hub) {
+        try {
+            java.lang.reflect.Field f =
+                    MainHubActivity.class.getDeclaredField("pcvrExitGateRunning");
+            f.setAccessible(true);
+            return f.getBoolean(hub);
+        } catch (Exception e) {
+            throw new AssertionError("cannot read pcvrExitGateRunning", e);
+        }
+    }
+
     private static String text(View v) { return ((TextView) v).getText().toString(); }
 
     private static boolean isSteamVrIntent(Intent i) {
         if (i == null || i.getComponent() == null) return false;
         return "com.vibertemis.quest.hub.SteamVrActivity"
                 .equals(i.getComponent().getClassName());
+    }
+
+    /** The one immersive dispatch the hub recorded, or {@code null}. */
+    private static Intent steamVrIntent(StartedIntentLog log) {
+        return log.all().stream().filter(MainHubActivityTest::isSteamVrIntent)
+                .findFirst().orElse(null);
+    }
+
+    /** Rebuild the return Intent a {@link SteamVrActivity} would send for
+     *  the dispatch it actually received: same action and flags, the
+     *  nonce and public pin echoed back, plus the reporting pid. */
+    private static Intent nativeReturn(Intent launch, String issue, int oldPid) {
+        Intent back = new Intent();
+        back.setAction(MainHubActivity.ACTION_PCVR_RETURN);
+        back.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        back.putExtra(MainHubActivity.EXTRA_PCVR_ISSUE, issue);
+        back.putExtra(MainHubActivity.EXTRA_PCVR_LAUNCH_NONCE,
+                launch == null ? null : launch.getStringExtra(MainHubActivity.EXTRA_PCVR_LAUNCH_NONCE));
+        back.putExtra(MainHubActivity.EXTRA_PCVR_HOST_PIN,
+                launch == null ? null : launch.getStringExtra(MainHubActivity.EXTRA_PCVR_HOST_PIN));
+        back.putExtra(MainHubActivity.EXTRA_PCVR_OLD_PID, oldPid);
+        return back;
+    }
+
+    /** Deliver a native return Intent the way the system would after a
+     *  {@code CLEAR_TOP|SINGLE_TOP} return. Called directly (rather than
+     *  through a controller) so the delivery is identical whether or not
+     *  the hub happens to be resumed. */
+    private static void deliverNativeReturn(MainHubActivity hub, Intent back) {
+        hub.onNewIntent(back);
+    }
+
+    /** The Restart VR consent dialog, once it is really showing. */
+    private static AlertDialog awaitRestartDialog(MainHubActivity hub, long maxMillis) {
+        String title = hub.getString(R.string.hub_restart_title);
+        if (!PcvrTestActions.awaitDialogTitle(title, maxMillis)) return null;
+        return ShadowAlertDialog.getLatestAlertDialog();
+    }
+
+    /** The body text of a showing AlertDialog. */
+    private static String dialogMessage(AlertDialog dialog) {
+        TextView message = dialog.findViewById(android.R.id.message);
+        return message == null ? "" : message.getText().toString();
+    }
+
+    /** Every value the given Intent carries, so a test can prove no
+     *  credential ever rides along with the launch identity. */
+    private static java.util.List<Object> intentValues(Intent i) {
+        java.util.List<Object> out = new java.util.ArrayList<>();
+        if (i == null || i.getExtras() == null) return out;
+        for (String key : i.getExtras().keySet()) {
+            Object v = i.getExtras().get(key);
+            if (v != null) out.add(v);
+        }
+        return out;
     }
 
     /** Bounded UI wait that drives the launch journey through
@@ -1447,5 +1768,983 @@ public class MainHubActivityTest {
             ActivityController<? extends MainHubActivity> controller) {
         controller.get().findViewById(R.id.hub_btn_setup).performClick();
         return stepLaunchJourney(4000L);
+    }
+
+    /* ------------------------------------------------------------
+     * Warm-server journey: no prompt, no restart permission.
+     * ------------------------------------------------------------ */
+
+    /**
+     * A WARM {@code vrserver=true} probe is an ordinary idempotent
+     * connection, not a reason to interrupt the user. Exactly one
+     * authenticated probe, one host start and one dispatch, no dialog,
+     * and the launch carries {@code vq_pcvr_allow_restart=false} with a
+     * ZERO deadline — so the native side cannot restart a healthy VR
+     * session it was not asked to touch.
+     */
+    @Test
+    public void warmServer_connectsWithoutPromptAndWithoutAllowRestart() throws Exception {
+        setHeadset(true);
+        grantMic(true);
+        host.setVrserver(true);
+        ActivityController<NativePairedHub> c = startNativePairedHub();
+        StartedIntentLog log = new StartedIntentLog();
+        try {
+            c.get().findViewById(R.id.hub_btn_connect).performClick();
+            assertTrue("a warm host must still dispatch PCVR",
+                    await(() -> {
+                        log.drain(app());
+                        return log.countSteamVr() == 1;
+                    }, 4000L));
+
+            assertFalse("a warm probe must NOT prompt for a restart",
+                    PcvrTestActions.awaitDialogTitle(
+                            c.get().getString(R.string.hub_restart_title), 300L));
+            assertEquals("exactly one authenticated probe", 1, host.probes.get());
+            assertEquals("exactly one host start request", 1, host.starts.get());
+            assertEquals("exactly one client", 1, host.clients.get());
+
+            Intent launch = steamVrIntent(log);
+            assertNotNull("the launch intent must be recorded", launch);
+            assertFalse("a warm connection must not grant restart permission",
+                    launch.getBooleanExtra("vq_pcvr_allow_restart", true));
+            assertEquals("a warm connection must carry a zero restart deadline",
+                    0L, launch.getLongExtra("vq_pcvr_restart_until_ms", -1L));
+            assertFalse("no restart consent may be open for a warm connection",
+                    restartConsentUntil(c.get()) > 0L);
+
+            // The correlation identity travels with the launch.
+            String nonce = launch.getStringExtra(MainHubActivity.EXTRA_PCVR_LAUNCH_NONCE);
+            assertNotNull("the launch must carry a nonce", nonce);
+            assertTrue("the nonce must be a real value", nonce.length() > 16);
+            assertEquals("the public pairing pin must travel with the launch",
+                    pairing.pin, launch.getStringExtra(MainHubActivity.EXTRA_PCVR_HOST_PIN));
+
+            // ... and no credential may ever ride in an Intent.
+            for (Object value : intentValues(launch)) {
+                assertFalse("no Intent extra may carry the pairing token: " + value,
+                        pairing.token.equals(String.valueOf(value)));
+            }
+        } finally {
+            close(c);
+        }
+    }
+
+    /**
+     * The cold behaviour is unchanged: a {@code vrserver=false} probe
+     * opens the 120-second consent window and starts without any dialog,
+     * and that live consent is what authorises
+     * {@code vq_pcvr_allow_restart} on the native runtime.
+     */
+    @Test
+    public void coldServer_opensConsentWindowAndGrantsAllowRestart() throws Exception {
+        setHeadset(true);
+        grantMic(true);
+        host.setVrserver(false);
+        ActivityController<NativePairedHub> c = startNativePairedHub();
+        StartedIntentLog log = new StartedIntentLog();
+        try {
+            c.get().findViewById(R.id.hub_btn_connect).performClick();
+            assertTrue("a cold host must dispatch PCVR",
+                    await(() -> {
+                        log.drain(app());
+                        return log.countSteamVr() == 1;
+                    }, 4000L));
+
+            assertFalse("a cold start must not prompt either",
+                    PcvrTestActions.awaitDialogTitle(
+                            c.get().getString(R.string.hub_restart_title), 300L));
+            assertTrue("the cold probe must open the consent window",
+                    restartConsentUntil(c.get()) > android.os.SystemClock.elapsedRealtime());
+            Intent launch = steamVrIntent(log);
+            assertNotNull(launch);
+            assertTrue("a consented cold start may restart SteamVR on the PC",
+                    launch.getBooleanExtra("vq_pcvr_allow_restart", false));
+            assertTrue("a consented start carries its deadline",
+                    launch.getLongExtra("vq_pcvr_restart_until_ms", 0L) > 0L);
+        } finally {
+            close(c);
+        }
+    }
+
+    /* ------------------------------------------------------------
+     * Native mismatch -> Restart / Cancel -> fresh authenticated re-probe.
+     * ------------------------------------------------------------ */
+
+    /**
+     * The Restart VR dialog is reserved for an ACTUAL native mismatch.
+     * After a warm connect, the return Intent that {@link SteamVrActivity}
+     * would send makes the dialog appear — but nothing restarts by
+     * itself: no second probe, no second dispatch until the user presses
+     * Restart VR. That tap then rebuilds the attempt from scratch with a
+     * NEW client and a fresh authenticated probe against the SAME
+     * pairing, and only then opens the consent window and dispatches with
+     * restart permission. The dialog never repeats on its own.
+     */
+    @Test
+    public void nativeRestartRequired_promptsThenReprobesWithNewClient() throws Exception {
+        setHeadset(true);
+        grantMic(true);
+        host.setVrserver(true);
+        ActivityController<NativePairedHub> c = startNativePairedHub();
+        StartedIntentLog log = new StartedIntentLog();
+        try {
+            c.get().findViewById(R.id.hub_btn_connect).performClick();
+            assertTrue(await(() -> {
+                log.drain(app());
+                return log.countSteamVr() == 1;
+            }, 4000L));
+            Intent first = steamVrIntent(log);
+            assertNotNull(first);
+
+            // Simulate the immersive activity coming back to the hub.
+            c.pause();
+            c.resume();
+            deliverNativeReturn(c.get(), nativeReturn(first,
+                    PcvrReturnGate.ISSUE_RESTART_REQUIRED, 4242));
+
+            AlertDialog prompt = awaitRestartDialog(c.get(), 4000L);
+            assertNotNull("a real native mismatch must surface the Restart prompt", prompt);
+            assertEquals("the prompt must give the SETTINGS reason for a restart",
+                    c.get().getString(R.string.hub_restart_message), dialogMessage(prompt));
+            settle(300);
+            log.drain(app());
+            assertEquals("a valid callback must never auto-connect", 1, log.countSteamVr());
+            assertEquals("a valid callback must not re-probe on its own", 1, host.probes.get());
+
+            prompt.getButton(AlertDialog.BUTTON_POSITIVE).performClick();
+            assertTrue("Restart VR must re-probe the same pairing",
+                    await(() -> host.probes.get() == 2, 4000L));
+            assertTrue("the confirmed restart must dispatch again",
+                    await(() -> {
+                        log.drain(app());
+                        return log.countSteamVr() == 2;
+                    }, 4000L));
+            settle(300);
+            log.drain(app());
+
+            assertEquals("the re-probe must use a NEW client, never the stale one",
+                    2, host.clients.get());
+            assertEquals("one dispatch per accepted attempt", 2, log.countSteamVr());
+            assertEquals("the retry must not loop the restart dialog",
+                    false, PcvrTestActions.awaitDialogTitle(
+                            c.get().getString(R.string.hub_restart_title), 300L));
+
+            Intent second = null;
+            for (Intent i : log.all()) {
+                if (isSteamVrIntent(i)) second = i;
+            }
+            assertNotNull(second);
+            assertTrue("the confirmed restart may restart SteamVR on the PC",
+                    second.getBooleanExtra("vq_pcvr_allow_restart", false));
+            assertTrue("the confirmed restart carries its deadline",
+                    second.getLongExtra("vq_pcvr_restart_until_ms", 0L) > 0L);
+            assertFalse("a re-dispatch must mint a fresh nonce",
+                    first.getStringExtra(MainHubActivity.EXTRA_PCVR_LAUNCH_NONCE)
+                            .equals(second.getStringExtra(MainHubActivity.EXTRA_PCVR_LAUNCH_NONCE)));
+        } finally {
+            close(c);
+        }
+    }
+
+    /**
+     * A callback is only acted on when it echoes the pending nonce AND
+     * the pin the hub holds right now. A forged nonce, a forged pin and a
+     * duplicate delivery of the genuine callback are all inert: no
+     * prompt, no probe, no dispatch — and none of them may consume the
+     * expectation, which is why the genuine callback still works
+     * afterwards.
+     */
+    @Test
+    public void nativeRestartRequired_rejectsForgedAndDuplicateCallbacks() throws Exception {
+        setHeadset(true);
+        grantMic(true);
+        host.setVrserver(true);
+        ActivityController<NativePairedHub> c = startNativePairedHub();
+        StartedIntentLog log = new StartedIntentLog();
+        try {
+            c.get().findViewById(R.id.hub_btn_connect).performClick();
+            assertTrue(await(() -> {
+                log.drain(app());
+                return log.countSteamVr() == 1;
+            }, 4000L));
+            Intent launch = steamVrIntent(log);
+            c.pause();
+            c.resume();
+
+            // Forged nonce.
+            Intent forgedNonce = nativeReturn(launch, PcvrReturnGate.ISSUE_RESTART_REQUIRED, 4242);
+            forgedNonce.putExtra(MainHubActivity.EXTRA_PCVR_LAUNCH_NONCE,
+                    "00000000-0000-4000-8000-000000000000");
+            deliverNativeReturn(c.get(), forgedNonce);
+
+            // Forged host identity: a different PC.
+            Intent forgedPin = nativeReturn(launch, PcvrReturnGate.ISSUE_RESTART_REQUIRED, 4242);
+            forgedPin.putExtra(MainHubActivity.EXTRA_PCVR_HOST_PIN,
+                    "0000000000000000000000000000000000000000000000000000000000000001");
+            deliverNativeReturn(c.get(), forgedPin);
+
+            // Unknown issue value from native.
+            Intent unknownIssue = nativeReturn(launch, "restart_maybe", 4242);
+            deliverNativeReturn(c.get(), unknownIssue);
+
+            settle(300);
+            log.drain(app());
+            assertFalse("a forged / unknown callback must never prompt",
+                    PcvrTestActions.awaitDialogTitle(
+                            c.get().getString(R.string.hub_restart_title), 300L));
+            assertEquals("a forged / unknown callback must not re-probe", 1, host.probes.get());
+            assertEquals("a forged / unknown callback must not dispatch", 1, log.countSteamVr());
+            assertNotNull("the expectation must survive a rejected callback",
+                    pendingNonce(c.get()));
+
+            // The genuine callback is still accepted exactly once.
+            deliverNativeReturn(c.get(), nativeReturn(launch,
+                    PcvrReturnGate.ISSUE_RESTART_REQUIRED, 4242));
+            AlertDialog prompt = awaitRestartDialog(c.get(), 4000L);
+            assertNotNull("the genuine callback must still prompt", prompt);
+
+            // A duplicate delivery of the same callback is inert.
+            deliverNativeReturn(c.get(), nativeReturn(launch,
+                    PcvrReturnGate.ISSUE_RESTART_REQUIRED, 4242));
+            settle(300);
+            log.drain(app());
+            assertEquals("a duplicate callback must not dispatch", 1, log.countSteamVr());
+            assertEquals("a duplicate callback must not re-probe", 1, host.probes.get());
+            assertEquals("a spent callback must leave no expectation behind",
+                    "", pendingNonce(c.get()));
+        } finally {
+            close(c);
+        }
+    }
+
+    /**
+     * A callback that lands while the hub is paused (or behind a
+     * recreation) survives, but ONLY as a pending issue: the recreated
+     * hub still shows the prompt, and it holds NO restart consent, so a
+     * recreation can never turn into a silent restart.
+     */
+    @Test
+    public void nativeRestartRequired_survivesRecreationWithoutConsent() throws Exception {
+        setHeadset(true);
+        grantMic(true);
+        host.setVrserver(true);
+        ActivityController<NativePairedHub> c = startNativePairedHub();
+        StartedIntentLog log = new StartedIntentLog();
+        ActivityController<NativePairedHub> reborn = null;
+        try {
+            c.get().findViewById(R.id.hub_btn_connect).performClick();
+            assertTrue(await(() -> {
+                log.drain(app());
+                return log.countSteamVr() == 1;
+            }, 4000L));
+            Intent launch = steamVrIntent(log);
+            assertNotNull(launch);
+
+            // The callback lands while the hub is paused: it must be
+            // stored, not shown and not acted on.
+            c.pause();
+            deliverNativeReturn(c.get(), nativeReturn(launch,
+                    PcvrReturnGate.ISSUE_RESTART_REQUIRED, 4242));
+            settle(250);
+            assertFalse("a paused hub must not surface the prompt",
+                    PcvrTestActions.awaitDialogTitle(
+                            c.get().getString(R.string.hub_restart_title), 200L));
+
+            Bundle state = new Bundle();
+            c.get().onSaveInstanceState(state);
+            close(c);
+            c = null;
+
+            reborn = Robolectric.buildActivity(NativePairedHub.class)
+                    .create(state).start().resume();
+
+            assertEquals("a recreation must not restore positive restart consent",
+                    0L, restartConsentUntil(reborn.get()));
+            AlertDialog prompt = awaitRestartDialog(reborn.get(), 4000L);
+            assertNotNull("the restored hub must still surface the prompt once", prompt);
+
+            log.drain(app());
+            assertEquals("a restored callback must never auto-dispatch", 1, log.countSteamVr());
+            assertEquals("a restored callback must not re-probe on its own", 1, host.probes.get());
+
+            // Cancel drops it: no probe, no dispatch.
+            prompt.getButton(AlertDialog.BUTTON_NEGATIVE).performClick();
+            settle(300);
+            log.drain(app());
+            assertEquals("Cancel after a mismatch must not probe", 1, host.probes.get());
+            assertEquals("Cancel after a mismatch must not dispatch", 1, log.countSteamVr());
+            assertEquals("Cancel must clear the restart consent", 0L, restartConsentUntil(reborn.get()));
+        } finally {
+            if (reborn != null) close(reborn);
+            if (c != null) close(c);
+        }
+    }
+
+    /**
+     * The prompt waits on a PROCESS fact, not on a delay. With an old
+     * {@code :pcvr} pid of our own uid still reported alive, the hub
+     * must neither prompt nor dispatch — no matter how much wall-clock
+     * time passes — and it must surface the moment the process is
+     * genuinely gone.
+     */
+    @Test
+    public void nativeRestartRequired_waitsForRealProcessExitBeforePrompting() throws Exception {
+        setHeadset(true);
+        grantMic(true);
+        host.setVrserver(true);
+        ActivityController<ProcessAwareHub> c = startProcessAwareHub();
+        StartedIntentLog log = new StartedIntentLog();
+        try {
+            c.get().findViewById(R.id.hub_btn_connect).performClick();
+            assertTrue(await(() -> {
+                log.drain(app());
+                return log.countSteamVr() == 1;
+            }, 4000L));
+            Intent launch = steamVrIntent(log);
+            c.pause();
+            c.resume();
+
+            // The old process is still alive.
+            c.get().aliveReads = Integer.MAX_VALUE;
+            int readsBefore = c.get().processReads.get();
+            deliverNativeReturn(c.get(), nativeReturn(launch,
+                    PcvrReturnGate.ISSUE_RESTART_REQUIRED, 4242));
+            settle(400);
+            log.drain(app());
+
+            assertFalse("a live old :pcvr process must block the prompt",
+                    PcvrTestActions.awaitDialogTitle(
+                            c.get().getString(R.string.hub_restart_title), 200L));
+            assertEquals("a live old :pcvr process must block the dispatch", 1, log.countSteamVr());
+            assertTrue("the gate must actually poll the process table",
+                    c.get().processReads.get() > readsBefore);
+
+            // The process is gone for real: now the prompt may appear.
+            c.get().aliveReads = 0;
+            AlertDialog prompt = awaitRestartDialog(c.get(), 6000L);
+            assertNotNull("the prompt must appear once the process is gone", prompt);
+            log.drain(app());
+            assertEquals("the prompt alone must not dispatch", 1, log.countSteamVr());
+            assertEquals("the prompt alone must not re-probe", 1, host.probes.get());
+        } finally {
+            close(c);
+        }
+    }
+
+    /**
+     * The same gate guards the dispatch itself: an unknown process state
+     * (the platform cannot answer) is a clear failure, never an
+     * automatic launch.
+     */
+    @Test
+    public void unknownProcessState_failsClearlyInsteadOfLaunching() throws Exception {
+        setHeadset(true);
+        grantMic(true);
+        host.setVrserver(true);
+        ActivityController<ProcessAwareHub> c = startProcessAwareHub();
+        StartedIntentLog log = new StartedIntentLog();
+        try {
+            // "The platform could not answer" is represented by a null
+            // snapshot, which must fail closed.
+            c.get().procRows = null;
+            c.get().findViewById(R.id.hub_btn_connect).performClick();
+            final View errorRow = c.get().findViewById(R.id.hub_card_error_row);
+            assertTrue("the failure must be reported in the connection card",
+                    await(() -> errorRow.getVisibility() == View.VISIBLE, 4000L));
+            log.drain(app());
+
+            assertEquals("an unknown process state must never launch PCVR", 0, log.countSteamVr());
+            String message = text(c.get().findViewById(R.id.hub_card_error));
+            assertTrue("the failure must be explained: " + message,
+                    message.toLowerCase().contains("confirm"));
+        } finally {
+            close(c);
+        }
+    }
+
+    /**
+     * A microphone revoked while the mismatch prompt is up blocks the
+     * restart: no probe, no dispatch, no consent.
+     */
+    @Test
+    public void nativeRestartRequired_micRevokedWhilePrompted_blocksRestart() throws Exception {
+        setHeadset(true);
+        grantMic(true);
+        host.setVrserver(true);
+        ActivityController<NativePairedHub> c = startNativePairedHub();
+        StartedIntentLog log = new StartedIntentLog();
+        try {
+            c.get().findViewById(R.id.hub_btn_connect).performClick();
+            assertTrue(await(() -> {
+                log.drain(app());
+                return log.countSteamVr() == 1;
+            }, 4000L));
+            Intent launch = steamVrIntent(log);
+            c.pause();
+            c.resume();
+            deliverNativeReturn(c.get(), nativeReturn(launch,
+                    PcvrReturnGate.ISSUE_RESTART_REQUIRED, 4242));
+            AlertDialog prompt = awaitRestartDialog(c.get(), 4000L);
+            assertNotNull(prompt);
+
+            grantMic(false);
+            prompt.getButton(AlertDialog.BUTTON_POSITIVE).performClick();
+            settle(400);
+            log.drain(app());
+
+            assertEquals("a revoked microphone must block the restart probe",
+                    1, host.probes.get());
+            assertEquals("a revoked microphone must block the dispatch", 1, log.countSteamVr());
+            assertEquals("a revoked microphone must leave no restart consent",
+                    0L, restartConsentUntil(c.get()));
+        } finally {
+            close(c);
+        }
+    }
+
+    /**
+     * {@code restart_failed} is a concise Retry / Cancel error: the hub
+     * never restarts anything on its own, and Retry is a fresh connect
+     * (fresh probe, no inherited consent) rather than a replay.
+     */
+    @Test
+    public void nativeRestartFailed_showsRetryCancelAndNeverRestartsItself() throws Exception {
+        setHeadset(true);
+        grantMic(true);
+        host.setVrserver(true);
+        ActivityController<NativePairedHub> c = startNativePairedHub();
+        StartedIntentLog log = new StartedIntentLog();
+        try {
+            c.get().findViewById(R.id.hub_btn_connect).performClick();
+            assertTrue(await(() -> {
+                log.drain(app());
+                return log.countSteamVr() == 1;
+            }, 4000L));
+            Intent launch = steamVrIntent(log);
+            c.pause();
+            c.resume();
+            deliverNativeReturn(c.get(), nativeReturn(launch,
+                    PcvrReturnGate.ISSUE_RESTART_FAILED, 4242));
+
+            assertTrue("a failed native restart must surface a Retry / Cancel error",
+                    PcvrTestActions.awaitDialogTitle("VR restart failed", 4000L));
+            AlertDialog failed = ShadowAlertDialog.getLatestAlertDialog();
+            assertNotNull(failed);
+            assertNotNull("Retry must be offered", failed.getButton(AlertDialog.BUTTON_POSITIVE));
+            assertNotNull("Cancel must be offered", failed.getButton(AlertDialog.BUTTON_NEGATIVE));
+            settle(300);
+            log.drain(app());
+            assertEquals("a failed restart must never dispatch by itself", 1, log.countSteamVr());
+            assertEquals("a failed restart must never probe by itself", 1, host.probes.get());
+            assertEquals("a failed restart must leave no consent", 0L, restartConsentUntil(c.get()));
+            assertFalse("a failed restart must not offer the Restart VR consent",
+                    PcvrTestActions.awaitDialogTitle(
+                            c.get().getString(R.string.hub_restart_title), 200L));
+
+            // Retry is a fresh attempt, not a replay of the old one.
+            failed.getButton(AlertDialog.BUTTON_POSITIVE).performClick();
+            assertTrue("Retry must re-probe the host",
+                    await(() -> host.probes.get() == 2, 4000L));
+            assertTrue("Retry must dispatch again",
+                    await(() -> {
+                        log.drain(app());
+                        return log.countSteamVr() == 2;
+                    }, 4000L));
+            Intent retry = null;
+            for (Intent i : log.all()) {
+                if (isSteamVrIntent(i)) retry = i;
+            }
+            assertNotNull(retry);
+            assertFalse("a retry must not inherit a restart permission it was never given",
+                    retry.getBooleanExtra("vq_pcvr_allow_restart", true));
+        } finally {
+            close(c);
+        }
+    }
+
+    /**
+     * A fresh connect supersedes the previous session's callback
+     * expectation: the new dispatch mints a new nonce, and the old
+     * callback is then stale and inert.
+     */
+    @Test
+    public void newConnect_clearsTheOldCallbackExpectation() throws Exception {
+        setHeadset(true);
+        grantMic(true);
+        host.setVrserver(true);
+        ActivityController<NativePairedHub> c = startNativePairedHub();
+        StartedIntentLog log = new StartedIntentLog();
+        try {
+            c.get().findViewById(R.id.hub_btn_connect).performClick();
+            assertTrue(await(() -> {
+                log.drain(app());
+                return log.countSteamVr() == 1;
+            }, 4000L));
+            Intent first = steamVrIntent(log);
+            assertNotNull(first);
+
+            // Leave and come back from the immersive activity, then
+            // reconnect: that is a new dispatch with a new nonce.
+            c.pause();
+            c.resume();
+            c.get().findViewById(R.id.hub_btn_connect).performClick();
+            assertTrue(await(() -> {
+                log.drain(app());
+                return log.countSteamVr() == 2;
+            }, 4000L));
+            Intent second = null;
+            for (Intent i : log.all()) {
+                if (isSteamVrIntent(i)) second = i;
+            }
+            assertNotNull(second);
+            assertFalse("each dispatch must mint its own nonce",
+                    first.getStringExtra(MainHubActivity.EXTRA_PCVR_LAUNCH_NONCE)
+                            .equals(second.getStringExtra(MainHubActivity.EXTRA_PCVR_LAUNCH_NONCE)));
+
+            // The first session's callback is now stale.
+            deliverNativeReturn(c.get(), nativeReturn(first,
+                    PcvrReturnGate.ISSUE_RESTART_REQUIRED, 4242));
+            settle(400);
+            log.drain(app());
+            assertFalse("a stale callback must never prompt",
+                    PcvrTestActions.awaitDialogTitle(
+                            c.get().getString(R.string.hub_restart_title), 300L));
+            assertEquals("a stale callback must not dispatch", 2, log.countSteamVr());
+            assertEquals("a stale callback must not re-probe", 2, host.probes.get());
+        } finally {
+            close(c);
+        }
+    }
+
+    /* ------------------------------------------------------------
+     * The process gate is asynchronous, so its answer is treated as
+     * untrusted: a Cancel, a Destroy or a newer attempt must be able to
+     * invalidate a poll that is already in flight, and a gate that
+     * finishes while the hub is paused must be parked rather than
+     * dropped or run early.
+     * ------------------------------------------------------------ */
+
+    /**
+     * A Cancel that lands while the gate is still polling the old
+     * {@code :pcvr} process must abandon the attempt for good. The
+     * process genuinely disappearing afterwards is exactly the moment the
+     * old code would have called {@code outcome.accept} and launched VR
+     * (or surfaced the prompt) on an attempt the user had already
+     * abandoned — so the process fact is made to arrive AFTER the Cancel
+     * here, not before.
+     */
+    @Test
+    public void gateCompletionAfterCancel_neverLaunchesPromptsOrReprobes() throws Exception {
+        setHeadset(true);
+        grantMic(true);
+        host.setVrserver(true);
+        ActivityController<ProcessAwareHub> c = startProcessAwareHub();
+        StartedIntentLog log = new StartedIntentLog();
+        try {
+            // The old :pcvr process is still there, so the first
+            // dispatch parks itself in the exit gate.
+            c.get().aliveReads = Integer.MAX_VALUE;
+            c.get().findViewById(R.id.hub_btn_connect).performClick();
+            assertTrue("the attempt must reach the process gate",
+                    await(() -> c.get().processReads.get() > 0, 4000L));
+            settle(200);
+            log.drain(app());
+            assertEquals("a live old process must block the dispatch",
+                    0, log.countSteamVr());
+
+            // The user gives up while the gate is still waiting.
+            c.get().findViewById(R.id.hub_btn_cancel_connection).performClick();
+            assertFalse("a Cancel must release the gate guard",
+                    exitGateRunning(c.get()));
+
+            // Now the process really goes away — after the Cancel.
+            c.get().aliveReads = 0;
+            settle(600);
+            log.drain(app());
+
+            assertEquals("a gate that completes after a Cancel must not launch PCVR",
+                    0, log.countSteamVr());
+            assertFalse("a gate that completes after a Cancel must not prompt",
+                    PcvrTestActions.awaitDialogTitle(
+                            c.get().getString(R.string.hub_restart_title), 300L));
+            assertEquals("a gate that completes after a Cancel must not re-probe",
+                    1, host.probes.get());
+            assertEquals("a gate that completes after a Cancel must not start the host again",
+                    1, host.starts.get());
+            assertEquals("a cancelled attempt must leave no restart consent",
+                    0L, restartConsentUntil(c.get()));
+        } finally {
+            close(c);
+        }
+    }
+
+    /**
+     * A newer attempt supersedes an older gate with the same protection.
+     *
+     * <p>The old process is kept alive across both attempts and the
+     * fresh probe is held open, so the ordering is exact: gate A is
+     * polling, Cancel abandons it, gate A's completion is delivered and
+     * dropped, and only then does gate B open. Gate A's answer must never
+     * be attributed to gate B — no extra probe, no extra start, no
+     * dispatch — and gate B must still be holding the guard, resolve on
+     * its own when the process really goes, and dispatch exactly once.
+     */
+    @Test
+    public void supersededGate_neverActsForTheNewAttempt() throws Exception {
+        setHeadset(true);
+        grantMic(true);
+        host.setVrserver(true);
+        ActivityController<ProcessAwareHub> c = startProcessAwareHub();
+        StartedIntentLog log = new StartedIntentLog();
+        try {
+            c.get().aliveReads = Integer.MAX_VALUE;
+            c.get().findViewById(R.id.hub_btn_connect).performClick();
+            assertTrue("the first attempt must reach the process gate",
+                    await(() -> c.get().processReads.get() > 0, 4000L));
+            assertTrue("a running gate must hold the guard",
+                    exitGateRunning(c.get()));
+
+            c.get().findViewById(R.id.hub_btn_cancel_connection).performClick();
+            assertFalse("a Cancel must release the gate guard",
+                    exitGateRunning(c.get()));
+
+            // Hold the fresh probe so gate B cannot open until the
+            // superseded gate's completion has already been delivered.
+            host.probeRelease = new CountDownLatch(1);
+            c.get().findViewById(R.id.hub_btn_connect).performClick();
+            assertTrue("a fresh attempt must reach the host again",
+                    await(() -> host.probeEntries.get() == 2, 4000L));
+            settle(400);
+            log.drain(app());
+            assertEquals("the superseded gate must not launch for the new attempt",
+                    0, log.countSteamVr());
+            assertEquals("the superseded gate must not start the host again",
+                    1, host.starts.get());
+
+            // Release the probe: the new attempt opens its own gate.
+            host.probeRelease.countDown();
+            assertTrue("the new attempt must open its own gate",
+                    await(() -> exitGateRunning(c.get()), 4000L));
+            log.drain(app());
+            assertEquals("a live old process must still block the new attempt",
+                    0, log.countSteamVr());
+
+            // The process really goes away: the surviving gate resolves
+            // and the new attempt dispatches exactly once.
+            c.get().aliveReads = c.get().processReads.get();
+            assertTrue("the surviving gate must dispatch exactly once",
+                    await(() -> {
+                        log.drain(app());
+                        return log.countSteamVr() == 1;
+                    }, 6000L));
+            settle(400);
+            log.drain(app());
+            assertEquals("the new attempt must dispatch exactly once",
+                    1, log.countSteamVr());
+            assertEquals("the superseded gate must not have re-probed",
+                    2, host.probes.get());
+            assertEquals("the superseded gate must not have started the host twice",
+                    2, host.starts.get());
+        } finally {
+            close(c);
+        }
+    }
+
+    /**
+     * A gate that proves the old process gone WHILE THE HUB IS PAUSED
+     * (the user took the headset off mid-teardown) is parked, not
+     * dropped. Running it immediately would return from the dispatch
+     * without any resume continuation and strand the attempt; dropping it
+     * would lose the launch. So the next resume must run it exactly once,
+     * and a resume after that must not replay it.
+     */
+    @Test
+    public void gateCompletionWhilePaused_continuesExactlyOnceOnResume() throws Exception {
+        setHeadset(true);
+        grantMic(true);
+        host.setVrserver(true);
+        ActivityController<ProcessAwareHub> c = startProcessAwareHub();
+        StartedIntentLog log = new StartedIntentLog();
+        try {
+            c.get().aliveReads = Integer.MAX_VALUE;
+            c.get().findViewById(R.id.hub_btn_connect).performClick();
+            assertTrue("the attempt must reach the process gate",
+                    await(() -> c.get().processReads.get() > 0, 4000L));
+
+            // The user takes the headset off BEFORE the process is gone.
+            c.pause();
+            c.get().aliveReads = c.get().processReads.get();
+            settle(600);
+            log.drain(app());
+            assertEquals("a paused hub must not dispatch from the gate",
+                    0, log.countSteamVr());
+
+            c.resume();
+            assertTrue("the parked gate outcome must dispatch on resume",
+                    await(() -> {
+                        log.drain(app());
+                        return log.countSteamVr() == 1;
+                    }, 4000L));
+
+            // A later resume must not replay the parked outcome.
+            c.pause();
+            c.resume();
+            settle(400);
+            log.drain(app());
+            assertEquals("a later resume must not replay the parked gate outcome",
+                    1, log.countSteamVr());
+            assertEquals("a parked gate outcome must not re-probe",
+                    1, host.probes.get());
+        } finally {
+            close(c);
+        }
+    }
+
+    /**
+     * The same pause window, but the user cancels instead of returning:
+     * the parked outcome belongs to an abandoned attempt, so the resume
+     * must produce nothing at all — no dispatch, no prompt, no re-probe.
+     */
+    @Test
+    public void gateCompletionWhilePaused_thenCancelled_neverContinues() throws Exception {
+        setHeadset(true);
+        grantMic(true);
+        host.setVrserver(true);
+        ActivityController<ProcessAwareHub> c = startProcessAwareHub();
+        StartedIntentLog log = new StartedIntentLog();
+        try {
+            c.get().aliveReads = Integer.MAX_VALUE;
+            c.get().findViewById(R.id.hub_btn_connect).performClick();
+            assertTrue("the attempt must reach the process gate",
+                    await(() -> c.get().processReads.get() > 0, 4000L));
+
+            c.pause();
+            c.get().aliveReads = c.get().processReads.get();
+            settle(600);
+
+            // Cancel while the outcome is parked.
+            c.get().findViewById(R.id.hub_btn_cancel_connection).performClick();
+            c.resume();
+            settle(400);
+            log.drain(app());
+
+            assertEquals("a cancelled parked outcome must not launch PCVR",
+                    0, log.countSteamVr());
+            assertFalse("a cancelled parked outcome must not prompt",
+                    PcvrTestActions.awaitDialogTitle(
+                            c.get().getString(R.string.hub_restart_title), 300L));
+            assertEquals("a cancelled parked outcome must not re-probe",
+                    1, host.probes.get());
+        } finally {
+            close(c);
+        }
+    }
+
+    /**
+     * A consent window that expires while the hub is paused is not
+     * renewed by the resume. The parked outcome is dropped with the
+     * inline error the user has to react to, and no VR launch happens on
+     * the strength of a consent that is no longer live. Uses a COLD host
+     * because that is the attempt that actually holds a positive consent.
+     */
+    @Test
+    public void gateContinuation_pastConsentExpiry_neverLaunches() throws Exception {
+        setHeadset(true);
+        grantMic(true);
+        host.setVrserver(false);
+        ActivityController<ProcessAwareHub> c = startProcessAwareHub();
+        StartedIntentLog log = new StartedIntentLog();
+        try {
+            c.get().aliveReads = Integer.MAX_VALUE;
+            c.get().findViewById(R.id.hub_btn_connect).performClick();
+            assertTrue("the cold attempt must reach the process gate",
+                    await(() -> c.get().processReads.get() > 0, 4000L));
+            assertTrue("the cold probe must have opened a consent window",
+                    restartConsentUntil(c.get()) > android.os.SystemClock.elapsedRealtime());
+
+            c.pause();
+            c.get().aliveReads = c.get().processReads.get();
+            settle(600);
+
+            // The consent lapses while the outcome is parked.
+            setRestartConsentUntil(c.get(),
+                    android.os.SystemClock.elapsedRealtime() - 1L);
+
+            c.resume();
+            settle(500);
+            log.drain(app());
+
+            assertEquals("an expired consent must never produce a launch",
+                    0, log.countSteamVr());
+            assertEquals("an expired consent must not re-probe",
+                    1, host.probes.get());
+            assertEquals("an expired consent must be cleared, not renewed",
+                    0L, restartConsentUntil(c.get()));
+            String message = text(c.get().findViewById(R.id.hub_card_error));
+            assertTrue("the expiry must be reported in the card: " + message,
+                    message.toLowerCase().contains("too long"));
+        } finally {
+            close(c);
+        }
+    }
+
+    /* ------------------------------------------------------------
+     * A restart consent is spent on one named host.
+     * ------------------------------------------------------------ */
+
+    /**
+     * The Restart VR prompt is about a specific PC. If the pairing is
+     * replaced while the prompt is open — the user ran Setup in another
+     * surface, or the store entry was rewritten — the confirmed restart
+     * must not be spent on the newly paired machine: no fresh probe, no
+     * {@code POST /start_pcvr}, no dispatch, and no restart permission.
+     */
+    @Test
+    public void pairingChangedWhileRestartDialogOpen_neverStartsOrRestarts() throws Exception {
+        setHeadset(true);
+        grantMic(true);
+        host.setVrserver(true);
+        ActivityController<SwappablePairingHub> c = startSwappablePairingHub();
+        StartedIntentLog log = new StartedIntentLog();
+        try {
+            c.get().findViewById(R.id.hub_btn_connect).performClick();
+            assertTrue(await(() -> {
+                log.drain(app());
+                return log.countSteamVr() == 1;
+            }, 4000L));
+            Intent launch = steamVrIntent(log);
+            assertNotNull(launch);
+            c.pause();
+            c.resume();
+            deliverNativeReturn(c.get(), nativeReturn(launch,
+                    PcvrReturnGate.ISSUE_RESTART_REQUIRED, 4242));
+            AlertDialog prompt = awaitRestartDialog(c.get(), 4000L);
+            assertNotNull("a real native mismatch must surface the Restart prompt", prompt);
+
+            // The paired host changes while the prompt is up.
+            c.get().currentPairing = pairingFor("otherhost:28540", OTHER_PIN);
+            prompt.getButton(AlertDialog.BUTTON_POSITIVE).performClick();
+            settle(500);
+            log.drain(app());
+
+            assertEquals("a changed pairing must not re-probe", 1, host.probes.get());
+            assertEquals("a changed pairing must not start the host", 1, host.starts.get());
+            assertEquals("a changed pairing must not launch PCVR", 1, log.countSteamVr());
+            assertEquals("a changed pairing must never grant restart consent",
+                    0L, restartConsentUntil(c.get()));
+            assertTrue("the user must be told the pairing changed",
+                    text(c.get().findViewById(R.id.hub_card_error))
+                            .toLowerCase().contains("pairing changed"));
+        } finally {
+            close(c);
+        }
+    }
+
+    /**
+     * The same rule, checked at the only other moment it can break: the
+     * pairing is replaced while the fresh probe behind the Restart tap is
+     * genuinely in flight. The probe already authenticated the old host,
+     * so the check has to happen after it returns, not just before it
+     * was issued.
+     */
+    @Test
+    public void pairingChangedDuringFreshProbe_neverStartsOrRestarts() throws Exception {
+        setHeadset(true);
+        grantMic(true);
+        host.setVrserver(true);
+        ActivityController<SwappablePairingHub> c = startSwappablePairingHub();
+        StartedIntentLog log = new StartedIntentLog();
+        try {
+            c.get().findViewById(R.id.hub_btn_connect).performClick();
+            assertTrue(await(() -> {
+                log.drain(app());
+                return log.countSteamVr() == 1;
+            }, 4000L));
+            Intent launch = steamVrIntent(log);
+            assertNotNull(launch);
+            c.pause();
+            c.resume();
+            deliverNativeReturn(c.get(), nativeReturn(launch,
+                    PcvrReturnGate.ISSUE_RESTART_REQUIRED, 4242));
+            AlertDialog prompt = awaitRestartDialog(c.get(), 4000L);
+            assertNotNull(prompt);
+
+            // Hold the fresh probe open, then re-pair underneath it.
+            host.probeRelease = new CountDownLatch(1);
+            prompt.getButton(AlertDialog.BUTTON_POSITIVE).performClick();
+            assertTrue("the fresh probe must really be in flight",
+                    await(() -> host.probeEntries.get() == 2, 4000L));
+            c.get().currentPairing = pairingFor("otherhost:28540", OTHER_PIN);
+            host.probeRelease.countDown();
+            settle(600);
+            log.drain(app());
+
+            assertEquals("a pairing changed mid-probe must not start the host",
+                    1, host.starts.get());
+            assertEquals("a pairing changed mid-probe must not launch PCVR",
+                    1, log.countSteamVr());
+            assertEquals("a pairing changed mid-probe must never grant restart consent",
+                    0L, restartConsentUntil(c.get()));
+            assertTrue("the user must be told the pairing changed",
+                    text(c.get().findViewById(R.id.hub_card_error))
+                            .toLowerCase().contains("pairing changed"));
+        } finally {
+            close(c);
+        }
+    }
+
+    /**
+     * Address rediscovery is NOT a pairing change. A host that moved
+     * keeps its certificate, so the pin still matches and the confirmed
+     * restart must go ahead end to end: re-probe, start, dispatch, and
+     * this time a real restart permission. This is the guard that the two
+     * tests above could have implemented far too strictly.
+     */
+    @Test
+    public void samePinAtNewAddress_stillReProbesAndRestarts() throws Exception {
+        setHeadset(true);
+        grantMic(true);
+        host.setVrserver(true);
+        ActivityController<SwappablePairingHub> c = startSwappablePairingHub();
+        StartedIntentLog log = new StartedIntentLog();
+        try {
+            c.get().findViewById(R.id.hub_btn_connect).performClick();
+            assertTrue(await(() -> {
+                log.drain(app());
+                return log.countSteamVr() == 1;
+            }, 4000L));
+            Intent launch = steamVrIntent(log);
+            assertNotNull(launch);
+            c.pause();
+            c.resume();
+            deliverNativeReturn(c.get(), nativeReturn(launch,
+                    PcvrReturnGate.ISSUE_RESTART_REQUIRED, 4242));
+            AlertDialog prompt = awaitRestartDialog(c.get(), 4000L);
+            assertNotNull(prompt);
+
+            // Same certificate, different address.
+            c.get().currentPairing = pairingFor("moved-host:28541", pairing.pin);
+            prompt.getButton(AlertDialog.BUTTON_POSITIVE).performClick();
+
+            assertTrue("a host that only moved must still be re-probed",
+                    await(() -> host.probes.get() == 2, 4000L));
+            assertTrue("a host that only moved must still dispatch",
+                    await(() -> {
+                        log.drain(app());
+                        return log.countSteamVr() == 2;
+                    }, 4000L));
+            Intent second = null;
+            for (Intent i : log.all()) {
+                if (isSteamVrIntent(i)) second = i;
+            }
+            assertNotNull(second);
+            assertTrue("the confirmed restart may restart SteamVR on the PC",
+                    second.getBooleanExtra("vq_pcvr_allow_restart", false));
+            assertEquals("the re-dispatch must still be pinned to the same host",
+                    pairing.pin, second.getStringExtra(MainHubActivity.EXTRA_PCVR_HOST_PIN));
+        } finally {
+            close(c);
+        }
     }
 }
