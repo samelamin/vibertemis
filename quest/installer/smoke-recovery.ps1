@@ -3,20 +3,25 @@
 # Verifies:
 #   - Tray-only startup, second-instance wake, and the auto-hide-to-tray
 #     behaviour.
-#   - Setup VR button label announces the headset-pairing consent.
-#   - Pair headset (primary path) enables persisted receiving and reveals
-#     management controls; the request pane stays hidden until a LAN
-#     /pairing/begin actually surfaces a pending request. Manual export
-#     stays under Advanced.
+#   - Quiet readiness header reflects the receiving posture. The
+#     primary row follows the real runner fixture, which is probed
+#     here rather than assumed: this script only ever runs against a
+#     disposable fresh install, so VR setup is still owed and "Set up
+#     VR" is offered, while "Pair headset" is always reachable while
+#     the host runs. Nothing assumes Steam is installed. "Advanced"
+#     stays collapsed by default and reveals Start / Stop, Refresh,
+#     Open ALVR Dashboard, Export pairing, Pause 1 hour / Resume /
+#     Turn off / Forget, and the "Retry setup" fallback when expanded.
 #   - Seamless receiving flow: a disposable LAN client does
 #     /pairing/begin with a fresh RSA-2048 key. The manager's
 #     coordinator picks the request up and surfaces the inline panel
 #     with the server-computed code. The displayed code matches, the
 #     Approve button is enabled and non-overlapping with the code label,
 #     a single click delivers the approved result back to the LAN
-#     client, and a PNG screenshot of the manager window is captured
-#     to installer/smoke-pairing.png for CI review.
-#   - Persistence: Setup VR / Pair headset enables ReceivePairingRequest
+#     client, and PNG screenshots of the manager window are captured
+#     for both the default-ready state and the pending state for CI
+#     review.
+#   - Persistence: Set up VR / Pair headset enables ReceivePairingRequest
 #     persistently and the host-ready status line reflects it across
 #     restarts.
 #   - Recovery: killing the owned companion triggers a replacement, the
@@ -154,6 +159,20 @@ function Find-Child {
     if ($items.Count -eq 1) { return $items[0] }
     return $null
 }
+# The one setup input this test actually depends on. A disposable fresh
+# install has never run Set up VR, so the bundled VR runtime has no
+# initialized session yet: smoke-windows.ps1 calls this script right
+# after a clean /VERYSILENT install and writes that session file itself
+# only afterwards. The bundled session is also the exact input
+# VrSetup.IsPrepared() requires, so asserting on it keeps this test
+# agreeing with the app's real IsSetupNeeded decision instead of
+# re-guessing which of Steam / SteamVR / the VC++ runtime happen to be
+# present on the runner image. Nothing here assumes Steam is installed.
+function Get-VrRuntimeSessionPath {
+    # The manager runs from <install root>/manager, so the install root
+    # is one level up, exactly as EnvironmentPathResolver resolves it.
+    return Join-Path (Split-Path -Parent (Split-Path -Parent $Manager)) 'runtime/session.json'
+}
 function Wait-Listening {
     Wait-Until {
         $script:child = Find-Child
@@ -235,58 +254,104 @@ try {
     if (-not [RecoverySmokeUi]::Visible($script:managerProcess.Id)) { throw 'Tray wake immediately hid the manager again' }
     # Receiving-mode posture starts OFF on a clean CI image.
     Wait-Until { [RecoverySmokeUi]::Find($script:managerProcess.Id,'Host ready: receiving pairing requests is OFF.') -ne [IntPtr]::Zero } 'initial receiving OFF label'
-    # Setup VR button announces the consent explicitly so the
-    # owner knows clicking enables headset pairing.
-    $setupVr = [RecoverySmokeUi]::Find($script:managerProcess.Id,'Setup VR (enables headset pairing)')
-    if ($setupVr -eq [IntPtr]::Zero) { throw 'Setup VR button not labelled with headset pairing consent' }
-    $pair = [RecoverySmokeUi]::Find($script:managerProcess.Id,'Pair headset')
-    if ($pair -eq [IntPtr]::Zero -or -not [RecoverySmokeUi]::IsWindowVisible($pair)) { throw 'Pair headset is not visible by default' }
-    $export = [RecoverySmokeUi]::Find($script:managerProcess.Id,'Export pairing file')
-    if ($export -ne [IntPtr]::Zero -and [RecoverySmokeUi]::IsWindowVisible($export)) { throw 'Manual export should stay under Advanced' }
+    # The primary row follows the real fixture. Set up VR is offered
+    # while VR setup is still owed, and on a disposable fresh install
+    # the bundled VR runtime has never been prepared, so it is always
+    # owed here whatever the runner image happens to have installed.
+    # The prerequisite is asserted rather than assumed.
+    $vrSession = Get-VrRuntimeSessionPath
+    if (Test-Path $vrSession) {
+        throw "Fresh install prerequisite failed: $vrSession already exists, so VR has been prepared on this runner"
+    }
+    Write-Host "Fresh install: no initialized VR runtime session at $vrSession, so Set up VR must be offered"
+    $setupVr = [RecoverySmokeUi]::FindVisible($script:managerProcess.Id, 'Set up VR')
+    if ($setupVr -eq [IntPtr]::Zero) {
+        throw 'Set up VR is missing on a fresh install whose VR runtime has never been prepared'
+    }
+    # Pairing is the point of the host, so "Pair headset" must be
+    # reachable whenever the host is running - including on a runner
+    # where Steam is not installed yet. It is a secondary beside
+    # "Set up VR" in that case, never hidden behind it.
+    $pair = [RecoverySmokeUi]::FindVisible($script:managerProcess.Id, 'Pair headset')
+    if ($pair -eq [IntPtr]::Zero) {
+        throw 'Pair headset is not visible on a running host (fresh install)'
+    }
+    if (-not [RecoverySmokeUi]::IsWindowEnabled($pair)) {
+        throw 'Pair headset is visible but disabled on a running host'
+    }
     # The seamless inline approval panel must NOT be visible
     # before any LAN /pairing/begin. Reject any false positive.
-    $earlyApprove = [RecoverySmokeUi]::Find($script:managerProcess.Id,'Codes match — approve')
+    $earlyApprove = [RecoverySmokeUi]::Find($script:managerProcess.Id, 'Approve')
     if ($earlyApprove -ne [IntPtr]::Zero -and [RecoverySmokeUi]::IsWindowVisible($earlyApprove)) {
         throw 'Inline approval panel is visible before any LAN /pairing/begin'
     }
-    # Advanced toggle must be present and actually parent the
-    # secondary management controls. Expanding it must reveal
-    # the adapter / dashboard / export controls that stay
-    # hidden by default. Collapsing hides them again.
-    $advancedToggle = [RecoverySmokeUi]::Find($script:managerProcess.Id, 'Advanced: network adapter, runtime dashboard and manual pairing')
+    # Demoted controls (Export pairing, Pause / Resume / Turn off /
+    # Forget) MUST be reachable only via Advanced. Asserting
+    # visibility at root level guards against a regression that
+    # surfaces them in the bottom panel.
+    foreach ($label in @('Export pairing file','Pause 1 hour','Resume','Turn off','Forget paired headsets…','Refresh','Open ALVR Dashboard','Stop','Retry setup')) {
+        if ([RecoverySmokeUi]::FindVisible($script:managerProcess.Id, $label) -ne [IntPtr]::Zero) {
+            throw "Demoted control visible without Advanced: $label"
+        }
+    }
+    # Capture the default-ready state for CI review BEFORE the
+    # primary row action is exercised.
+    $shotDir = Join-Path $PSScriptRoot '../../build/installer'
+    if (-not (Test-Path $shotDir)) { New-Item -ItemType Directory -Path $shotDir | Out-Null }
+    $readyShot = Join-Path $shotDir 'smoke-ready.png'
+    $rootHwnd = (Get-Process -Id $script:managerProcess.Id).MainWindowHandle
+    if ($rootHwnd -eq [IntPtr]::Zero) { throw 'Manager MainWindowHandle is zero; cannot capture ready screenshot' }
+    Capture-ManagerScreenshot -Hwnd $rootHwnd -Path $readyShot
+    if (-not (Test-Path $readyShot)) { throw "Ready screenshot was not written to $readyShot" }
+    $readyShotLen = (Get-Item $readyShot).Length
+    if ($readyShotLen -lt 4096) { throw "Ready screenshot $readyShot is too small ($readyShotLen bytes)" }
+    Write-Host "Saved ready screenshot to $readyShot ($readyShotLen bytes)"
+
+    # Advanced toggle must be present and parent the demoted
+    # controls. Expanding it reveals Start / Stop, Refresh,
+    # Open ALVR Dashboard, Export pairing, Pause 1 hour /
+    # Resume / Turn off / Forget, and the "Retry setup"
+    # fallback. Collapsing hides them again.
+    $advancedToggle = [RecoverySmokeUi]::Find($script:managerProcess.Id, 'Advanced')
     if ($advancedToggle -eq [IntPtr]::Zero) { throw 'Advanced expander header not present' }
     [RecoverySmokeUi]::Click($advancedToggle)
-    Wait-Until { [RecoverySmokeUi]::Find($script:managerProcess.Id,'Refresh') -ne [IntPtr]::Zero -and [RecoverySmokeUi]::IsWindowVisible([RecoverySmokeUi]::Find($script:managerProcess.Id,'Refresh')) } 'adapter refresh button becomes visible when Advanced is expanded'
-    $exportVisible = [RecoverySmokeUi]::Find($script:managerProcess.Id,'Export pairing file')
-    if ($exportVisible -eq [IntPtr]::Zero -or -not [RecoverySmokeUi]::IsWindowVisible($exportVisible)) {
-        throw 'Export pairing file not visible after Advanced expanded'
-    }
-    $dashVisible = [RecoverySmokeUi]::Find($script:managerProcess.Id,'Open ALVR Dashboard')
-    if ($dashVisible -eq [IntPtr]::Zero -or -not [RecoverySmokeUi]::IsWindowVisible($dashVisible)) {
-        throw 'Open ALVR Dashboard not visible after Advanced expanded'
+    Wait-Until { [RecoverySmokeUi]::FindVisible($script:managerProcess.Id, 'Refresh') -ne [IntPtr]::Zero } 'adapter refresh button becomes visible when Advanced is expanded'
+    # "Retry setup" is deliberately not "Set up VR": the primary row
+    # already owns that exact label on an incomplete runner, and two
+    # controls with identical text make this search ambiguous.
+    foreach ($label in @('Export pairing file','Open ALVR Dashboard','Pause 1 hour','Turn off','Forget paired headsets…','Retry setup')) {
+        $h = [RecoverySmokeUi]::FindVisible($script:managerProcess.Id, $label)
+        if ($h -eq [IntPtr]::Zero) { throw "Advanced did not reveal: $label" }
     }
     [RecoverySmokeUi]::Click($advancedToggle)
-    Wait-Until { [RecoverySmokeUi]::Find($script:managerProcess.Id,'Export pairing file') -eq [IntPtr]::Zero -or -not [RecoverySmokeUi]::IsWindowVisible([RecoverySmokeUi]::Find($script:managerProcess.Id,'Export pairing file')) } 'export control hidden again after Advanced collapsed'
-    # Primary Pair headset path: enables persisted receiving
-    # immediately and reveals the inline panel.
+    Wait-Until { [RecoverySmokeUi]::FindVisible($script:managerProcess.Id, 'Export pairing file') -eq [IntPtr]::Zero } 'export control hidden again after Advanced collapsed'
+    # Pair headset path: enables persisted receiving immediately and
+    # reveals the inline panel. Reachable on a runner with or without
+    # Steam, so this step never depends on the fixture.
     [RecoverySmokeUi]::Click($pair)
     Wait-Until { [RecoverySmokeUi]::Find($script:managerProcess.Id,'Host ready: receiving pairing requests is ON.') -ne [IntPtr]::Zero } 'receiving ON after Pair headset'
-    Wait-Until { [RecoverySmokeUi]::FindVisible($script:managerProcess.Id,'Waiting for a Quest request. Put on your Quest, choose Setup VR and select this PC.') -ne [IntPtr]::Zero } 'ready for headset request'
+    Wait-Until { [RecoverySmokeUi]::FindVisible($script:managerProcess.Id,'Waiting for a Quest request. Put on your Quest, choose Set up PC and select this PC.') -ne [IntPtr]::Zero } 'ready for headset request'
+    # Management controls only reachable through Advanced; open
+    # Advanced before clicking Pause 1 hour.
+    [RecoverySmokeUi]::Click([RecoverySmokeUi]::Find($script:managerProcess.Id, 'Advanced'))
+    Wait-Until { [RecoverySmokeUi]::FindVisible($script:managerProcess.Id, 'Pause 1 hour') -ne [IntPtr]::Zero } 'Pause 1 hour reachable via Advanced'
     foreach ($label in @('Pause 1 hour','Turn off','Forget paired headsets…')) {
         $control = [RecoverySmokeUi]::FindVisible($script:managerProcess.Id,$label)
         if ($control -eq [IntPtr]::Zero -or -not [RecoverySmokeUi]::IsWindowEnabled($control)) { throw "Management control unavailable: $label" }
     }
-    foreach ($label in @('Codes match — approve','Reject','Hide')) {
+    foreach ($label in @('Approve','Reject','Hide')) {
         if ([RecoverySmokeUi]::FindVisible($script:managerProcess.Id,$label) -ne [IntPtr]::Zero) { throw "Request control visible before a request: $label" }
     }
     if ([RecoverySmokeUi]::FindRegexVisible($script:managerProcess.Id,'\A[0-9A-F]{4}(-[0-9A-F]{4}){3}\z') -ne [IntPtr]::Zero) { throw 'Comparison code visible before a request' }
     if (Get-Process -Name vrserver,vrmonitor,vrcompositor -ErrorAction SilentlyContinue) { throw 'Pairing unexpectedly started SteamVR' }
     # Production startup checkbox must register the exact installed executable.
-    $readyLabel = 'Keep host ready after Windows sign-in'
-    Wait-Until { [RecoverySmokeUi]::Find($script:managerProcess.Id,$readyLabel) -ne [IntPtr]::Zero } 'automatic hosting control'
-    [RecoverySmokeUi]::Click([RecoverySmokeUi]::Find($script:managerProcess.Id,$readyLabel))
+    $readyLabel = 'Start with Windows'
+    $readyLabelHwnd = [RecoverySmokeUi]::FindVisible($script:managerProcess.Id, $readyLabel)
+    if ($readyLabelHwnd -eq [IntPtr]::Zero) { throw 'automatic hosting control not present in Advanced' }
+    [RecoverySmokeUi]::Click($readyLabelHwnd)
     $command = (Get-ItemProperty -Path $runPath -Name $runName).$runName
     if ($command -ne "`"$Manager`" --tray-only --silent") { throw 'Login startup does not target installed manager' }
+    [RecoverySmokeUi]::Click([RecoverySmokeUi]::Find($script:managerProcess.Id, 'Advanced'))  # collapse Advanced again
 
     # ---- Seamless receiving flow ----------------------------------------
     # A disposable LAN client does /pairing/begin with a fresh
@@ -344,7 +409,7 @@ try {
 
     # Approve via the production UI. The button label is the
     # shared string from the inline panel.
-    $approveBtn = [RecoverySmokeUi]::FindVisible($script:managerProcess.Id,'Codes match — approve')
+    $approveBtn = [RecoverySmokeUi]::FindVisible($script:managerProcess.Id,'Approve')
     if ($approveBtn -eq [IntPtr]::Zero) { throw 'Approve button not found' }
     if (-not [RecoverySmokeUi]::IsWindowEnabled($approveBtn)) { throw 'Approve button is disabled' }
 
@@ -443,7 +508,7 @@ try {
         return $false
     } 'second LAN begin surfaced to manager'
     $expectedCode2 = $script:expectedCode2
-    $approveBtn2 = [RecoverySmokeUi]::FindVisible($script:managerProcess.Id, 'Codes match — approve')
+    $approveBtn2 = [RecoverySmokeUi]::FindVisible($script:managerProcess.Id, 'Approve')
     if ($approveBtn2 -eq [IntPtr]::Zero) { throw 'Approve button missing for retry test' }
     $tamperedCode = if ($expectedCode2 -eq '0000-1111-2222-3333') { 'FFFF-EEEE-DDDD-CCCC' } else { '0000-1111-2222-3333' }
     $resp = Send-Admin '/pairing/admin/decision' @{ session_id = $sessionId2; code = $tamperedCode; approve = $true } -AllowError
@@ -483,11 +548,14 @@ try {
     if ($script:child.ProcessId -eq $oldId) { throw 'Expected replacement companion' }
     if ((Get-FileHash $identity).Hash -ne $identityHash) { throw 'Recovery changed pairing identity' }
     # Explicit Stop must defeat automatic recovery for longer than its retry cap.
-    [RecoverySmokeUi]::Click([RecoverySmokeUi]::Find($script:managerProcess.Id,'Stop hosting'))
+    # Stop / Start live in Advanced; open Advanced first.
+    [RecoverySmokeUi]::Click([RecoverySmokeUi]::Find($script:managerProcess.Id, 'Advanced'))
+    Wait-Until { [RecoverySmokeUi]::FindVisible($script:managerProcess.Id, 'Stop') -ne [IntPtr]::Zero } 'Stop visible in Advanced'
+    [RecoverySmokeUi]::Click([RecoverySmokeUi]::FindVisible($script:managerProcess.Id, 'Stop'))
     Wait-Until { -not (Find-Child) } 'explicit Stop'
     Start-Sleep -Seconds 35
     if (Find-Child) { throw 'Explicit Stop resurrected companion' }
-    [RecoverySmokeUi]::Click([RecoverySmokeUi]::Find($script:managerProcess.Id,'Start hosting'))
+    [RecoverySmokeUi]::Click([RecoverySmokeUi]::FindVisible($script:managerProcess.Id, 'Start'))
     Wait-Listening
     Stop-TestProcesses
     # Emulate the registered login command in a new process, with persisted state.

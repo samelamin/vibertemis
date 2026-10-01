@@ -49,21 +49,24 @@ public sealed partial class MainForm
         AsOfUtc: DateTime.UtcNow);
 
     private TableLayoutPanel _panelApproval = null!;
-    private readonly Label _lblHostReady = new() { AutoSize = true, Text = "Host ready: not yet known.", MaximumSize = new Size(650, 0) };
-    private readonly Label _lblHostReadyNext = new() { AutoSize = true, Text = "", MaximumSize = new Size(650, 0) };
+    // _lblHostReady / _lblHostReadyNext are kept as aliases over
+    // the prominent header labels so the controller logic keeps
+    // the same field names; the new quiet header reuses them.
+    private Label _lblHostReady => _lblHeader;
+    private Label _lblHostReadyNext => _lblSubStatus;
     private Label _lblPanelTitle = new() { AutoSize = true, Font = new Font(SystemFonts.MessageBoxFont!, FontStyle.Bold) };
-    private Label _lblPanelCode = new() { AutoSize = true, Font = new Font("Consolas", 22f, FontStyle.Bold) };
-    private Label _lblPanelStatus = new() { AutoSize = true, MaximumSize = new Size(700, 0) };
+    private Label _lblPanelCode = new() { AutoSize = true, Font = UiTheme.CodeFont() };
+    private Label _lblPanelStatus = new() { AutoSize = true, MaximumSize = new Size(640, 0) };
     private Label _lblPanelExpiry = new() { AutoSize = true };
-    private Label _lblPanelRecovery = new() { AutoSize = true, MaximumSize = new Size(700, 0) };
-    private FlowLayoutPanel _panelActions = null!;
-    private Button _btnApprove = new() { Text = "Codes match — approve", AutoSize = true, Enabled = false };
+    private Label _lblPanelRecovery = new() { AutoSize = true, MaximumSize = new Size(640, 0) };
+    private FlowLayoutPanel _panelDecisionRow = null!;
+    private Button _btnApprove = new() { Text = "Approve", AutoSize = true, Enabled = false };
     private Button _btnReject = new() { Text = "Reject", AutoSize = true, Enabled = false };
+    private Button _btnPanelClose = new() { Text = "Hide", AutoSize = true };
     private Button _btnPause = new() { Text = "Pause 1 hour", AutoSize = true };
     private Button _btnResume = new() { Text = "Resume", AutoSize = true };
     private Button _btnTurnOff = new() { Text = "Turn off", AutoSize = true };
     private Button _btnForgetAll = new() { Text = "Forget paired headsets…", AutoSize = true };
-    private Button _btnPanelClose = new() { Text = "Hide", AutoSize = true };
 
     private readonly System.Windows.Forms.Timer _expiryTimer = new() { Interval = 1000 };
     private readonly DeduplicatedUpdateTrayNotice _updateNotice = new();
@@ -82,15 +85,26 @@ public sealed partial class MainForm
 
     private void InitializeReceivingUx()
     {
-        _panelActions = new FlowLayoutPanel
+        // Approve / Reject live in their own row so the
+        // instruction text sits visually above them and the
+        // demoted Hide button trails to the right.
+        _panelDecisionRow = new FlowLayoutPanel
         {
-            Dock = DockStyle.Fill,
+            Dock = DockStyle.Top,
             AutoSize = true,
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
             FlowDirection = FlowDirection.LeftToRight,
             WrapContents = true,
         };
-        _panelActions.Controls.AddRange(new Control[] { _btnApprove, _btnReject, _btnPause, _btnResume, _btnTurnOff, _btnForgetAll, _btnPanelClose });
+        UiTheme.ApplyButton(_btnApprove, UiTheme.ButtonRole.Primary);
+        UiTheme.ApplyButton(_btnReject, UiTheme.ButtonRole.Secondary);
+        UiTheme.ApplyButton(_btnPanelClose, UiTheme.ButtonRole.Demoted);
+        _panelDecisionRow.Controls.AddRange(new Control[] { _btnApprove, _btnReject, _btnPanelClose });
+
+        // The bottom-docked panel hosts the dominant pairing
+        // decision (Approve / Reject / Hide). Receiving
+        // management (Pause / Resume / Turn off / Forget) lives
+        // inside Advanced and is reachable without scrolling.
 
         _panelApproval = new TableLayoutPanel
         {
@@ -100,7 +114,7 @@ public sealed partial class MainForm
             RowCount = 6,
             AutoSize = true,
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
-            Padding = new Padding(12),
+            Padding = UiTheme.OuterPadding,
             BorderStyle = BorderStyle.FixedSingle,
         };
         _panelApproval.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
@@ -110,7 +124,7 @@ public sealed partial class MainForm
         _panelApproval.Controls.Add(_lblPanelStatus, 0, 2);
         _panelApproval.Controls.Add(_lblPanelExpiry, 0, 3);
         _panelApproval.Controls.Add(_lblPanelRecovery, 0, 4);
-        _panelApproval.Controls.Add(_panelActions, 0, 5);
+        _panelApproval.Controls.Add(_panelDecisionRow, 0, 5);
     }
 
     private void StartReceivingCoordinator()
@@ -192,25 +206,36 @@ public sealed partial class MainForm
         bool serverReceiving = s.Receiving;
         string status;
         string action;
-        if (!snap.CompanionRunning)
+        // A pending pairing request owns the screen: its Approve /
+        // Reject decision is the only thing the owner can act on, so
+        // it outranks even a stale action error.
+        if (s.State == "pending" && !string.IsNullOrEmpty(s.SessionId))
         {
-            status = "Host ready: stopped. Click Start hosting, then Setup VR or Pair headset.";
-            action = "Next action: choose Start hosting to enable the host service.";
+            status = "Host ready: a Quest is waiting for approval. Compare the code, then Approve or Reject.";
+            action = "Next action: click Approve only when the code matches every character on your Quest.";
+        }
+        // An action that already failed stays on screen. The activity
+        // log is collapsed by default, so a failure reported only to
+        // the log is invisible exactly when the owner needs it.
+        else if (!string.IsNullOrEmpty(_actionError))
+        {
+            status = _actionError;
+            action = "Next action: fix the problem above, then choose the same action again.";
+        }
+        else if (!snap.CompanionRunning)
+        {
+            status = "Host ready: stopped. Choose Start, then Set up VR or Pair headset.";
+            action = "Next action: choose Start to enable the host service.";
         }
         else if (!snap.Receiving)
         {
             status = "Host ready: receiving pairing requests is OFF.";
-            action = "Next action: choose Setup VR or Pair headset to enable receiving.";
+            action = "Next action: choose Set up VR or Pair headset to enable receiving.";
         }
         else if (snap.Suppressed)
         {
             status = "Host ready: receiving pairing requests is paused for the next hour.";
             action = "Next action: click Resume to re-enable receiving now.";
-        }
-        else if (s.State == "pending")
-        {
-            status = "Host ready: a Quest is waiting for approval. Compare the code, then Approve or Reject.";
-            action = "Next action: click Approve only when the code matches every character on your Quest.";
         }
         else if (serverReceiving)
         {
@@ -219,7 +244,7 @@ public sealed partial class MainForm
             // live. Only then do we say ON; before the first
             // confirmed live lease, fall through to "starting".
             status = "Host ready: receiving pairing requests is ON.";
-            action = "Next action: in Vibertemis on Quest, choose Setup VR and select this PC.";
+            action = "Next action: on your Quest, choose Set up PC and select this PC.";
         }
         else if (snap.Receiving)
         {
@@ -232,7 +257,7 @@ public sealed partial class MainForm
         else
         {
             status = "Host ready: receiving pairing requests is starting up.";
-            action = "Next action: in Vibertemis on Quest, choose Setup VR and select this PC.";
+            action = "Next action: on your Quest, choose Set up PC and select this PC.";
         }
         if (_lblHostReady.Text != status) _lblHostReady.Text = status;
         if (_lblHostReadyNext.Text != action) _lblHostReadyNext.Text = action;
@@ -287,10 +312,10 @@ public sealed partial class MainForm
             if (gen != Generation) return;
             var detail = ex is PairingAdminException pae
                 ? pae.OwnerText
-                : "Host service unavailable. Start hosting, then try again.";
+                : "Host service unavailable. Choose Start, then try again.";
             LogStatus("Pairing: " + detail);
             var hint = IsLikelyPairingSetupError(ex)
-                ? "Next action: in Vibertemis on Quest, choose Setup VR and select this PC, then try again."
+                ? "Next action: on your Quest, choose Set up PC and select this PC, then try again."
                 : "Next action: choose Pause 1h, Resume, Turn off, or Forget all from the pairing panel.";
             if (_lblHostReadyNext.Text != hint) _lblHostReadyNext.Text = hint;
             RenderApprovalPanelFromController();
@@ -355,6 +380,7 @@ public sealed partial class MainForm
         }
         RenderApprovalPanelFromController();
         RefreshHostReady();
+        RefreshPrimaryActionVisibility();
     }
 
     private void RestoreDefaultTrayTooltip()
@@ -496,11 +522,15 @@ public sealed partial class MainForm
         _btnPanelClose.Visible = requestRows;
         _btnApprove.Enabled = model.ApproveEnabled;
         _btnReject.Enabled = model.RejectEnabled;
+        _btnPanelClose.Enabled = model.HideEnabled;
+        // Management controls live inside the panel so they
+        // stay reachable without opening Advanced, but they are
+        // gated by the controller's enabled flags exactly as
+        // before.
         _btnPause.Enabled = model.PauseEnabled;
         _btnResume.Enabled = model.ResumeEnabled;
         _btnTurnOff.Enabled = model.TurnOffEnabled;
         _btnForgetAll.Enabled = model.ForgetEnabled;
-        _btnPanelClose.Enabled = model.HideEnabled;
         if (model.Kind is ApprovalKind.Pending or ApprovalKind.ActionError or ApprovalKind.PendingBusy)
             _expiryTimer.Start();
         else

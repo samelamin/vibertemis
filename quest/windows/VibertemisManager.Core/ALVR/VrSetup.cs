@@ -48,6 +48,24 @@ public sealed class VrSetup
         }).ToArray();
     }
 
+    // Readiness is more than having Steam installed: the bundled driver
+    // must be registered and its compatible session must exist. No mutation.
+    public bool IsPrepared()
+    {
+        try
+        {
+            if (!Entries(ReadPaths(), "external_drivers").Any(p => SamePath(p, Runtime))
+                || ConflictingDrivers().Length != 0) return false;
+            var session = JsonNode.Parse(File.ReadAllText(Path.Combine(Runtime, "session.json")));
+            return session?["server_version"]?.GetValue<string>() == "20.14.1-vibertemis-pyro.1";
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
+            or System.Text.Json.JsonException or InvalidOperationException or ArgumentException)
+        {
+            return false;
+        }
+    }
+
     public void Prepare(bool replaceOtherAlvr)
     {
         _requireIdle();

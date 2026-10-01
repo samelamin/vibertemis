@@ -1,15 +1,29 @@
 // Main form for the Vibertemis Manager host application.
 //
-// Layout:
-//   - Status section at the top shows current Steam / SteamVR /
-//     companion / dashboard busy state. Status messages append
-//     to the log list at the bottom of the form.
-//   - Adapter choice is a single combo; the user picks the IPv4
-//     interface the companion will bind to. The combo is
-//     repopulated on Refresh.
-//   - Buttons are explicit and disabled while their action is
-//     impossible (e.g. Open Dashboard is greyed out when the
-//     busy check reports AnotherDashboardBusy / SteamvrBusy).
+// Layout (top to bottom):
+//   - Readiness header. One line, prominent. Tells the owner the
+//     actual posture: ready / setup needed / pending approval /
+//     receiving off. Never claims setup done because the
+//     companion merely started.
+//   - Prerequisite rows: shown only when Steam, SteamVR or the
+//     VC++ runtime are missing. Hidden entirely when everything
+//     is in place so the form stays quiet.
+//   - Primary action row: one button at most. "Set up VR" while
+//     prerequisites are missing; "Pair headset" once ready but
+//     receiving is off; "Start" / "Stop" while receiving is on.
+//   - Advanced container. Real content (network adapter / Refresh,
+//     Open Dashboard, Export pairing, receiving management —
+//     Pause 1 hour / Resume / Turn off / Forget — diagnostics,
+//     update actions). The container is collapsed by default.
+//   - Pairing request panel: bottom-docked ABOVE the footer so
+//     the code label and decision buttons stay mounted in place
+//     while the upper rows wrap at DPI scaling. Approve / Reject
+//     stay usable even when Advanced is collapsed. The instruction
+//     "Compare the code on your Quest." sits outside the buttons.
+//   - Footer (bottom): collapsed activity log + update status +
+//     version.
+//
+// Callback invariants preserved:
 //   - Setup Network Access shells the elevated helper with
 //     tightly-scoped argv; the manager itself stays unelevated.
 //   - Export pairing calls CompanionPairingExportRunner and
@@ -19,17 +33,20 @@
 //   - Close-to-tray is the default; the first time it happens
 //     the manager shows a one-shot explanation. Explicit Exit
 //     owns/stops only the owned companion child.
-//   - Updates use a three-stage UX:
-//       Check -> Download (cached in per-user state) -> Install.
-//     The verified update is held in memory until the user
-//     explicitly clicks "Install update". Cancellation is
-//     available only during check/download; install is a single
-//     confirmation, not a re-check.
-//
-// SteamVR is NEVER started by the manager. The "Install SteamVR"
-// button is a steam://install/250820 URL dispatch; the user runs
-// Steam itself. The manager never launches SteamVR on login,
-// discovery, configuration, or any other implicit event.
+//   - Updates use a single Update action. One click pins a release,
+//     downloads it (skipping the download when those exact bytes are
+//     already cached), verifies it, and hands the job to the existing
+//     UpdateWorker, which closes the manager and runs the signed
+//     installer. There is no second in-app Install confirmation: the
+//     explicit Update click is the in-app authorization, and the OS
+//     consent surface (UAC / installer UI) still applies. Cancellation
+//     is available during the attempt and invalidates it completely.
+//     Background checks are metadata only and never install.
+//   - SteamVR is NEVER started by the manager. The
+//     "Install SteamVR" affordance is a steam://install/250820
+//     URL dispatch; the user runs Steam itself. The manager never
+//     launches SteamVR on login, discovery, configuration, or
+//     any other implicit event.
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -59,10 +76,14 @@ public sealed partial class MainForm : Form
 {
     private readonly AppServices _svc;
     private NotifyIcon? _tray;
+    // One primary update control. Its label is derived from the
+    // coordinator + repository state by UpdateStatusLineRenderer, so
+    // the owner is never asked to click through Download then
+    // Install: the single click IS the authorization and it runs
+    // download -> verify -> installer handoff.
     private readonly Button _btnUpdate = new() { Text = "Check for updates", AutoSize = true };
-    private readonly Button _btnDownloadUpdate = new() { Text = "Download update", AutoSize = true, Visible = false, Enabled = false };
+    private readonly Button _btnCheckUpdate = new() { Text = "Check for updates", AutoSize = true };
     private readonly Button _btnCancelUpdate = new() { Text = "Cancel", AutoSize = true, Visible = false };
-    private readonly Button _btnInstallUpdate = new() { Text = "Install update", AutoSize = true, Visible = false, Enabled = false };
     private readonly ProgressBar _updateProgress = new() { Visible = false, Width = 220, Height = 16, Minimum = 0, Maximum = 100, Style = ProgressBarStyle.Continuous };
     private readonly Label _updateProgressLabel = new() { Visible = false, AutoSize = true, Text = "" };
     // Persistent status line that mirrors the hub badge ladder on
@@ -73,8 +94,20 @@ public sealed partial class MainForm : Form
     private UpdateRepository? _updateRepo;
     private ReleaseClient? _updateDownloader;
     private FormObserver? _updateObserver;
-    private CancellationTokenSource? _updateCancellation;
+    private UpdateFlowCoordinator? _updateFlow;
     private bool _updateBusy;
+    // True while an update attempt or installer handoff owns the
+    // screen. Pairing, setup, and Start/Stop read this so they cannot
+    // race an install that is about to close the manager.
+    private bool _updateActionLocked;
+    // Last failed owner action, rendered on the persistent readiness
+    // line. The activity log is collapsed by default, so an error that
+    // only reaches the log is invisible exactly when it matters.
+    private string? _actionError;
+    // Last failed VR readiness inspection, tracked separately so it can
+    // be withdrawn when a later inspection succeeds without clearing
+    // another action's failure.
+    private string? _vrReadinessFailure;
     private UpdateRepository.Snapshot _updateSnapshot = new UpdateRepository.Snapshot(
         null, null, null, null, null, null, null,
         DateTime.MinValue, DateTime.MinValue, null, false);
@@ -86,6 +119,7 @@ public sealed partial class MainForm : Form
     private bool _installHandOffInFlight;
 
     private readonly Label _lblHeader = new();
+    private readonly Label _lblSubStatus = new();
     private readonly Label _lblAdapter = new();
     private readonly ComboBox _cmbAdapter = new();
     private readonly Button _btnRefreshAdapters = new();
@@ -97,13 +131,25 @@ public sealed partial class MainForm : Form
     private readonly Button _btnVcRedistPage = new();
     private readonly Label _lblCompanion = new();
     private readonly Button _btnCompanionToggle = new();
+    private readonly Button _btnCompanionAdvanced = new();
     private readonly Label _lblDashboard = new();
     private readonly Button _btnOpenDashboard = new();
     private readonly Button _btnExportPairing = new();
+    private readonly Button _btnPairAdvanced = new();
     private readonly Button _btnSetupNetwork = new();
+    private readonly Button _btnSetupRetry = new();
     private readonly CheckBox _chkAutoStart = new();
     private readonly ListBox _lstStatus = new();
     private readonly Label _lblVersion = new();
+
+    // UI containers (kept as fields so ApplyApprovalModel can
+    // hide / show whole groups without iterating Controls).
+    private TableLayoutPanel _prereqPanel = null!;
+    private FlowLayoutPanel _primaryRow = null!;
+    private ExpanderLikePanel _advanced = null!;
+    private Panel _logHost = null!;
+    private TableLayoutPanel _rootContent = null!;
+    private Panel _scrollHost = null!;
 
     private UserSettings _settings = new();
     private bool _shownFirstTimeTrayHint;
@@ -116,8 +162,8 @@ public sealed partial class MainForm : Form
         Width = 720;
         Height = 700;
         StartPosition = FormStartPosition.CenterScreen;
-        MinimumSize = new Size(720, 700);
-        AutoScaleMode = AutoScaleMode.Dpi;
+        MinimumSize = new Size(640, 620);
+        UiTheme.ApplyForm(this);
 
         InitializeReceivingUx();
         BuildLayout();
@@ -138,183 +184,376 @@ public sealed partial class MainForm : Form
 
     private void BuildLayout()
     {
-        // The root panel lives inside a scrollable host so a small
-        // 720x700 form does not squeeze the approval panel and the
-        // status list. The approval panel itself is bottom-docked
-        // OUTSIDE the scroll area so it stays visible while the
-        // upper rows wrap at DPI scaling.
-        var scrollHost = new Panel
+        // WinForms reserves docked bottom panels in reverse
+        // z-order: declare them first, then let the scroll host
+        // fill the remaining visible space.
+
+        // Footer: collapsed activity log + update status + version.
+        var footer = new TableLayoutPanel
+        {
+            Dock = DockStyle.Bottom,
+            ColumnCount = 1,
+            RowCount = 4,
+            Padding = new Padding(0, 8, 0, 0),
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+        };
+        footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        for (var i = 0; i < 4; i++) footer.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+        var logExpander = new ExpanderLikePanel { Text = "Activity log" };
+        _logHost = new Panel
+        {
+            Dock = DockStyle.Fill,
+            AutoScroll = true,
+            BorderStyle = BorderStyle.FixedSingle,
+            BackColor = SystemColors.Control,
+            MinimumSize = new Size(0, 88),
+            MaximumSize = new Size(0, 140),
+        };
+        _lstStatus.Dock = DockStyle.Fill;
+        _lstStatus.HorizontalScrollbar = true;
+        _lstStatus.IntegralHeight = false;
+        _lstStatus.BorderStyle = BorderStyle.None;
+        _logHost.Controls.Add(_lstStatus);
+        logExpander.InnerPanel.Controls.Add(_logHost);
+        footer.Controls.Add(logExpander, 0, 0);
+
+        // Update status line + action row.
+        _lblVersion.Text = $"v{SignedRelease.CurrentVersion}";
+        _lblVersion.AutoSize = true;
+        _lblVersion.ForeColor = SystemColors.ControlText;
+        _updateStatusLabel.AutoSize = true;
+        _updateStatusLabel.ForeColor = SystemColors.ControlText;
+
+        var updateBar = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = true,
+            Margin = new Padding(0),
+        };
+        UiTheme.ApplyButton(_btnUpdate, UiTheme.ButtonRole.Primary);
+        UiTheme.ApplyButton(_btnCheckUpdate, UiTheme.ButtonRole.Demoted);
+        UiTheme.ApplyButton(_btnCancelUpdate, UiTheme.ButtonRole.Demoted);
+        updateBar.Controls.AddRange(new Control[] { _btnUpdate, _btnCancelUpdate, _updateProgress, _updateProgressLabel, _btnCheckUpdate });
+        var progress = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = true,
+        };
+        progress.Controls.Add(updateBar);
+        footer.Controls.Add(_updateStatusLabel, 0, 1);
+        footer.Controls.Add(progress, 0, 2);
+
+        var versionRow = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            FlowDirection = FlowDirection.RightToLeft,
+            WrapContents = false,
+        };
+        versionRow.Controls.Add(_lblVersion);
+        footer.Controls.Add(versionRow, 0, 3);
+
+        // Scroll host: header, prerequisites, primary action,
+        // advanced container. Header and primary stay visible
+        // above the approval panel; advanced + log collapse.
+        _scrollHost = new Panel
         {
             Dock = DockStyle.Fill,
             AutoScroll = true,
             Padding = new Padding(0),
         };
-        var root = new TableLayoutPanel
+        _rootContent = new TableLayoutPanel
         {
             Dock = DockStyle.Top,
-            ColumnCount = 2,
-            RowCount = 15,
-            Padding = new Padding(12),
+            ColumnCount = 1,
+            RowCount = 4,
+            Padding = UiTheme.OuterPadding,
             AutoSize = true,
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
         };
-        root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 200));
-        root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        for (var i = 0; i < 14; i++) root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        _rootContent.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        for (var i = 0; i < 4; i++) _rootContent.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
-        _lblHeader.Text = "VibertemisVR Host Manager";
-        _lblHeader.Font = new Font(SystemFonts.MessageBoxFont!, FontStyle.Bold);
-        root.Controls.Add(_lblHeader, 0, 0);
-        root.SetColumnSpan(_lblHeader, 2);
+        // Header row: title + readiness status + next action.
+        var header = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            FlowDirection = FlowDirection.TopDown,
+            WrapContents = false,
+        };
+        var title = new Label
+        {
+            Text = "VibertemisVR Host Manager",
+            Font = UiTheme.HeaderFont(),
+            AutoSize = true,
+            Margin = new Padding(0, 0, 0, 4),
+        };
+        _lblHeader.AutoSize = true;
+        _lblHeader.MaximumSize = new Size(640, 0);
+        _lblHeader.Margin = new Padding(0, 0, 0, 2);
+        _lblHeader.Text = "Host ready: checking...";
+        _lblSubStatus.AutoSize = true;
+        _lblSubStatus.MaximumSize = new Size(640, 0);
+        _lblSubStatus.Margin = new Padding(0, 0, 0, 8);
+        _lblSubStatus.Text = "";
+        header.Controls.Add(title);
+        header.Controls.Add(_lblHeader);
+        header.Controls.Add(_lblSubStatus);
+        _rootContent.Controls.Add(header, 0, 0);
 
-        _lblAdapter.Text = "Reachable IPv4 adapter:";
-        _cmbAdapter.DropDownStyle = ComboBoxStyle.DropDownList;
-        _cmbAdapter.Width = 280;
-        _btnRefreshAdapters.Text = "Refresh";
-        var adapterPanel = new FlowLayoutPanel { FlowDirection = FlowDirection.LeftToRight, AutoSize = true, WrapContents = true };
-        adapterPanel.Controls.Add(_cmbAdapter);
-        adapterPanel.Controls.Add(_btnRefreshAdapters);
-        root.Controls.Add(_lblAdapter, 0, 1);
-        root.Controls.Add(adapterPanel, 1, 1);
+        // Prerequisite panel: visible only when at least one of
+        // Steam / SteamVR / VC++ runtime is missing.
+        _prereqPanel = new TableLayoutPanel
+        {
+            Visible = false,
+            Dock = DockStyle.Top,
+            ColumnCount = 2,
+            RowCount = 3,
+            Padding = UiTheme.SectionPadding,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+        };
+        _prereqPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 220));
+        _prereqPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        for (var i = 0; i < 3; i++) _prereqPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
         _lblSteam.Text = "Steam install: checking...";
-        _btnOpenSteamPage.Text = "Open Steam download";
+        _lblSteam.AutoSize = true;
+        _lblSteam.MaximumSize = new Size(220, 0);
+        _btnOpenSteamPage.Text = "Get Steam";
+        UiTheme.ApplyButton(_btnOpenSteamPage, UiTheme.ButtonRole.Demoted);
         _btnOpenSteamPage.Enabled = false;
-        root.Controls.Add(_lblSteam, 0, 2);
-        root.Controls.Add(_btnOpenSteamPage, 1, 2);
-
         _lblSteamVr.Text = "SteamVR install: checking...";
-        _btnInstallSteamVr.Text = "Install SteamVR via Steam";
+        _lblSteamVr.AutoSize = true;
+        _lblSteamVr.MaximumSize = new Size(220, 0);
+        _btnInstallSteamVr.Text = "Install SteamVR";
+        UiTheme.ApplyButton(_btnInstallSteamVr, UiTheme.ButtonRole.Demoted);
         _btnInstallSteamVr.Enabled = false;
-        root.Controls.Add(_lblSteamVr, 0, 3);
-        root.Controls.Add(_btnInstallSteamVr, 1, 3);
+        _lblVcRedist.Text = "VC++ runtime: checking...";
+        _lblVcRedist.AutoSize = true;
+        _lblVcRedist.MaximumSize = new Size(220, 0);
+        _btnVcRedistPage.Text = "Install runtime";
+        UiTheme.ApplyButton(_btnVcRedistPage, UiTheme.ButtonRole.Demoted);
 
-        _lblVcRedist.Text = "Prerequisite: VC++ runtime";
-        _btnVcRedistPage.Text = "Install required runtime";
-        _btnVcRedistPage.Enabled = true;
-        root.Controls.Add(_lblVcRedist, 0, 4);
-        root.Controls.Add(_btnVcRedistPage, 1, 4);
-
-        _lblCompanion.Text = "Hosting: stopped";
-        _btnCompanionToggle.Text = "Start hosting";
-        _btnCompanionToggle.Enabled = false;
-        root.Controls.Add(_lblCompanion, 0, 5);
-        root.Controls.Add(_btnCompanionToggle, 1, 5);
-
-        _lblDashboard.Text = "ALVR Dashboard: not started";
-        _btnOpenDashboard.Text = "Open ALVR Dashboard";
-        _btnOpenDashboard.Enabled = false;
-        root.Controls.Add(_lblDashboard, 0, 6);
-        root.Controls.Add(_btnOpenDashboard, 1, 6);
-
-        _btnExportPairing.Text = "Export pairing file";
-        _btnExportPairing.Enabled = false;
-        _btnPairHeadset.Text = "Pair headset";
-        _btnPairHeadset.Enabled = false;
-        root.Controls.Add(new Label { Text = "Headset pairing" }, 0, 7);
-        var pairingButtons = new FlowLayoutPanel { AutoSize = true, WrapContents = true };
-        pairingButtons.Controls.AddRange(new Control[] { _btnPairHeadset, _btnExportPairing });
-        root.Controls.Add(pairingButtons, 1, 7);
-
-        _btnSetupNetwork.Text = "Setup VR (enables headset pairing)";
-        root.Controls.Add(new Label { Text = "VR setup" }, 0, 8);
-        root.Controls.Add(_btnSetupNetwork, 1, 8);
-
-        _chkAutoStart.Text = "Keep host ready after Windows sign-in";
-        root.Controls.Add(_chkAutoStart, 0, 9);
-        root.SetColumnSpan(_chkAutoStart, 2);
-
-        var readinessHint = new Label { Text = "Choose Setup VR once, then select this PC in Vibertemis on Quest and approve the matching code. SteamVR starts when you connect for VR. Closing this window keeps the host ready in the tray.", AutoSize = true, MaximumSize = new Size(650, 0) };
-        var details = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.TopDown, Dock = DockStyle.Fill };
-        var advanced = new ExpanderLikePanel { Text = "Advanced: network adapter, runtime dashboard and manual pairing" };
-        details.Controls.Add(readinessHint);
-        details.Controls.Add(advanced);
-        root.Controls.Add(details, 0, 10);
-        root.SetColumnSpan(details, 2);
-        // Host-ready / next-action status lives just above the
-        // update status line so the owner always sees the
-        // receiving posture.
-        var hostRow = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, FlowDirection = FlowDirection.TopDown };
-        hostRow.Controls.Add(_lblHostReady);
-        hostRow.Controls.Add(_lblHostReadyNext);
-        root.Controls.Add(new Label { Text = "Pairing" }, 0, 11);
-        root.Controls.Add(hostRow, 1, 11);
-
-        void ShowAdvanced(bool visible) {
-            foreach (Control control in root.Controls) {
-                int row = root.GetRow(control);
-                if (row is 1 or 6) control.Visible = visible;
-            }
-            _btnExportPairing.Visible = visible;
-        }
-        advanced.ExpandedChanged += (_, _) => ShowAdvanced(advanced.Expanded);
-        ShowAdvanced(false);
-
-        var progressRow = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, FlowDirection = FlowDirection.LeftToRight, WrapContents = true };
-        progressRow.Controls.Add(_updateProgress);
-        progressRow.Controls.Add(_updateProgressLabel);
-        root.Controls.Add(new Label { Text = "Update download" }, 0, 12);
-        root.Controls.Add(progressRow, 1, 12);
-        root.Controls.Add(_updateStatusLabel, 0, 13);
-        root.SetColumnSpan(_updateStatusLabel, 2);
-
-        _lstStatus.Dock = DockStyle.Fill;
-        _lstStatus.HorizontalScrollbar = true;
-        root.Controls.Add(_lstStatus, 0, 14);
-        root.SetColumnSpan(_lstStatus, 2);
-
-        scrollHost.Controls.Add(root);
-
-        var footer = new TableLayoutPanel
+        _prereqPanel.Controls.Add(_lblSteam, 0, 0);
+        _prereqPanel.Controls.Add(_btnOpenSteamPage, 1, 0);
+        _prereqPanel.Controls.Add(_lblSteamVr, 0, 1);
+        _prereqPanel.Controls.Add(_btnInstallSteamVr, 1, 1);
+        _prereqPanel.Controls.Add(_lblVcRedist, 0, 2);
+        _prereqPanel.Controls.Add(_btnVcRedistPage, 1, 2);
+        foreach (var button in new[] { _btnOpenSteamPage, _btnInstallSteamVr, _btnVcRedistPage })
         {
-            Dock = DockStyle.Bottom,
-            ColumnCount = 2,
-            RowCount = 1,
-            Padding = new Padding(12, 0, 12, 12),
-            AutoSize = true,
-        };
-        footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        _lblVersion.Text = SignedRelease.CurrentVersion + "-quest-preview";
-        _lblVersion.AutoSize = true;
-        var updateActions = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill, WrapContents = true };
-        updateActions.Controls.Add(_btnUpdate);
-        updateActions.Controls.Add(_btnDownloadUpdate);
-        updateActions.Controls.Add(_btnCancelUpdate);
-        updateActions.Controls.Add(_btnInstallUpdate);
-        footer.Controls.Add(updateActions, 0, 0);
-        _btnUpdate.Click += (_, _) => TriggerUpdateCheck(force: true);
-        _btnDownloadUpdate.Click += (_, _) => DownloadPendingUpdate();
-        _btnCancelUpdate.Click += (_, _) => _updateCancellation?.Cancel();
-        _btnInstallUpdate.Click += (_, _) => InstallPendingUpdate();
-        footer.Controls.Add(_lblVersion, 1, 0);
+            button.Anchor = AnchorStyles.Left;
+            button.AutoSize = true;
+            button.Margin = new Padding(0, 4, 0, 4);
+        }
+        _rootContent.Controls.Add(_prereqPanel, 0, 1);
 
-        // Order: footer (bottom), approval panel (bottom-docked
-        // ABOVE the footer so the action row + code stay visible
-        // while the scroll area above scrolls if the form is
-        // short).
-        // WinForms docks in reverse z-order: reserve bottom panels first,
-        // then let the scroll host fill only the remaining visible space.
-        Controls.Add(scrollHost);
+        // Primary action row: at most one prominent button, with the
+        // pairing entry demoted beside it.
+        _primaryRow = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = true,
+            Margin = new Padding(0, 8, 0, 8),
+        };
+        _btnSetupNetwork.Text = "Set up VR";
+        UiTheme.ApplyButton(_btnSetupNetwork, UiTheme.ButtonRole.Primary);
+        _btnSetupNetwork.Visible = false;
+        _btnPairHeadset.Text = "Pair headset";
+        UiTheme.ApplyButton(_btnPairHeadset, UiTheme.ButtonRole.Secondary);
+        _btnPairHeadset.Enabled = false;
+        _btnPairHeadset.Visible = false;
+        _btnCompanionToggle.Text = "Start";
+        UiTheme.ApplyButton(_btnCompanionToggle, UiTheme.ButtonRole.Primary);
+        _btnCompanionToggle.Enabled = false;
+        _btnCompanionToggle.Visible = false;
+        _primaryRow.Controls.AddRange(new Control[] { _btnSetupNetwork, _btnCompanionToggle, _btnPairHeadset });
+        _rootContent.Controls.Add(_primaryRow, 0, 2);
+
+        // Advanced container: real secondary controls. Collapsed
+        // by default. Management (Pause / Resume / Turn off /
+        // Forget) lives here, not at the bottom of the form.
+        _advanced = new ExpanderLikePanel { Text = "Advanced" };
+        var adv = _advanced.InnerPanel;
+        adv.Controls.Add(BuildAdvancedAdapterRow());
+        adv.Controls.Add(BuildAdvancedHostRow());
+        adv.Controls.Add(BuildAdvancedPairingRow());
+        adv.Controls.Add(BuildAdvancedManualSetupRow());
+        adv.Controls.Add(BuildAdvancedDiagnosticsRow());
+        adv.Controls.Add(BuildAdvancedAutoStartRow());
+        _advanced.ExpandedChanged += (_, _) => RefreshAdvancedEnabledState();
+        _rootContent.Controls.Add(_advanced, 0, 3);
+
+        _scrollHost.Controls.Add(_rootContent);
+
+        // Re-pin the root panel to the scroll host width so a
+        // long line wraps rather than horizontally scrolling the
+        // root. The MaximumSize.Width is the host client width
+        // minus the vertical scroll bar (when shown).
+        _rootContent.MinimumSize = new Size(0, 0);
+        _scrollHost.Resize += (_, _) => UpdateRootMaximumSize();
+        UpdateRootMaximumSize();
+
+        // Z-order (WinForms paints the FIRST inserted panel first
+        // and docks later layers on top): footer at the bottom,
+        // then the approval panel (above footer), then the scroll
+        // host fills the remaining area.
+        Controls.Add(_scrollHost);
         Controls.Add(_panelApproval);
         Controls.Add(footer);
-        foreach (Control c in root.Controls)
+    }
+
+    private FlowLayoutPanel BuildAdvancedAdapterRow()
+    {
+        var row = new FlowLayoutPanel
         {
-            if (c is Label or CheckBox or Button) c.AutoSize = true;
-            if (c is Label && root.GetColumn(c) == 0 && root.GetColumnSpan(c) == 1)
-                c.MaximumSize = new Size(192, 0);
-            c.Margin = new Padding(4, 7, 4, 7);
-        }
-        foreach (var button in new[] { _btnRefreshAdapters, _btnOpenSteamPage, _btnInstallSteamVr,
-            _btnVcRedistPage, _btnCompanionToggle, _btnOpenDashboard, _btnExportPairing, _btnPairHeadset, _btnSetupNetwork,
-            _btnApprove, _btnReject, _btnPause, _btnResume, _btnTurnOff, _btnForgetAll, _btnPanelClose })
-            button.AutoSize = true;
-        // Pin the root panel to the scroll host width so a long
-        // line wraps rather than horizontally scrolling the root.
-        root.MinimumSize = new Size(0, 0);
-        scrollHost.Resize += (_, _) => root.MaximumSize = new Size(scrollHost.ClientSize.Width - SystemInformation.VerticalScrollBarWidth > 0 ? scrollHost.ClientSize.Width - SystemInformation.VerticalScrollBarWidth : scrollHost.ClientSize.Width, 0);
-        root.MaximumSize = new Size(scrollHost.ClientSize.Width - (SystemInformation.VerticalScrollBarWidth > 0 ? SystemInformation.VerticalScrollBarWidth : 0), 0);
+            FlowDirection = FlowDirection.LeftToRight,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            WrapContents = true,
+        };
+        _lblAdapter.Text = "Adapter:";
+        _lblAdapter.AutoSize = true;
+        _lblAdapter.Margin = new Padding(0, 6, 8, 0);
+        _cmbAdapter.DropDownStyle = ComboBoxStyle.DropDownList;
+        _cmbAdapter.MinimumSize = new Size(220, 0);
+        _cmbAdapter.Margin = new Padding(0, 4, 8, 4);
+        _btnRefreshAdapters.Text = "Refresh";
+        UiTheme.ApplyButton(_btnRefreshAdapters, UiTheme.ButtonRole.Demoted);
+        row.Controls.AddRange(new Control[] { _lblAdapter, _cmbAdapter, _btnRefreshAdapters });
+        return row;
+    }
+
+    private FlowLayoutPanel BuildAdvancedHostRow()
+    {
+        var row = new FlowLayoutPanel
+        {
+            FlowDirection = FlowDirection.LeftToRight,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            WrapContents = true,
+        };
+        _lblCompanion.Text = "Host service";
+        _lblCompanion.AutoSize = true;
+        _lblCompanion.Margin = new Padding(0, 6, 8, 0);
+        _btnCompanionAdvanced.Text = "Start";
+        UiTheme.ApplyButton(_btnCompanionAdvanced, UiTheme.ButtonRole.Demoted);
+        _btnCompanionAdvanced.Margin = new Padding(0, 4, 8, 4);
+        _lblDashboard.Text = "Dashboard";
+        _lblDashboard.AutoSize = true;
+        _lblDashboard.Margin = new Padding(0, 6, 16, 0);
+        UiTheme.ApplyButton(_btnOpenDashboard, UiTheme.ButtonRole.Demoted);
+        _btnOpenDashboard.Text = "Open ALVR Dashboard";
+        row.Controls.AddRange(new Control[] { _lblCompanion, _btnCompanionAdvanced, _lblDashboard, _btnOpenDashboard });
+        return row;
+    }
+
+    private FlowLayoutPanel BuildAdvancedPairingRow()
+    {
+        var row = new FlowLayoutPanel
+        {
+            FlowDirection = FlowDirection.LeftToRight,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            WrapContents = true,
+        };
+        _btnExportPairing.Text = "Export pairing file";
+        UiTheme.ApplyButton(_btnExportPairing, UiTheme.ButtonRole.Demoted);
+        _btnExportPairing.Enabled = false;
+        // Pairing fallback: on a machine that still owes setup the
+        // primary row is taken by Set up VR, but the owner can and
+        // must still pair a Quest while the host is running.
+        _btnPairAdvanced.Text = "Pair headset";
+        UiTheme.ApplyButton(_btnPairAdvanced, UiTheme.ButtonRole.Demoted);
+        row.Controls.Add(_btnExportPairing);
+        row.Controls.Add(_btnPairAdvanced);
+        return row;
+    }
+
+    private FlowLayoutPanel BuildAdvancedManualSetupRow()
+    {
+        // Set up VR is always reachable here so the owner can
+        // manually retry the unified setup path (driver switch,
+        // network access, receiving enable) even after the
+        // primary row's button has hidden itself.
+        var row = new FlowLayoutPanel
+        {
+            FlowDirection = FlowDirection.LeftToRight,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            WrapContents = true,
+        };
+        // Deliberately not "Set up VR": the primary row already owns
+        // that exact label, and a duplicate label makes a text search
+        // over this window ambiguous about which button it found.
+        _btnSetupRetry.Text = "Retry setup";
+        UiTheme.ApplyButton(_btnSetupRetry, UiTheme.ButtonRole.Demoted);
+        _btnSetupRetry.Margin = new Padding(0, 4, 8, 4);
+        row.Controls.Add(_btnSetupRetry);
+        return row;
+    }
+
+    private FlowLayoutPanel BuildAdvancedDiagnosticsRow()
+    {
+        // Receiving management lives here so the bottom-docked
+        // approval panel stays clean (Approve / Reject / Hide
+        // only while a request is on screen). The labels for
+        // these affordances are preserved.
+        var row = new FlowLayoutPanel
+        {
+            FlowDirection = FlowDirection.LeftToRight,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            WrapContents = true,
+        };
+        UiTheme.ApplyButton(_btnPause, UiTheme.ButtonRole.Demoted);
+        UiTheme.ApplyButton(_btnResume, UiTheme.ButtonRole.Demoted);
+        UiTheme.ApplyButton(_btnTurnOff, UiTheme.ButtonRole.Demoted);
+        UiTheme.ApplyButton(_btnForgetAll, UiTheme.ButtonRole.Demoted);
+        row.Controls.AddRange(new Control[] { _btnPause, _btnResume, _btnTurnOff, _btnForgetAll });
+        return row;
+    }
+
+    private FlowLayoutPanel BuildAdvancedAutoStartRow()
+    {
+        var row = new FlowLayoutPanel
+        {
+            FlowDirection = FlowDirection.LeftToRight,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            WrapContents = true,
+        };
+        _chkAutoStart.Text = "Start with Windows";
+        _chkAutoStart.AutoSize = true;
+        _chkAutoStart.Margin = new Padding(0, 8, 0, 0);
+        row.Controls.Add(_chkAutoStart);
+        return row;
+    }
+
+    private void UpdateRootMaximumSize()
+    {
+        if (_scrollHost is null || _scrollHost.ClientSize.Width <= 0) return;
+        var bar = SystemInformation.VerticalScrollBarWidth;
+        var width = bar > 0 ? _scrollHost.ClientSize.Width - bar : _scrollHost.ClientSize.Width;
+        if (width < 0) width = 0;
+        // Single column root: leave the 16 px outer padding visible.
+        var max = new Size(width - 32, 0);
+        if (_rootContent != null) _rootContent.MaximumSize = max;
     }
 
     private void WireEvents()
@@ -329,14 +568,28 @@ public sealed partial class MainForm : Form
         };
         _btnRefreshAdapters.Click += (_, _) => RefreshAdapters();
         _cmbAdapter.SelectedIndexChanged += (_, _) => OnAdapterPicked();
+        // The single update action. One click resolves the release,
+        // downloads it if needed, verifies it, and hands off to the
+        // existing installer worker. There is no second in-app
+        // Install prompt; the OS consent surface still applies.
+        _btnUpdate.Click += (_, _) => BeginUpdateFlow();
+        // Cancel only ever invalidates the in-flight attempt. It
+        // never discards a verified download and never resumes the
+        // attempt later.
+        _btnCancelUpdate.Click += (_, _) => CancelUpdateFlow();
+        // Manual metadata re-check. Metadata only: it never installs.
+        _btnCheckUpdate.Click += (_, _) => TriggerUpdateCheck(force: true);
         _btnOpenSteamPage.Click += (_, _) => OpenUrl("https://store.steampowered.com/about/");
         _btnInstallSteamVr.Click += (_, _) => OpenUrl(_svc.SteamVr.Discover().Installed ? "steam://rungameid/250820" : "steam://install/250820");
         _btnVcRedistPage.Click += async (_, _) => await PrepareVr();
         _btnCompanionToggle.Click += (_, _) => ToggleCompanion();
+        _btnCompanionAdvanced.Click += (_, _) => ToggleCompanion();
         _btnOpenDashboard.Click += (_, _) => OpenDashboard();
         _btnExportPairing.Click += (_, _) => ExportPairing();
         _btnPairHeadset.Click += async (_, _) => await PairHeadset();
+        _btnPairAdvanced.Click += async (_, _) => await PairHeadset();
         _btnSetupNetwork.Click += async (_, _) => await PrepareVr();
+        _btnSetupRetry.Click += async (_, _) => await PrepareVr();
         _chkAutoStart.CheckedChanged += (_, _) => OnAutoStartToggled();
         WireReceivingUxEvents();
     }
@@ -464,7 +717,9 @@ public sealed partial class MainForm : Form
         }
         _statusTimer.Stop();
         NetworkChange.NetworkAddressChanged -= OnNetworkChanged;
-        _updateCancellation?.Cancel();
+        // An exiting manager must not leave an update continuation
+        // that could fire after the process is gone.
+        _updateFlow?.Dispose();
         _tray?.Dispose();
     }
 
@@ -550,7 +805,7 @@ public sealed partial class MainForm : Form
     private void ReconcileHost()
     {
         if (_exitRequested || _guidedSetupBusy || _pairingBusy) return;
-        if (!RuntimeReady()) { _lblCompanion.Text = "Setup VR will install the required Windows runtime."; return; }
+        if (!RuntimeReady()) { _lblCompanion.Text = "Set up VR will install the required Windows runtime."; return; }
         var status = _recovery.Tick(_settings.LastSelectedAdapterId, _settings.LastSelectedAdapterAddress);
         if (_lastRecoveryMessage != status.Message) { _lastRecoveryMessage = status.Message; LogStatus(status.Message); }
         RefreshCompanionStatus();
@@ -564,9 +819,10 @@ public sealed partial class MainForm : Form
     private void RefreshRuntimeStatus()
     {
         bool ready = RuntimeReady();
-        _lblVcRedist.Text = ready ? "Windows runtime: ready" : "Windows runtime: setup needed";
+        _lblVcRedist.Text = ready ? "VC++ runtime: ready" : "VC++ runtime: setup needed";
         _btnVcRedistPage.Visible = !ready;
-        _btnVcRedistPage.Enabled = !_preparingVr && !_guidedSetupBusy && !_updateBusy;
+        _btnVcRedistPage.Enabled = !_preparingVr && !_guidedSetupBusy && !_updateBusy && !_updateActionLocked;
+        RefreshPrereqPanelVisibility();
     }
 
     private void RefreshSteamStatus()
@@ -579,18 +835,20 @@ public sealed partial class MainForm : Form
         }
         else
         {
-            _lblSteam.Text = "Steam not installed.";
+            _lblSteam.Text = "Steam: not installed";
             _btnOpenSteamPage.Enabled = true;
         }
+        RefreshPrereqPanelVisibility();
     }
 
     private void RefreshSteamVrStatus()
     {
         var v = _svc.SteamVr.Discover();
-        _lblSteamVr.Text = v.SteamVrReady ? "SteamVR ready" : v.Reason ?? "Install SteamVR";
+        _lblSteamVr.Text = v.SteamVrReady ? "SteamVR: ready" : (v.Reason ?? "SteamVR: install");
         _btnInstallSteamVr.Text = v.Kind == VibertemisManager.Core.Steam.SteamVrDiscoveryKind.InstalledUninitialized
-            ? "Finish SteamVR setup" : "Install SteamVR";
+            ? "Finish SteamVR" : "Install SteamVR";
         _btnInstallSteamVr.Enabled = !v.SteamVrReady;
+        RefreshPrereqPanelVisibility();
     }
 
     private void RefreshCompanionStatus()
@@ -601,9 +859,15 @@ public sealed partial class MainForm : Form
         _cmbAdapter.Enabled = !running;
         _btnRefreshAdapters.Enabled = !running;
         _btnExportPairing.Enabled = running && _recovery.RunningSpec is not null;
-        _btnPairHeadset.Enabled = running && _recovery.RunningSpec is not null && !_pairingBusy;
-        _btnCompanionToggle.Text = running || (_recovery.DesiredRunning && !blocked) ? "Stop hosting" : "Start hosting";
-        _btnCompanionToggle.Enabled = running || RuntimeReady();
+        var canPair = running && _recovery.RunningSpec is not null && !_pairingBusy && !_updateActionLocked;
+        _btnPairHeadset.Enabled = canPair;
+        _btnPairAdvanced.Enabled = canPair;
+        var startStopText = running || (_recovery.DesiredRunning && !blocked) ? "Stop" : "Start";
+        _btnCompanionToggle.Text = startStopText;
+        _btnCompanionAdvanced.Text = startStopText;
+        _btnCompanionToggle.Enabled = (running || RuntimeReady()) && !_updateActionLocked;
+        RefreshPrimaryActionVisibility();
+        RefreshAdvancedEnabledState();
     }
 
     private void RefreshDashboardStatus()
@@ -619,6 +883,128 @@ public sealed partial class MainForm : Form
             _lblDashboard.Text = "ALVR Dashboard: ready";
             _btnOpenDashboard.Enabled = true;
         }
+    }
+
+    private void RefreshPrimaryActionVisibility()
+    {
+        if (_primaryRow is null) return;
+        // Pending approval dominates: Approve / Reject live in the
+        // bottom approval panel and own the screen while a request
+        // is on screen. Hide every primary-row control so the
+        // owner cannot start a different action in parallel.
+        if (_latestPending is { State: "pending" } pending && !string.IsNullOrEmpty(pending.SessionId))
+        {
+            _btnSetupNetwork.Visible = false;
+            _btnCompanionToggle.Visible = false;
+            _btnPairHeadset.Visible = false;
+            return;
+        }
+        bool setupNeeded = IsSetupNeeded();
+        bool running = _svc.Companion.IsRunning;
+        // Set up VR is the unified setup path: it installs the runtime,
+        // switches drivers, opens network access, and enables
+        // receiving. It is shown whenever something is still owed.
+        _btnSetupNetwork.Visible = setupNeeded;
+        // Pairing is the point of the host, so it stays reachable
+        // whenever the host runs - including on a machine that still
+        // owes VR setup. Hiding it behind Set up VR would make a
+        // perfectly pairable host look unpairable, and hiding it in
+        // Advanced would bury the only action that needs a headset.
+        _btnPairHeadset.Visible = running;
+        // Start / Stop only leads when the host is not running yet;
+        // a running host needs no toggle here (Advanced still has it).
+        _btnCompanionToggle.Visible = !running && !setupNeeded;
+    }
+
+    // Setup is needed when any of the inputs the Set up VR
+    // action repairs is missing. Driven by real runtime / install
+    // probes, not by the receiving preference (which has its own
+    // primary path through PairHeadset).
+    private bool IsSetupNeeded()
+    {
+        if (!RuntimeReady()) return true;
+        if (!_svc.Steam.Locate().Installed) return true;
+        if (!_svc.SteamVr.Discover().SteamVrReady) return true;
+        if (!VrDriverPrepared()) return true;
+        if (_recovery?.Status.State == HostRecoveryState.IntegrityBlocked) return true;
+        if (_recovery?.Status.State == HostRecoveryState.StopFailed) return true;
+        return false;
+    }
+
+    // Steam and SteamVR being installed is not readiness: the bundled
+    // driver still has to be registered in SteamVR and its compatible
+    // session has to exist. Asking only about the first two hid Set up
+    // VR before the very first VR configuration. Inspection only - this
+    // never registers or writes anything.
+    private bool VrDriverPrepared()
+    {
+        try
+        {
+            var prepared = new VrSetup(_svc.Paths.ProgramsRoot,
+                Path.Combine(_svc.Paths.LocalAppData, "openvr", "openvrpaths.vrpath"),
+                static () => { },
+                static () => { }).IsPrepared();
+            SetVrReadinessFailure(null);
+            return prepared;
+        }
+        catch (Exception ex)
+        {
+            // An inspection that could not complete is not readiness, so
+            // this never claims the driver is prepared. Set up VR stays
+            // offered and the reason is published to the readiness line
+            // rather than only to the collapsed activity log.
+            SetVrReadinessFailure("the SteamVR driver registration could not be read (" + ex.Message + ")");
+            return false;
+        }
+    }
+
+    // A failed readiness inspection is an owner-visible failure, but
+    // only while it is actually failing, so the line is withdrawn as
+    // soon as a later inspection succeeds.
+    private void SetVrReadinessFailure(string? detail)
+    {
+        var message = detail is null ? null
+            : "Set up VR could not confirm VR readiness: " + detail + ". Choose Set up VR again.";
+        if (_vrReadinessFailure == message) return;
+        _vrReadinessFailure = message;
+        if (message is null)
+        {
+            // Only ever withdraw this line, never another action's failure.
+            if (_actionError is not null && _actionError.StartsWith("Set up VR could not confirm VR readiness:", StringComparison.Ordinal))
+                SetActionError(null);
+        }
+        else FailAction(message);
+    }
+
+    private void RefreshPrereqPanelVisibility()
+    {
+        if (_prereqPanel is null) return;
+        bool steamOk = _svc.Steam.Locate().Installed;
+        bool steamVrOk = _svc.SteamVr.Discover().SteamVrReady;
+        bool runtimeOk = RuntimeReady();
+        // Each row hides independently so the form only shows the
+        // prereq the owner still owes. The outer panel hides when
+        // every row is hidden.
+        _lblSteam.Visible = !steamOk;
+        _btnOpenSteamPage.Visible = !steamOk;
+        _lblSteamVr.Visible = !steamVrOk;
+        _btnInstallSteamVr.Visible = !steamVrOk;
+        _lblVcRedist.Visible = !runtimeOk;
+        _btnVcRedistPage.Visible = !runtimeOk;
+        _prereqPanel.Visible = !(steamOk && steamVrOk && runtimeOk);
+    }
+
+    private void RefreshAdvancedEnabledState()
+    {
+        if (_advanced is null) return;
+        bool running = _svc.Companion.IsRunning;
+        _cmbAdapter.Enabled = !running;
+        _btnRefreshAdapters.Enabled = !running;
+        _btnExportPairing.Enabled = running && _recovery.RunningSpec is not null;
+        // The Advanced Start/Stop toggle is reachable at all
+        // times; it is only disabled when the host is in a
+        // busy state (preparing VR, handoff, etc.).
+        _btnCompanionAdvanced.Enabled = !_preparingVr && !_installHandOffInFlight && !_updateActionLocked;
     }
 
     private void RefreshFirewallStatus()
@@ -738,11 +1124,17 @@ public sealed partial class MainForm : Form
         {
             if (!_svc.IntegrityVerifier.Verify(helper, out _))
             {
-                LogStatus("Network helper integrity check failed. Reinstall the host package.");
+                FailAction("Network access was not configured: the network helper failed its integrity check. "
+                    + "Reinstall the host package, then choose Set up VR again.");
                 return false;
             }
         }
-        catch (Exception ex) { LogStatus("Cannot verify network helper: " + ex.Message); return false; }
+        catch (Exception ex)
+        {
+            FailAction("Network access was not configured: the network helper could not be verified (" + ex.Message + "). "
+                + "Reinstall the host package, then choose Set up VR again.");
+            return false;
+        }
         _btnSetupNetwork.Enabled = false;
         LogStatus("Approve the Windows prompt to configure network access...");
         try
@@ -760,8 +1152,13 @@ public sealed partial class MainForm : Form
                     : "Network access configured for trusted Private/Domain networks.");
                 return true;
             }
-            else
-                LogStatus(result.Error.Length > 0 ? result.Error : "Network setup did not complete. Retry when ready.");
+            // The helper's own detail already distinguishes a cancelled
+            // Windows prompt, a helper that is still running, and a real
+            // failure, so it is kept verbatim instead of collapsing every
+            // case into one retry hint.
+            FailAction("Network access is not configured yet: "
+                + (result.Error.Length > 0 ? result.Error : "The Windows prompt did not finish.")
+                + " Choose Set up VR again to retry.");
             return false;
         }
         finally { if (!IsDisposed) _btnSetupNetwork.Enabled = true; }
@@ -899,54 +1296,67 @@ public sealed partial class MainForm : Form
     private void RenderUpdateUi()
     {
         var s = _updateSnapshot;
-        bool canDownload = !_updateBusy && s.HasAvailable
-            && !(s.HasDownloaded && s.Available!.Version == s.Downloaded!.Version
-                 && s.Available.Sequence == s.Downloaded.Sequence);
-        bool canInstall = !_updateBusy && s.HasDownloaded;
-        _btnDownloadUpdate.Visible = canDownload;
-        _btnDownloadUpdate.Enabled = canDownload;
-        _btnInstallUpdate.Visible = canInstall;
-        _btnInstallUpdate.Enabled = canInstall;
-        _btnCancelUpdate.Visible = _updateBusy && _updateCancellation != null;
-        if (s.HasDownloaded)
+        var flow = _updateFlow?.State;
+        var stage = flow?.Stage ?? UpdateFlowStage.Idle;
+
+        // Conflicting actions are disabled for the whole attempt and
+        // the handoff, so setup / pairing / start cannot race an
+        // install that is about to close the manager. A cancelling
+        // attempt stays locked until the interrupted transport has
+        // unwound, because only then is a retry safe.
+        var locked = stage is UpdateFlowStage.Choosing or UpdateFlowStage.Downloading
+            or UpdateFlowStage.Verifying or UpdateFlowStage.Cancelling
+            or UpdateFlowStage.HandingOff or UpdateFlowStage.AwaitingSystem;
+        _updateActionLocked = locked;
+        bool idle = !locked && !_updateBusy && !_installHandOffInFlight && !_preparingVr;
+
+        _btnUpdate.Text = UpdateStatusLineRenderer.ActionLabel(s, flow);
+        _btnUpdate.Enabled = idle && _updateFlow is not null;
+        // One action per state. The manual re-check is a secondary that
+        // exists only while the primary is doing something else, so the
+        // owner never sees two identical "Check for updates" buttons side
+        // by side at rest, and it disappears while work is in flight.
+        _btnCheckUpdate.Text = s.Checking ? "Checking…" : "Check for updates";
+        _btnCheckUpdate.Visible = idle && !s.Checking
+            && !UpdateStatusLineRenderer.PrimaryIsCheck(s, flow);
+        _btnCheckUpdate.Enabled = _btnCheckUpdate.Visible;
+        // Cancel is offered only while the attempt itself says it can
+        // still be cancelled: not after the irreversible handoff
+        // boundary, and not again while it is already cancelling.
+        _btnCancelUpdate.Visible = flow is { CanCancel: true };
+        _btnCancelUpdate.Enabled = _btnCancelUpdate.Visible;
+        // Setup is held while an attempt is live so nothing else tears
+        // the host down mid-download. Pairing and Start/Stop read the
+        // same flag from RefreshCompanionStatus so their own rules
+        // stay authoritative.
+        _btnSetupNetwork.Enabled = idle;
+        _btnSetupRetry.Enabled = idle;
+        RefreshCompanionStatus();
+
+        // Progress is either real bytes or indeterminate. Verification
+        // has no meaningful percentage, so it never invents one, and a
+        // cancelling attempt stops showing a bar it can no longer move.
+        var showProgress = locked && stage != UpdateFlowStage.AwaitingSystem
+            && stage != UpdateFlowStage.Cancelling;
+        _updateProgress.Visible = showProgress;
+        _updateProgressLabel.Visible = showProgress;
+        if (!showProgress)
         {
-            _btnInstallUpdate.Text = $"Install update {s.Downloaded!.Version}";
-        }
-        else
-        {
-            _btnInstallUpdate.Text = "Install update";
-        }
-        // Progress / cancellation row mirrors the in-flight check.
-        // The persistent status line below carries the last known
-        // outcome so the user always sees the most recent status
-        // even between checks.
-        if (s.Checking)
-        {
-            _updateProgressLabel.Visible = true;
-            _updateProgressLabel.Text = "Checking signed Quest preview releases...";
-            _updateProgress.Visible = true;
-        }
-        else if (_updateBusy)
-        {
-            _updateProgress.Visible = true;
-            _updateProgressLabel.Visible = true;
-        }
-        else
-        {
-            _updateProgress.Visible = false;
-            _updateProgressLabel.Visible = false;
+            _updateProgress.Style = ProgressBarStyle.Continuous;
+            _updateProgress.Value = 0;
             _updateProgressLabel.Text = "";
         }
-        RenderUpdateStatusLine(s);
+        RenderUpdateStatusLine(s, flow);
     }
 
     // Persistent status ladder mirrors the Android hub badge. The
     // wording lives in UpdateStatusLineRenderer so the WinForms
     // label and the tests share a single source of truth; this
     // method is just the label write-through.
-    private void RenderUpdateStatusLine(UpdateRepository.Snapshot s)
+    private void RenderUpdateStatusLine(UpdateRepository.Snapshot s, UpdateFlowState? flow = null)
     {
-        string text = UpdateStatusLineRenderer.Render(s);
+        flow ??= _updateFlow?.State;
+        string text = UpdateStatusLineRenderer.Render(s, flow);
         if (_updateStatusLabel.Text != text) _updateStatusLabel.Text = text;
         // Tray notice — only when the form is hidden from the user
         // so a visible window never balloons. HideToTray() (the
@@ -990,283 +1400,296 @@ public sealed partial class MainForm : Form
         }
     }
 
-    // Stage 2: download the verified available metadata's installer.
-    // The repository records the downloaded slot when the digest
-    // matches and the per-version cache directory is populated.
-    private async void DownloadPendingUpdate()
+    // The single update action. Everything about the attempt lives
+    // in UpdateFlowCoordinator: the release is pinned here (so a
+    // newer background check cannot move the target mid-attempt),
+    // the download is skipped when those exact bytes are already
+    // cached, the bytes are re-verified at the execution boundary,
+    // and the existing UpdateWorker handoff happens automatically.
+    // There is no second in-app confirmation: this click is the
+    // authorization. The OS installer consent surface still applies.
+    private async void BeginUpdateFlow()
     {
-        if (_updateRepo == null || _updateDownloader == null) return;
-        if (_updateBusy || _installHandOffInFlight || _preparingVr) return;
-        var s = _updateRepo.Current;
-        if (!s.HasAvailable) return;
-        var release = s.Available!;
-        if (s.HasDownloaded && release.Version == s.Downloaded!.Version
-            && release.Sequence == s.Downloaded.Sequence)
+        var flow = _updateFlow;
+        if (flow == null || flow.IsBusy) return;
+        if (_installHandOffInFlight || _preparingVr) return;
+        // A pairing request owns the screen while it is pending. The
+        // attempt is deferred, not lost: no cache is touched and the
+        // owner re-clicks Update once the request is resolved.
+        if (_latestPending is { State: "pending" } pending && !string.IsNullOrEmpty(pending.SessionId))
         {
-            // Already downloaded this release; nothing to do.
+            LogStatus("Approve or reject the headset pairing request first, then choose Update again. Nothing was downloaded.");
+            RenderUpdateStatusLine(_updateSnapshot);
             return;
         }
-        if (MessageBox.Show(this,
-            $"Download host update {release.Version}? Your settings and pairing will be kept.",
-            "Host update", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
-        _updateBusy = true;
-        using var cancellation = new CancellationTokenSource();
-        _updateCancellation = cancellation;
-        RenderUpdateUi();
         try
         {
-            SetProgressUi(visible: true);
-            LogStatus($"Downloading {release.Version} ({UpdateRepository.FormatBytes(release.Windows.Bytes)})...");
-            var progress = new Progress<UpdateProgress>(p => ReportProgress(p));
-            // 1) Transport writes the verified installer into the
-            //    shared per-update cache directory
-            //    (<state>/updates/<file>.part), verifies digest +
-            //    size, and renames atomically. The path returned is
-            //    the verified file under the flat cache dir.
-            string downloadedPath = await _updateDownloader.DownloadAsync(
-                release, _svc.Paths.UpdateCacheDir, cancellation.Token, progress);
-            if (IsDisposed || Disposing) return;
-            // 2) Stream the verified file into the per-version
-            //    download directory, hash during the copy, persist
-            //    the bound manifest + signature bytes, and publish
-            //    the downloaded slot — all atomic and bounded by
-            //    UpdateRepository.RecordDownloaded.
-            _updateRepo.RecordDownloaded(
-                release, s.AvailableManifestBytes!, s.AvailableSignatureBytes!,
-                downloadedPath);
-            SetProgressUi(visible: false);
-            var busy = _svc.BusyChecker.Check();
-            if (busy.IsBusy)
-            {
-                LogStatus($"Update {release.Version} downloaded. Close SteamVR and ALVR Dashboard, then click Install update.");
-            }
-            else
-            {
-                LogStatus($"Update {release.Version} downloaded. Click Install update to apply it.");
-            }
-        }
-        catch (OperationCanceledException)
-        {
-            if (!IsDisposed) LogStatus("Update cancelled or timed out. Your current installation is unchanged.");
+            await flow.StartAsync().ConfigureAwait(true);
         }
         catch (Exception ex)
         {
-            if (!IsDisposed) LogStatus("Update unavailable: " + ex.Message);
+            LogStatus("Update unavailable: " + ex.Message);
         }
         finally
         {
-            _updateCancellation = null;
             _updateBusy = false;
-            if (!IsDisposed)
+            _updateActionLocked = false;
+            if (!IsDisposed && !Disposing) RenderUpdateUi();
+        }
+    }
+
+    // Cancel only invalidates the in-flight attempt. The verified
+    // cache is kept so a later Update resumes at verify/handoff, and
+    // nothing runs automatically after the cancel. The coordinator
+    // publishes the outcome, so a refused Cancel - nothing in flight,
+    // or the irreversible handoff boundary already crossed - must not
+    // print a cancellation the owner never got.
+    private void CancelUpdateFlow()
+    {
+        if (_updateFlow?.Cancel() != true) return;
+        if (!IsDisposed && !Disposing) RenderUpdateUi();
+    }
+
+    // Builds the coordinator with every side effect injected. This
+    // is the only place the App decides what a stage actually does,
+    // which keeps the state machine itself in Core and testable.
+    private void InitializeUpdateFlow()
+    {
+        if (_updateRepo == null || _updateDownloader == null)
+        {
+            _btnUpdate.Enabled = false;
+            // No update source at all, so there is nothing for the
+            // secondary manual check to do either.
+            _btnCheckUpdate.Visible = false;
+            _updateStatusLabel.Text = "Update status: check unavailable \u2014 updates are not configured for this install.";
+            return;
+        }
+        var repo = _updateRepo;
+        var downloader = _updateDownloader;
+        _updateFlow = new UpdateFlowCoordinator(
+            snapshot: () => repo.Current,
+            busy: () => _svc.BusyChecker.Check(),
+            blockReason: () => UpdateBlockReason(),
+            download: (target, token, progress) =>
+                downloader.DownloadAsync(target.Release, _svc.Paths.UpdateCacheDir, token, progress),
+            recordDownloaded: (target, file) =>
+                repo.RecordDownloaded(target.Release, target.ManifestBytes, target.SignatureBytes, file),
+            purgeDownloaded: target => repo.ClearDownloadedAfterInstall(target.Version),
+            handoff: (target, token) => InvokeOnUiAsync(() => RunUpdateHandoffAsync(target, token)));
+        _updateFlow.StateChanged += OnUpdateFlowStateChanged;
+        _updateFlow.Notice += LogStatus;
+    }
+
+    // The coordinator resumes on a pool thread after a download, so
+    // anything that touches the form, the recovery controller, or the
+    // published receiving snapshot is marshalled back to the UI thread
+    // first. This fails closed: the window is re-checked when the
+    // delegate actually executes, not only when it is queued, and there
+    // is deliberately no inline fallback that would run the body off
+    // the UI thread.
+    //
+    // Abandonment only applies to a delegate that has NOT started. A
+    // transient handle recreation (DPI change, style refresh) while the
+    // body is already running must not fake a failure: the body may
+    // have crossed the irreversible handoff boundary, so the worker it
+    // launched can still commit. Once execution begins the lifecycle
+    // handlers are detached and the completion tracks the real outcome.
+    private Task<T> InvokeOnUiAsync<T>(Func<Task<T>> body)
+    {
+        var gone = new InvalidOperationException("The manager window closed before this step could run.");
+        if (IsDisposed || Disposing || !IsHandleCreated) return Task.FromException<T>(gone);
+        var completion = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
+        void Release()
+        {
+            HandleDestroyed -= Abandon;
+            FormClosed -= Abandon;
+            Disposed -= Abandon;
+        }
+        void Abandon(object? sender, EventArgs e)
+        {
+            Release();
+            completion.TrySetException(gone);
+        }
+        HandleDestroyed += Abandon;
+        FormClosed += Abandon;
+        Disposed += Abandon;
+        try
+        {
+            BeginInvoke(new Action(async () =>
             {
-                SetProgressUi(visible: false);
+                // Release first: from here the body owns the outcome, and
+                // no lifecycle event can fail a step that already started.
+                Release();
+                try
+                {
+                    // A destroyed handle abandons the waiter, and a
+                    // recreated one lets this queued delegate run later.
+                    // It must not launch side effects after that.
+                    if (completion.Task.IsCompleted || IsDisposed || Disposing || !IsHandleCreated)
+                    {
+                        completion.TrySetException(gone);
+                        return;
+                    }
+                    completion.TrySetResult(await body().ConfigureAwait(true));
+                }
+                catch (Exception ex) { completion.TrySetException(ex); }
+            }));
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or ObjectDisposedException)
+        {
+            Release();
+            return Task.FromException<T>(gone);
+        }
+        return completion.Task;
+    }
+
+    /// <summary>
+    /// Why an update must wait right now. Shared by the flow's gate and
+    /// the UI-thread recheck before the companion is stopped, so the
+    /// two can never disagree about whether it is safe to proceed.
+    /// Only genuinely external conflicts are listed: this attempt's own
+    /// stage lock is not one of them, or the recheck would refuse every
+    /// handoff it is supposed to authorise.
+    /// </summary>
+    private string UpdateBlockReason()
+    {
+        if (_preparingVr) return "Set up VR is running. Finish it, then choose Update again.";
+        if (_installHandOffInFlight) return "An update is already being handed to Windows.";
+        if (_latestPending is { State: "pending" } pending && !string.IsNullOrEmpty(pending.SessionId))
+            return "A headset pairing request is waiting for a decision. Approve or reject it, then choose Update again.";
+        if (_pairingBusy) return "Pairing is busy right now. Try Update again in a moment.";
+        return "";
+    }
+
+    private void OnUpdateFlowStateChanged(UpdateFlowState state)
+    {
+        if (IsDisposed || Disposing) return;
+        BeginInvokeSafe(() =>
+        {
+            // The event carries the state as it was at publication, but
+            // it is dispatched later, so a dequeued event can already be
+            // older than the flow. Rendering it would move the screen
+            // backwards onto a stage the owner has already left.
+            if (_updateFlow is not null && !ReferenceEquals(_updateFlow.State, state)) return;
+            _updateBusy = state.Busy;
+            if (state.Stage is UpdateFlowStage.Downloading or UpdateFlowStage.Verifying)
+                ApplyUpdateProgress(state);
+            RenderUpdateUi();
+        });
+    }
+
+    // Stops only what the manager owns, then hands the pinned job to
+    // the existing worker. SteamVR, ALVR Dashboard, and anything else
+    // the user started are never stopped for them: a busy machine was
+    // already refused before this point and rechecked.
+    private async Task<UpdateHandoffOutcome> RunUpdateHandoffAsync(UpdateTarget target, CancellationToken token)
+    {
+        if (IsDisposed || Disposing) return UpdateHandoffOutcome.Failed("the manager is closing");
+        // The flow's own gate ran on a pool thread and may be stale by
+        // the time this delegate reaches the UI thread, so the same
+        // decision is re-evaluated here - on the UI thread, immediately
+        // before anything owned by the user-visible host is torn down:
+        // busy SteamVR / ALVR, a pairing request or pairing work in
+        // flight, Set up VR running, and the attempt's own
+        // cancellation token. Failing this check stops the companion
+        // from being stopped for an install that must not start.
+        var blocked = UpdateHandoffGuard.Block(
+            _svc.BusyChecker.Check(), UpdateBlockReason(), token);
+        if (blocked is not null)
+        {
+            LogStatus(blocked);
+            return UpdateHandoffOutcome.Failed(blocked);
+        }
+        // Stop the pairing coordinator BEFORE the orderly companion
+        // shutdown so it cannot keep renewing or emit late errors
+        // while the companion is being torn down.
+        StopReceivingCoordinator();
+        var stopped = _recovery.SuspendAndStop();
+        if (stopped.Outcome is CompanionStopOutcome.Denied or CompanionStopOutcome.Timeout)
+        {
+            return ResumeAfterFailedHandoff("Could not stop the host companion: " + stopped.Error + ".");
+        }
+        try
+        {
+            token.ThrowIfCancellationRequested();
+            UpdateHandoffResult result = await Task.Run(() => UpdateHandoff.Launch(
+                _svc.Paths, _svc.Paths.UpdateCacheDir,
+                target.CachedFilePath ?? string.Empty, target.Release,
+                target.ManifestBytes, target.SignatureBytes)).ConfigureAwait(true);
+            if (!result.WorkerStarted)
+            {
+                return ResumeAfterFailedHandoff("Update worker did not start. The current installation is unchanged.");
+            }
+            if (!result.ReadySignaled)
+            {
+                return ResumeAfterFailedHandoff("Update worker did not signal readiness in time. The current installation is unchanged.");
+            }
+            if (!result.CommitSignaled)
+            {
+                return ResumeAfterFailedHandoff("Update worker did not accept the install signal. The current installation is unchanged.");
+            }
+            // The worker owns the job and waits for this process to
+            // exit. It is NOT installed yet, so the attempt stays in
+            // AwaitingSystem and the manager closes only now.
+            _installHandOffInFlight = true;
+            _updateActionLocked = true;
+            LogStatus("Update worker is ready; committing and closing the manager to apply the update.");
+            BeginInvokeSafe(() =>
+            {
+                if (IsDisposed || Disposing) return;
                 RenderUpdateUi();
-            }
+                _exitRequested = true;
+                Close();
+            });
+            return new UpdateHandoffOutcome(true, true, true, result.JobPath, null);
         }
-    }
-
-    private void ClearPending()
-    {
-        // The repository owns the downloaded slot now; clear via the
-        // repository's API rather than touching any local fields.
-        var s = _updateRepo?.Current;
-        if (s?.HasDownloaded == true)
+        catch (OperationCanceledException)
         {
-            _updateRepo!.ClearDownloadedAfterInstall(s.Downloaded!.Version);
-        }
-    }
-
-    // Stage 3: install. Single explicit confirmation. Re-verify the
-    // cached bytes at the execution boundary; refuse if VR is busy
-    // and request the user close it; stop only the owned companion
-    // (Steam / SteamVR are never killed by the manager); copy the
-    // manager exe to a per-user cache UUID subdirectory under a
-    // helper basename so the installer's BusyReason cannot mistake
-    // the worker for the running manager; write the bounded job
-    // JSON; launch the worker; wait for the worker's readiness
-    // event before exiting so the worker has the job in hand.
-    private async void InstallPendingUpdate()
-    {
-        if (_installHandOffInFlight || _preparingVr) return;
-        if (_updateRepo == null) return;
-        var s = _updateRepo.Current;
-        if (!s.HasDownloaded || s.Downloaded == null
-            || string.IsNullOrEmpty(s.DownloadedFilePath)
-            || s.DownloadedManifestBytes == null
-            || s.DownloadedSignatureBytes == null) return;
-        if (_updateBusy) return;
-        var release = s.Downloaded;
-        var file = s.DownloadedFilePath;
-        var manifestBytes = s.DownloadedManifestBytes;
-        var signatureBytes = s.DownloadedSignatureBytes;
-        try
-        {
-            // Re-verify the cached bytes at the execution boundary.
-            try
-            {
-                ReleaseClient.VerifyFile(file, release.Windows);
-            }
-            catch (System.Security.Cryptography.CryptographicException ex)
-            {
-                LogStatus("Cached update failed integrity check: " + ex.Message + ". Re-check for updates.");
-                ClearPending();
-                return;
-            }
-
-            var busy = _svc.BusyChecker.Check();
-            if (busy.IsBusy)
-            {
-                LogStatus("Refusing to install: " + busy.Reason +
-                    " (" + string.Join(", ", busy.ActiveProcessNames) +
-                    "). Close SteamVR and ALVR Dashboard, then click Install update again. No further download is required.");
-                return;
-            }
-
-            if (MessageBox.Show(this,
-                $"Install host update {release.Version} now? The manager will close and the installer will run silently. Your settings and pairing will be kept.",
-                "Install update", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
-
-            // Re-check busy after the user has had time to close things.
-            busy = _svc.BusyChecker.Check();
-            if (busy.IsBusy)
-            {
-                LogStatus("Close SteamVR and ALVR Dashboard before installing.");
-                return;
-            }
-
-            // Stop the pairing coordinator BEFORE orderly companion shutdown
-            // so it cannot keep renewing or emit late errors while
-            // the companion is being torn down.
-            StopReceivingCoordinator();
-            // Stop only our own companion.
-            var stopped = _recovery.SuspendAndStop();
-            if (stopped.Outcome is CompanionStopOutcome.Denied or CompanionStopOutcome.Timeout)
-            {
-                _recovery.Resume();
-                // Restart the coordinator so a failed handoff
-                // does not leave the user without renewal.
-                StartReceivingCoordinator();
-                LogStatus("Could not stop the host companion: " + stopped.Error + ". Retry Install update.");
-                return;
-            }
-
-            await LaunchUpdateHandoffAsync(release, file, manifestBytes, signatureBytes);
+            return ResumeAfterFailedHandoff("Update cancelled before the installer started.");
         }
         catch (Exception ex)
         {
-            LogStatus("Install failed: " + ex.Message);
-            if (!_exitRequested && !IsDisposed && !Disposing)
-            {
-                _recovery?.Resume();
-                // Failed handoff: restart the coordinator so the
-                // user can keep using receiving / pause / resume.
-                StartReceivingCoordinator();
-            }
+            return ResumeAfterFailedHandoff("Update handoff failed: " + ex.Message);
         }
     }
 
-    private async Task LaunchUpdateHandoffAsync(SignedRelease release, string file, byte[] manifestBytes, byte[] signatureBytes)
+    // A failed handoff must leave the user exactly where they were:
+    // the recovery controller and the pairing coordinator are both
+    // running again and the verified download is still ready.
+    private UpdateHandoffOutcome ResumeAfterFailedHandoff(string reason)
     {
-        _installHandOffInFlight = true;
-        _btnUpdate.Enabled = false;
-        _btnDownloadUpdate.Enabled = false;
-        _btnInstallUpdate.Enabled = false;
-        _btnCancelUpdate.Visible = false;
-        _btnCancelUpdate.Enabled = false;
-        LogStatus($"Handing off update {release.Version} to update worker...");
-        UpdateHandoffResult? result = null;
-        try
-        {
-            result = await Task.Run(() => UpdateHandoff.Launch(
-                _svc.Paths, _svc.Paths.UpdateCacheDir, file, release,
-                manifestBytes, signatureBytes));
-        }
-        catch (Exception ex)
-        {
-            LogStatus("Update handoff failed: " + ex.Message);
-            RestoreUiAfterFailedHandoff();
-            return;
-        }
-        if (result is null || !result.WorkerStarted)
-        {
-            LogStatus("Update worker did not start. The current installation is unchanged.");
-            RestoreUiAfterFailedHandoff();
-            return;
-        }
-        if (!result.ReadySignaled)
-        {
-            LogStatus("Update worker did not signal readiness in time. The current installation is unchanged.");
-            RestoreUiAfterFailedHandoff();
-            return;
-        }
-        // Worker has read+validated the job. Send the COMMIT signal so
-        // the worker is allowed to install when the parent exits. After
-        // COMMIT we close this manager.
-        LogStatus("Update worker is ready; committing and closing manager to apply update.");
-        if (!result.CommitSignaled)
-        {
-            LogStatus("Update worker did not receive commit signal. Aborting.");
-            RestoreUiAfterFailedHandoff();
-            return;
-        }
-        _exitRequested = true;
-        Close();
-    }
-
-    private void RestoreUiAfterFailedHandoff()
-    {
+        _installHandOffInFlight = false;
         if (!_exitRequested && !IsDisposed && !Disposing)
         {
             _recovery?.Resume();
-            // The coordinator was stopped before the handoff so
-            // it could not race the companion shutdown. Restart
-            // it now that the host service is back up so the
-            // user can keep using receiving / pause / resume.
             StartReceivingCoordinator();
         }
-        _installHandOffInFlight = false;
-        if (!IsDisposed && !Disposing)
+        LogStatus(reason);
+        return UpdateHandoffOutcome.Failed(reason);
+    }
+
+    // Progress rendering. Bytes are only shown when the stage actually
+    // knows them; verification has no honest percentage, so it runs a
+    // marquee rather than inventing one.
+    private void ApplyUpdateProgress(UpdateFlowState state)
+    {
+        _updateProgress.Visible = true;
+        _updateProgressLabel.Visible = true;
+        if (state.HasDeterminateProgress)
         {
-            _btnUpdate.Enabled = !_updateBusy && !_preparingVr;
-            // Re-render the install/download buttons from the
-            // repository snapshot so the user can still act on a
-            // verified candidate that survived a failed handoff.
-            RenderUpdateUi();
-            _btnCancelUpdate.Visible = false;
+            _updateProgress.Style = ProgressBarStyle.Continuous;
+            _updateProgress.Value = (int)Math.Clamp(
+                (state.BytesDone * 100) / state.BytesTotal, 0, 100);
+            _updateProgressLabel.Text = string.Format(
+                "{0} {1} of {2}",
+                state.Stage == UpdateFlowStage.Downloading ? "Downloaded" : state.Message,
+                UpdateRepository.FormatBytes(state.BytesDone),
+                UpdateRepository.FormatBytes(state.BytesTotal));
+            return;
         }
-    }
-
-    private void ReportStage(string stage)
-    {
-        if (IsDisposed || Disposing) return;
-        if (BeginInvokeSafe(() => _updateProgressLabel.Text = stage)) return;
-    }
-
-    private void ReportProgress(UpdateProgress p)
-    {
-        if (IsDisposed || Disposing) return;
-        BeginInvokeSafe(() =>
-        {
-            _updateProgressLabel.Text = $"{p.Stage} {p.BytesDone / 1048576} / {p.BytesTotal / 1048576} MB";
-            var pct = p.BytesTotal > 0 ? (int)Math.Min(100, (p.BytesDone * 100) / p.BytesTotal) : 0;
-            _updateProgress.Value = pct;
-            if (p.Completed) _updateProgress.Value = 100;
-        });
-    }
-
-    private void SetProgressUi(bool visible)
-    {
-        if (IsDisposed || Disposing) return;
-        BeginInvokeSafe(() =>
-        {
-            _updateProgress.Visible = visible;
-            _updateProgressLabel.Visible = visible;
-            if (!visible)
-            {
-                _updateProgress.Value = 0;
-                _updateProgressLabel.Text = "";
-            }
-        });
+        _updateProgress.Style = ProgressBarStyle.Marquee;
+        _updateProgress.MarqueeAnimationSpeed = 30;
+        _updateProgressLabel.Text = state.Message ?? "";
     }
 
     private bool BeginInvokeSafe(Action action)
@@ -1300,6 +1723,21 @@ public sealed partial class MainForm : Form
         }
     }
 
+    // Records a failed owner action and republishes the readiness line.
+    // Pass null to clear it, which every retry and every success does.
+    private void SetActionError(string? message)
+    {
+        if (_actionError == message) return;
+        _actionError = message;
+        RefreshHostReady();
+    }
+
+    private void FailAction(string message)
+    {
+        LogStatus(message);
+        SetActionError(message);
+    }
+
     private void LogStatus(string line)
     {
         if (IsDisposed || Disposing || !IsHandleCreated) return;
@@ -1320,7 +1758,9 @@ public sealed partial class MainForm : Form
         if (disposing)
         {
             NetworkChange.NetworkAddressChanged -= OnNetworkChanged;
-            _updateCancellation?.Cancel();
+            // Dispose invalidates any in-flight continuation so a
+            // closing manager never resumes an update later.
+            _updateFlow?.Dispose();
             if (_updateRepo != null && _updateObserver != null) _updateRepo.RemoveObserver(_updateObserver);
             _updateRepo?.Shutdown();
             _updateDownloader?.Dispose();
@@ -1344,6 +1784,7 @@ public sealed partial class MainForm : Form
             _updateRepo.BindSource(source, TaskScheduler.Default);
             _updateObserver = new FormObserver(this);
             _updateRepo.AddObserver(_updateObserver);
+            InitializeUpdateFlow();
             // Initial render from whatever hydration surfaced.
             OnUpdateSnapshot(_updateRepo.Current);
         }

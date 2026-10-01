@@ -35,6 +35,38 @@ public sealed class VrSetupTests : IDisposable
         Assert.Equal(original, File.ReadAllBytes(path));
     }
 
+    [Fact] public void ReadinessRequiresMatchingRegisteredDriverAndSessionWithoutChangingFiles()
+    {
+        var paths = Path.Combine(_dir, "openvrpaths.vrpath");
+        var runtime = Path.Combine(_dir, "runtime");
+        var setup = new VrSetup(_dir, paths,
+            () => throw new Exception("inspection must not prepare"),
+            () => throw new Exception("inspection must not mutate"));
+        Assert.False(setup.IsPrepared());
+        File.WriteAllText(paths, new JsonObject { ["external_drivers"] = new JsonArray(runtime) }.ToJsonString());
+        Assert.False(setup.IsPrepared());
+        VrSetup.InitializeSession(Path.Combine(runtime, "session.json"));
+        var original = File.ReadAllBytes(paths);
+        Assert.True(setup.IsPrepared());
+        Assert.Equal(original, File.ReadAllBytes(paths));
+        File.WriteAllText(Path.Combine(runtime, "session.json"), "{\"server_version\":\"incompatible\"}");
+        Assert.False(setup.IsPrepared());
+        File.WriteAllText(paths, "invalid json");
+        Assert.False(setup.IsPrepared());
+    }
+
+    [Fact] public void ReadinessRejectsAConflictingAlvrDriver()
+    {
+        var runtime = Path.Combine(_dir, "runtime");
+        var conflicting = Path.Combine(_dir, "other-alvr");
+        Directory.CreateDirectory(conflicting);
+        File.WriteAllText(Path.Combine(conflicting, "driver.vrdrivermanifest"), "{\"name\":\"alvr_server\"}");
+        var paths = Path.Combine(_dir, "openvrpaths.vrpath");
+        File.WriteAllText(paths, new JsonObject { ["external_drivers"] = new JsonArray(runtime, conflicting) }.ToJsonString());
+        VrSetup.InitializeSession(Path.Combine(runtime, "session.json"));
+        Assert.False(new VrSetup(_dir, paths, () => {}, () => {}).IsPrepared());
+    }
+
     [Fact] public void RegistrationIsIdempotentPreservesOtherDriversAndRequiresConflictConsent()
     {
         string Install(string name, string driverName) {
