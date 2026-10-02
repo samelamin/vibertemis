@@ -17,7 +17,7 @@ CenteredGridView {
     activeFocusOnTab: true
     topMargin: 20
     bottomMargin: 5
-    cellWidth: 316; cellHeight: 282;
+    cellWidth: 308; cellHeight: 282;
     objectName: qsTr("Computers")
 
     Component.onCompleted: {
@@ -134,9 +134,50 @@ CenteredGridView {
 
     model: computerModel
 
+    // "Add a PC" card in the next free grid cell (Steam Deck home artboard).
+    // Parented to the content item so it lines up and scrolls with the
+    // delegates. The toolbar button and Ctrl+N keep working as before.
+    ItemDelegate {
+        id: addPcCard
+        parent: pcGrid.contentItem
+        visible: pcGrid.count > 0
+        // Same column count GridView itself uses.
+        readonly property int perRow: Math.max(1, Math.floor((pcGrid.width - pcGrid.leftMargin - pcGrid.rightMargin) / pcGrid.cellWidth))
+        x: (pcGrid.count % perRow) * pcGrid.cellWidth
+        y: Math.floor(pcGrid.count / perRow) * pcGrid.cellHeight
+        width: 290
+        height: 262
+        onClicked: addPcDialog.open()
+
+        background: Rectangle {
+            radius: 22
+            color: addPcCard.hovered ? window.ui.surface : "transparent"
+            border.width: 2
+            border.color: window.ui.line
+        }
+
+        contentItem: Column {
+            spacing: 10
+
+            Item { width: 1; height: 72 }
+            Label {
+                anchors.horizontalCenter: parent.horizontalCenter
+                text: "+"
+                font.pointSize: 30
+                color: window.ui.muted
+            }
+            Label {
+                anchors.horizontalCenter: parent.horizontalCenter
+                text: qsTr("Add a PC")
+                font.pointSize: 13
+                color: window.ui.muted
+            }
+        }
+    }
+
     delegate: NavigableItemDelegate {
         id: pcCard
-        width: 296; height: 262;
+        width: 290; height: 262;
         grid: pcGrid
         padding: 18
 

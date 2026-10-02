@@ -447,6 +447,84 @@ ApplicationWindow {
         }
     }
 
+    // Controller hints for the current page ("Steam Deck" artboards). Only
+    // shown while a gamepad is connected; the mapping matches
+    // SdlGamepadKeyNavigation (A = activate, B = back, X = menu,
+    // Y / Start = settings).
+    property int connectedGamepads: SdlGamepadKeyNavigation.getConnectedGamepads()
+
+    Timer {
+        interval: 3000
+        repeat: true
+        running: window.visible
+        onTriggered: window.connectedGamepads = SdlGamepadKeyNavigation.getConnectedGamepads()
+    }
+
+    function controllerHints() {
+        var page = stackView.currentItem
+        if (!page) {
+            return []
+        }
+        if (qmltypeof(page, "PcView")) {
+            return [["A", qsTr("Open")], ["X", qsTr("PC options")], ["Y", qsTr("Settings")]]
+        }
+        if (qmltypeof(page, "AppView")) {
+            return [["A", qsTr("Play")], ["X", qsTr("Game options")], ["B", qsTr("Back")]]
+        }
+        if (qmltypeof(page, "SettingsView")) {
+            return [["A", qsTr("Change")], ["B", qsTr("Back")]]
+        }
+        return [["B", qsTr("Back")]]
+    }
+
+    footer: Rectangle {
+        id: hintBar
+        visible: window.connectedGamepads > 0 && window.controllerHints().length > 0
+        height: visible ? 52 : 0
+        color: window.ui.ground
+
+        Rectangle {
+            width: parent.width
+            height: 1
+            color: window.ui.line
+        }
+
+        Row {
+            anchors.right: parent.right
+            anchors.rightMargin: 32
+            anchors.verticalCenter: parent.verticalCenter
+            spacing: 28
+
+            Repeater {
+                model: window.controllerHints()
+
+                Row {
+                    spacing: 8
+
+                    Rectangle {
+                        width: 26; height: 26; radius: 13
+                        color: "#2A3440"
+                        anchors.verticalCenter: parent.verticalCenter
+
+                        Label {
+                            anchors.centerIn: parent
+                            text: modelData[0]
+                            font.bold: true
+                            font.pointSize: 10
+                            color: window.ui.text
+                        }
+                    }
+                    Label {
+                        text: modelData[1]
+                        font.pointSize: 11
+                        color: "#C9D3DA"
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+                }
+            }
+        }
+    }
+
     header: ToolBar {
         id: toolBar
         height: 64
@@ -470,9 +548,14 @@ ApplicationWindow {
             visible: toolBar.width > 700
             anchors.fill: parent
             text: stackView.currentItem.objectName
-            font.pointSize: 20
+            font.pointSize: 18
+            font.bold: true
             elide: Label.ElideRight
-            horizontalAlignment: Qt.AlignHCenter
+            // Left-aligned page title per the Deck artboards; clear the
+            // back button when it is shown.
+            leftPadding: stackView.depth > 1 ? 72 : 32
+            rightPadding: 360
+            horizontalAlignment: Qt.AlignLeft
             verticalAlignment: Qt.AlignVCenter
         }
 

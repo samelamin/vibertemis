@@ -1,5 +1,5 @@
 import QtQuick 2.9
-import QtQuick.Controls 2.2
+import QtQuick.Controls 2.3
 import QtQuick.Layouts 1.3
 import QtQuick.Window 2.2
 
@@ -12,7 +12,21 @@ NavigableDialog {
 
     modal: true
     title: qsTr("Application update")
-    width: Math.min(parent ? parent.width - 40 : 640, 640)
+    width: Math.min(parent ? parent.width - 40 : 620, 620)
+    padding: 36
+    topPadding: 36
+    bottomPadding: 8
+
+    // "Steam Deck · Update sheet" artboard: a single rounded sheet over a
+    // dimmed app, the title drawn in the content instead of a header bar.
+    background: Rectangle {
+        radius: 28
+        color: window.ui.surface
+        border.width: 1
+        border.color: window.ui.line
+    }
+    header: Item { implicitHeight: 0 }
+    Overlay.modal: Rectangle { color: "#C705070A" }
 
     function isBusyState() {
         return AutoUpdateChecker.state === AutoUpdateChecker.RestoringPending ||
@@ -221,19 +235,36 @@ NavigableDialog {
 
     ColumnLayout {
         width: updateDialog.availableWidth
-        spacing: 12
+        spacing: 14
+
+        Rectangle {
+            width: 56; height: 56; radius: 18
+            color: window.ui.bannerFill
+
+            Label {
+                anchors.centerIn: parent
+                text: "\u2193"
+                font.pointSize: 22
+                font.bold: true
+                color: window.ui.accent
+            }
+        }
 
         Label {
             Layout.fillWidth: true
+            Layout.topMargin: 6
             text: updateDialog.stateHeading()
             font.bold: true
-            font.pointSize: 16
+            font.pointSize: 20
+            color: window.ui.text
             wrapMode: Text.Wrap
         }
 
         Label {
             Layout.fillWidth: true
             text: updateDialog.stateMessage()
+            font.pointSize: 12
+            color: window.ui.muted
             wrapMode: Text.Wrap
         }
 
@@ -242,13 +273,15 @@ NavigableDialog {
             columns: 2
             columnSpacing: 12
             rowSpacing: 4
+            Layout.topMargin: 4
 
             Label {
                 text: qsTr("Current build:")
-                font.bold: true
+                color: window.ui.faint
             }
             Label {
                 Layout.fillWidth: true
+                color: window.ui.muted
                 text: AutoUpdateChecker.currentBuild
                 elide: Text.ElideMiddle
             }
@@ -256,10 +289,11 @@ NavigableDialog {
             Label {
                 visible: updateDialog.candidateDetailsVisible()
                 text: qsTr("Available build:")
-                font.bold: true
+                color: window.ui.faint
             }
             Label {
                 Layout.fillWidth: true
+                color: window.ui.muted
                 visible: updateDialog.candidateDetailsVisible()
                 text: AutoUpdateChecker.availableBuild
                 elide: Text.ElideMiddle
@@ -269,10 +303,11 @@ NavigableDialog {
                 visible: updateDialog.candidateDetailsVisible() &&
                          AutoUpdateChecker.expectedDownloadBytes > 0
                 text: qsTr("Download size:")
-                font.bold: true
+                color: window.ui.faint
             }
             Label {
                 Layout.fillWidth: true
+                color: window.ui.muted
                 visible: updateDialog.candidateDetailsVisible() &&
                          AutoUpdateChecker.expectedDownloadBytes > 0
                 text: updateDialog.formatDownloadSize(
@@ -288,11 +323,48 @@ NavigableDialog {
         }
 
         ProgressBar {
+            id: downloadProgress
             Layout.fillWidth: true
+            Layout.topMargin: 4
             visible: AutoUpdateChecker.state === AutoUpdateChecker.Downloading
             indeterminate: AutoUpdateChecker.bytesTotal <= 0
             value: AutoUpdateChecker.bytesTotal > 0 ?
                        AutoUpdateChecker.bytesReceived / AutoUpdateChecker.bytesTotal : 0
+
+            background: Rectangle {
+                implicitHeight: 8
+                radius: 4
+                color: window.ui.line
+            }
+            contentItem: Item {
+                implicitHeight: 8
+
+                Rectangle {
+                    width: downloadProgress.indeterminate ? parent.width * 0.3
+                                                          : downloadProgress.visualPosition * parent.width
+                    height: parent.height
+                    radius: 4
+                    color: window.ui.accent
+                }
+            }
+        }
+
+        RowLayout {
+            Layout.fillWidth: true
+            visible: updateDialog.candidateDetailsVisible()
+
+            Label {
+                Layout.fillWidth: true
+                font.pointSize: 10
+                color: window.ui.faint
+                text: updateDialog.isBusyState() ? updateDialog.stateHeading() : ""
+            }
+            Label {
+                font.pointSize: 10
+                color: window.ui.faint
+                text: AutoUpdateChecker.rollingInstallSupported
+                      ? qsTr("Signed release · Flatpak") : ""
+            }
         }
 
         TextField {
@@ -319,8 +391,14 @@ NavigableDialog {
             updateDialog.dismissOrCancel()
         }
 
-        Button {
+        padding: 24
+        topPadding: 8
+        spacing: 4
+        background: Item {}
+
+        SheetButton {
             id: downloadButton
+            primary: updateDialog.firstAction() === downloadButton
             text: qsTr("Download")
             visible: AutoUpdateChecker.state === AutoUpdateChecker.Available &&
                      AutoUpdateChecker.rollingInstallSupported
@@ -333,8 +411,9 @@ NavigableDialog {
             Keys.onLeftPressed: nextItemInFocusChain(false).forceActiveFocus(Qt.TabFocus)
         }
 
-        Button {
+        SheetButton {
             id: cancelButton
+            primary: updateDialog.firstAction() === cancelButton
             text: qsTr("Cancel")
             visible: updateDialog.canCancelOperation()
             enabled: visible
@@ -349,8 +428,9 @@ NavigableDialog {
             Keys.onLeftPressed: nextItemInFocusChain(false).forceActiveFocus(Qt.TabFocus)
         }
 
-        Button {
+        SheetButton {
             id: retryButton
+            primary: updateDialog.firstAction() === retryButton
             text: qsTr("Retry")
             visible: updateDialog.isRetryState()
             enabled: visible
@@ -362,8 +442,9 @@ NavigableDialog {
             Keys.onLeftPressed: nextItemInFocusChain(false).forceActiveFocus(Qt.TabFocus)
         }
 
-        Button {
+        SheetButton {
             id: viewReleaseButton
+            primary: updateDialog.firstAction() === viewReleaseButton
             text: qsTr("View release")
             visible: updateDialog.candidateDetailsVisible()
             enabled: visible
@@ -375,8 +456,9 @@ NavigableDialog {
             Keys.onLeftPressed: nextItemInFocusChain(false).forceActiveFocus(Qt.TabFocus)
         }
 
-        Button {
+        SheetButton {
             id: openInstallerButton
+            primary: updateDialog.firstAction() === openInstallerButton
             text: qsTr("Open installer")
             visible: AutoUpdateChecker.state === AutoUpdateChecker.ReadyToHandOff
             enabled: AutoUpdateChecker.state === AutoUpdateChecker.ReadyToHandOff
@@ -388,8 +470,9 @@ NavigableDialog {
             Keys.onLeftPressed: nextItemInFocusChain(false).forceActiveFocus(Qt.TabFocus)
         }
 
-        Button {
+        SheetButton {
             id: copyManualCommandButton
+            primary: updateDialog.firstAction() === copyManualCommandButton
             text: qsTr("Copy manual command")
             visible: updateDialog.manualCommandAvailable()
             enabled: visible
@@ -405,7 +488,7 @@ NavigableDialog {
             Keys.onLeftPressed: nextItemInFocusChain(false).forceActiveFocus(Qt.TabFocus)
         }
 
-        Button {
+        SheetButton {
             id: laterButton
             text: qsTr("Later")
             visible: true

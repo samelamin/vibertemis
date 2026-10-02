@@ -25,5 +25,6 @@
         <file>gui/QuickMenu.qml</file>
         <file>gui/Toast.qml</file>
         <file>gui/SettingsCard.qml</file>
+        <file>gui/SheetButton.qml</file>
     </qresource>
 </RCC>

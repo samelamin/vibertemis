@@ -20,8 +20,167 @@ Flickable {
 
     boundsBehavior: Flickable.OvershootBounds
 
-    contentWidth: settingsColumn1.width > settingsColumn2.width ? settingsColumn1.width : settingsColumn2.width
-    contentHeight: (settingsColumn1.height > settingsColumn2.height ? settingsColumn1.height : settingsColumn2.height) + 50
+    // "Steam Deck · Settings" artboard: a section rail on the left and one
+    // column of section cards. The rail is reparented out of the scrolling
+    // content so it stays put; narrow windows drop it.
+    readonly property int railWidth: width >= 900 ? 280 : 0
+    leftMargin: railWidth
+
+    contentWidth: width - railWidth
+    contentHeight: settingsColumn1.height + settingsColumn2.height + 50
+
+    readonly property var railSections: [
+        { title: qsTr("Video"), card: basicSettingsGroupBox },
+        { title: qsTr("Streaming"), card: artemisStreamingGroupBox },
+        { title: qsTr("Audio"), card: audioSettingsGroupBox },
+        { title: qsTr("Host"), card: hostSettingsGroupBox },
+        { title: qsTr("Interface"), card: uiSettingsGroupBox },
+        { title: qsTr("Input"), card: inputSettingsGroupBox },
+        { title: qsTr("Gamepad"), card: gamepadSettingsGroupBox },
+        { title: qsTr("Advanced"), card: advancedSettingsGroupBox },
+        { title: qsTr("Features"), card: artemisSettingsGroupBox },
+        { title: qsTr("Diagnostics"), card: diagnosticsGroupBox }
+    ]
+    property int currentRailSection: 0
+
+    function cardTop(card) {
+        return card.mapToItem(contentItem, 0, 0).y
+    }
+
+    function scrollToSection(index) {
+        var target = cardTop(railSections[index].card) - 16
+        contentY = Math.max(0, Math.min(target, contentHeight - height))
+        currentRailSection = index
+    }
+
+    onContentYChanged: {
+        var best = 0
+        for (var i = 0; i < railSections.length; i++) {
+            if (cardTop(railSections[i].card) - 40 <= contentY) {
+                best = i
+            }
+        }
+        currentRailSection = best
+    }
+
+    // Presets the Deck actually uses. Applying one rewrites the stream
+    // values and rebuilds the page so every control reloads from them.
+    readonly property var presets: [
+        { title: qsTr("Deck native"), width: 1280, height: 800, fps: 60, kbps: 20000 },
+        { title: qsTr("Docked to TV"), width: 1920, height: 1080, fps: 60, kbps: 30000 }
+    ]
+
+    function activePreset() {
+        for (var i = 0; i < presets.length; i++) {
+            var p = presets[i]
+            if (StreamingPreferences.width === p.width && StreamingPreferences.height === p.height &&
+                    StreamingPreferences.fps === p.fps && StreamingPreferences.bitrateKbps === p.kbps) {
+                return i
+            }
+        }
+        return -1
+    }
+
+    function applyPreset(index) {
+        var p = presets[index]
+        StreamingPreferences.width = p.width
+        StreamingPreferences.height = p.height
+        StreamingPreferences.fps = p.fps
+        StreamingPreferences.bitrateKbps = p.kbps
+        StreamingPreferences.autoAdjustBitrate = false
+        StreamingPreferences.save()
+        stackView.replace(settingsPage, "qrc:/gui/SettingsView.qml", {}, StackView.Immediate)
+    }
+
+    Rectangle {
+        id: sectionRail
+        parent: settingsPage
+        visible: settingsPage.railWidth > 0
+        x: 0
+        y: 0
+        width: settingsPage.railWidth
+        height: settingsPage.height
+        color: window.ui.ground
+
+        Rectangle {
+            anchors.right: parent.right
+            width: 1
+            height: parent.height
+            color: window.ui.line
+        }
+
+        Column {
+            anchors.fill: parent
+            anchors.margins: 20
+            spacing: 4
+
+            Repeater {
+                model: settingsPage.railSections
+
+                Button {
+                    id: railButton
+                    width: parent.width
+                    height: 52
+                    text: modelData.title
+                    activeFocusOnTab: true
+                    readonly property bool current: index === settingsPage.currentRailSection
+                    onClicked: settingsPage.scrollToSection(index)
+                    Keys.onReturnPressed: clicked()
+                    Keys.onEnterPressed: clicked()
+
+                    background: Rectangle {
+                        radius: 12
+                        color: railButton.current || railButton.hovered ? window.ui.raised : "transparent"
+                        border.width: railButton.visualFocus ? 2 : 0
+                        border.color: window.ui.accent
+
+                        Rectangle {
+                            visible: railButton.current
+                            width: 3
+                            height: parent.height - 16
+                            radius: 2
+                            anchors.left: parent.left
+                            anchors.verticalCenter: parent.verticalCenter
+                            color: window.ui.accent
+                        }
+                    }
+                    contentItem: Label {
+                        text: railButton.text
+                        leftPadding: 8
+                        font.pointSize: 13
+                        color: railButton.current ? window.ui.text : window.ui.muted
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                }
+            }
+        }
+    }
+
+    // Controller focus marker: a mint ring that follows the focused control
+    // inside the cards, so D-pad navigation is always visible.
+    Rectangle {
+        id: focusHalo
+        z: 100
+        radius: 10
+        color: "#145EE6CF"
+        border.width: 2
+        border.color: window.ui.accent
+        visible: false
+    }
+
+    function updateFocusHalo() {
+        var item = Window.activeFocusItem
+        if (!item || !isChildOfFlickable(item) || !item.visible || item.width <= 0) {
+            focusHalo.visible = false
+            return
+        }
+        var pos = item.mapToItem(contentItem, 0, 0)
+        focusHalo.x = pos.x - 6
+        focusHalo.y = pos.y - 4
+        focusHalo.width = item.width + 12
+        focusHalo.height = item.height + 8
+        focusHalo.visible = true
+    }
 
     ScrollBar.vertical: ScrollBar {
         anchors {
@@ -47,6 +206,7 @@ Flickable {
     }
 
     Window.onActiveFocusItemChanged: {
+        updateFocusHalo()
         var item = Window.activeFocusItem
         if (item) {
             // Ignore non-child elements like the toolbar buttons
@@ -100,7 +260,7 @@ Flickable {
     Column {
         padding: 20
         id: settingsColumn1
-        width: settingsPage.width / 2
+        width: settingsPage.width - settingsPage.railWidth
         spacing: 20
 
         SettingsCard {
@@ -112,6 +272,59 @@ Flickable {
             Column {
                 anchors.fill: parent
                 spacing: 5
+
+                Row {
+                    id: presetRow
+                    width: parent.width
+                    spacing: 12
+                    bottomPadding: 14
+
+                    Repeater {
+                        model: settingsPage.presets.length + 1
+
+                        Button {
+                            id: presetCard
+                            readonly property bool custom: index === settingsPage.presets.length
+                            readonly property bool selected: custom ? settingsPage.activePreset() < 0
+                                                                    : settingsPage.activePreset() === index
+                            width: (presetRow.width - presetRow.spacing * settingsPage.presets.length) / (settingsPage.presets.length + 1)
+                            height: 88
+                            activeFocusOnTab: true
+                            onClicked: if (!custom) settingsPage.applyPreset(index)
+                            Keys.onReturnPressed: clicked()
+                            Keys.onEnterPressed: clicked()
+
+                            background: Rectangle {
+                                radius: 16
+                                color: presetCard.selected ? window.ui.bannerFill
+                                                           : (presetCard.hovered ? window.ui.raised : window.ui.surface)
+                                border.width: presetCard.selected || presetCard.visualFocus ? 2 : 1
+                                border.color: presetCard.visualFocus ? window.ui.text
+                                              : (presetCard.selected ? window.ui.accent : window.ui.line)
+                            }
+                            contentItem: Column {
+                                leftPadding: 6
+                                spacing: 4
+                                Label {
+                                    text: presetCard.custom ? qsTr("Custom") : settingsPage.presets[index].title
+                                    font.pointSize: 13
+                                    font.bold: true
+                                    color: window.ui.text
+                                }
+                                Label {
+                                    font.pointSize: 10
+                                    color: window.ui.muted
+                                    text: presetCard.custom ? qsTr("Your own values")
+                                          : qsTr("%1 × %2 · %3 fps · %4 Mbps")
+                                                .arg(settingsPage.presets[index].width)
+                                                .arg(settingsPage.presets[index].height)
+                                                .arg(settingsPage.presets[index].fps)
+                                                .arg(settingsPage.presets[index].kbps / 1000)
+                                }
+                            }
+                        }
+                    }
+                }
 
                 Label {
                     width: parent.width
@@ -1473,11 +1686,12 @@ Flickable {
 
     Column {
         padding: 20
+        topPadding: 0
         rightPadding: 20
         bottomPadding: 30
-        anchors.left: settingsColumn1.right
+        anchors.top: settingsColumn1.bottom
         id: settingsColumn2
-        width: settingsPage.width / 2
+        width: settingsPage.width - settingsPage.railWidth
         spacing: 20
 
         SettingsCard {
