@@ -15,7 +15,6 @@ import android.widget.TextView;
 
 import com.limelight.PcView;
 import com.limelight.R;
-import com.limelight.preferences.StreamSettings;
 import com.vibertemis.quest.pcvr.HostClient;
 import com.vibertemis.quest.pcvr.HostClientTest;
 import com.vibertemis.quest.pcvr.HostPairing;
@@ -1172,8 +1171,8 @@ public class MainHubActivityTest {
             c.get().findViewById(R.id.hub_btn_settings).performClick();
             com.vibertemis.quest.pcvr.PcvrTestActions.confirmRestartIfShown();
             log.drain(app());
-            assertEquals("Settings tap must launch StreamSettings",
-                    1, log.countComponent(StreamSettings.class.getName()));
+            assertEquals("Settings tap must launch the Vibertemis settings screen",
+                    1, log.countComponent(QuestSettingsActivity.class.getName()));
 
             // Simulate returning from the settings screen.
             c.pause();
@@ -1707,12 +1706,12 @@ public class MainHubActivityTest {
                     PcvrTestActions.awaitDialogTitle("Set up VR", 200L));
 
             // Settings tap during in-flight launch must NOT launch
-            // StreamSettings.
+            // the settings screen.
             c.get().findViewById(R.id.hub_btn_settings).performClick();
             settle(250);
             log.drain(app());
             assertEquals("Settings during PCVR launch must be blocked", 0,
-                    log.countComponent(StreamSettings.class.getName()));
+                    log.countComponent(QuestSettingsActivity.class.getName()));
 
             // After actual leave-and-return, Setup opens the VR-setup
             // flow. The hub must surface a visible dialog, not

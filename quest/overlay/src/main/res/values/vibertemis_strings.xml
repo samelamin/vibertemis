@@ -254,7 +254,7 @@
     <string name="upd_action_cancel">Cancel</string>
     <string name="upd_action_back">Back</string>
     <string name="upd_title">App updates</string>
-    <string name="upd_intro">One button updates the headset app. Close your VR session first; Android asks you to confirm the install. Update your Windows host separately from its manager.</string>
+    <string name="upd_intro">Android asks you to confirm the install. Finish any VR session first. Your Windows VR host updates separately, from VR Host Manager.</string>
     <string name="upd_busy_downloading">Downloading update %1$s…</string>
     <string name="upd_busy_verifying">Verifying update %1$s…</string>
     <string name="upd_busy_installer">Opening the installer for %1$s…</string>

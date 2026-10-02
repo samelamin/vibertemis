@@ -283,6 +283,22 @@ public final class UpdatesActivity extends Activity {
     private Button cancel;
     private Button back;
 
+    // Redesigned layout ("Quest update" artboard): version chips, a short
+    // headline, Download / Verify / Install steps with a progress bar, and
+    // a details panel. All of it is derived from the same state render()
+    // already reads; none of it drives behaviour.
+    private TextView toVersionChip;
+    private View versionArrow;
+    private TextView headline;
+    private LinearLayout stepsList;
+    private final TextView[] stepMarks = new TextView[3];
+    private final TextView[] stepLabels = new TextView[3];
+    private ProgressBar stepProgress;
+    private TextView detailVersion;
+    private TextView detailSize;
+    private Button releaseNotes;
+    private TextView lastChecked;
+
     private volatile UpdateTransport transport;
     private volatile UpdateRepository.Snapshot current;
     private UpdateRepository repository;
@@ -382,56 +398,171 @@ public final class UpdatesActivity extends Activity {
     @Override public void onCreate(Bundle saved) {
         super.onCreate(saved);
         float density = getResources().getDisplayMetrics().density;
-        int pad = Math.round(24 * density);
+        int pad = Math.round(32 * density);
+        int gap = Math.round(24 * density);
         int sp = Math.round(8 * density);
+        boolean wide = getResources().getConfiguration().screenWidthDp >= 720;
 
         ScrollView scroll = new ScrollView(this);
-        scroll.setBackgroundColor(getResources().getColor(R.color.upd_panel_bg));
+        scroll.setBackgroundColor(color(R.color.upd_panel_bg));
         scroll.setFillViewport(true);
 
-        LinearLayout card = new LinearLayout(this);
-        card.setOrientation(LinearLayout.VERTICAL);
-        card.setPadding(pad, pad, pad, pad);
-        card.setBackgroundColor(getResources().getColor(R.color.upd_panel_card));
+        LinearLayout page = new LinearLayout(this);
+        page.setOrientation(LinearLayout.VERTICAL);
+        page.setPadding(pad, Math.round(20 * density), pad, pad);
+        scroll.addView(page, new ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        LinearLayout.LayoutParams cardParams = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT);
-        cardParams.setMargins(pad, pad, pad, pad);
-        scroll.addView(card, cardParams);
+        back = new Button(this);
+        back.setText(R.string.upd_action_back);
+        back.setAllCaps(false);
+        back.setTextSize(15);
+        back.setTextColor(color(R.color.upd_panel_subtle));
+        back.setBackgroundResource(R.drawable.hub_btn_ghost_bg);
+        back.setStateListAnimator(null);
+        back.setCompoundDrawablesRelativeWithIntrinsicBounds(R.drawable.upd_ic_back, 0, 0, 0);
+        back.setCompoundDrawablePadding(Math.round(6 * density));
+        back.setMinHeight(Math.round(48 * density));
+        back.setMinimumHeight(Math.round(48 * density));
+        back.setMinWidth(0);
+        back.setMinimumWidth(0);
+        back.setPadding(Math.round(10 * density), 0, Math.round(16 * density), 0);
+        LinearLayout.LayoutParams backLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        backLp.bottomMargin = Math.round(16 * density);
+        page.addView(back, backLp);
 
-        TextView heading = new TextView(this);
-        heading.setText(R.string.upd_title);
-        heading.setTextSize(26);
-        heading.setTextColor(getResources().getColor(R.color.upd_panel_fg));
-        heading.setTypeface(heading.getTypeface(), android.graphics.Typeface.BOLD);
-        card.addView(heading, lp(ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT, 0, 0, 0, 0));
+        LinearLayout columns = new LinearLayout(this);
+        columns.setOrientation(wide ? LinearLayout.HORIZONTAL : LinearLayout.VERTICAL);
+        columns.setBaselineAligned(false);
+        page.addView(columns, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        TextView description = new TextView(this);
-        description.setText(R.string.upd_intro);
-        description.setTextSize(15);
-        description.setTextColor(getResources().getColor(R.color.upd_panel_subtle));
-        description.setLineSpacing(0f, 1.2f);
-        card.addView(description, lp(ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT, sp, 0, 0, sp));
+        // ---- Left card: what is happening, and the one action ----
+        LinearLayout card = panel(density);
+        LinearLayout.LayoutParams leftLp = wide
+                ? new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
+                : new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT);
+        if (wide) leftLp.setMarginEnd(gap / 2); else leftLp.bottomMargin = gap;
+        columns.addView(card, leftLp);
 
-        installedVersionView = new TextView(this);
-        installedVersionView.setTextSize(15);
-        installedVersionView.setTextColor(getResources().getColor(R.color.upd_panel_subtle));
-        card.addView(installedVersionView, lp(ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT, sp, 0, 0, sp));
+        LinearLayout chips = new LinearLayout(this);
+        chips.setOrientation(LinearLayout.HORIZONTAL);
+        chips.setGravity(android.view.Gravity.CENTER_VERTICAL);
+        card.addView(chips, lp(ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 0, 0, 0, Math.round(20 * density)));
+        installedVersionView = chip(density, false);
+        chips.addView(installedVersionView);
+        ImageView arrow = new ImageView(this);
+        arrow.setImageResource(R.drawable.upd_ic_arrow);
+        arrow.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        LinearLayout.LayoutParams arrowLp = new LinearLayout.LayoutParams(
+                Math.round(20 * density), Math.round(20 * density));
+        arrowLp.setMarginStart(Math.round(10 * density));
+        arrowLp.setMarginEnd(Math.round(10 * density));
+        chips.addView(arrow, arrowLp);
+        versionArrow = arrow;
+        toVersionChip = chip(density, true);
+        chips.addView(toVersionChip);
+
+        headline = new TextView(this);
+        headline.setTextSize(28);
+        headline.setTextColor(color(R.color.upd_panel_fg));
+        headline.setTypeface(android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL));
+        card.addView(headline, lp(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 0, 0, 0, Math.round(20 * density)));
+
+        stepsList = new LinearLayout(this);
+        stepsList.setOrientation(LinearLayout.VERTICAL);
+        card.addView(stepsList, lp(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 0, 0, 0, Math.round(18 * density)));
+        String[] stepNames = {"Download", "Verify signature", "Install"};
+        for (int i = 0; i < 3; i++) {
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(android.view.Gravity.CENTER_VERTICAL);
+            TextView mark = new TextView(this);
+            mark.setGravity(android.view.Gravity.CENTER);
+            mark.setTextSize(14);
+            mark.setTypeface(mark.getTypeface(), android.graphics.Typeface.BOLD);
+            int d = Math.round(32 * density);
+            row.addView(mark, new LinearLayout.LayoutParams(d, d));
+            TextView label = new TextView(this);
+            label.setText(stepNames[i]);
+            label.setTextSize(16);
+            LinearLayout.LayoutParams labelLp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            labelLp.setMarginStart(Math.round(14 * density));
+            row.addView(label, labelLp);
+            stepsList.addView(row, lp(ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT, 0, 0, 0, Math.round(14 * density)));
+            stepMarks[i] = mark;
+            stepLabels[i] = label;
+        }
+        stepProgress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        stepProgress.setMax(100);
+        stepProgress.setProgressDrawable(getDrawable(R.drawable.upd_progress));
+        stepsList.addView(stepProgress, lp(ViewGroup.LayoutParams.MATCH_PARENT,
+                Math.round(8 * density), Math.round(4 * density), 0, 0, 0));
 
         status = new TextView(this);
-        status.setTextSize(17);
-        status.setTextColor(getResources().getColor(R.color.upd_panel_fg));
+        status.setTextSize(15);
+        status.setTextColor(color(R.color.upd_panel_subtle));
         status.setLineSpacing(0f, 1.3f);
         card.addView(status, lp(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 0, 0, 0, Math.round(20 * density)));
+
+        View push = new View(this);
+        card.addView(push, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+
+        TextView note = new TextView(this);
+        note.setText(R.string.upd_intro);
+        note.setTextSize(14);
+        note.setTextColor(color(R.color.upd_panel_subtle));
+        note.setLineSpacing(0f, 1.25f);
+        card.addView(note, lp(ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT, 0, 0, 0, Math.round(16 * density)));
 
         primary = createPrimaryButton(card, density);
         cancel = createSecondaryButton(card, getString(R.string.upd_action_cancel), density);
-        back = createSecondaryButton(card, getString(R.string.upd_action_back), density);
+
+        // ---- Right card: what this update is, and how checks work ----
+        LinearLayout details = panel(density);
+        LinearLayout.LayoutParams rightLp = wide
+                ? new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
+                : new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT);
+        if (wide) rightLp.setMarginStart(gap / 2);
+        columns.addView(details, rightLp);
+
+        TextView detailsTitle = new TextView(this);
+        detailsTitle.setText("What’s in this update");
+        detailsTitle.setTextSize(20);
+        detailsTitle.setTextColor(color(R.color.upd_panel_fg));
+        detailsTitle.setTypeface(android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL));
+        details.addView(detailsTitle, lp(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 0, 0, 0, Math.round(14 * density)));
+        detailVersion = detailRow(details, density);
+        detailSize = detailRow(details, density);
+        TextView signed = detailRow(details, density);
+        signed.setText("Signed by Vibertemis. The download is checked against that signature before Android sees it.");
+
+        releaseNotes = createSecondaryButton(details, "Release notes", density);
+        releaseNotes.setOnClickListener(v -> openReleaseNotes());
+
+        View pushRight = new View(this);
+        details.addView(pushRight, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+
+        View divider = new View(this);
+        divider.setBackgroundColor(color(R.color.upd_panel_secondary_border));
+        details.addView(divider, lp(ViewGroup.LayoutParams.MATCH_PARENT, Math.max(1, Math.round(density)),
+                Math.round(12 * density), 0, 0, Math.round(16 * density)));
+        TextView auto = detailRow(details, density);
+        auto.setText("Checks for updates automatically when you open the app, at most every 30 minutes. Downloads only start when you choose Update.");
+        lastChecked = detailRow(details, density);
+        lastChecked.setTextColor(color(R.color.hub_panel_faint));
+        lastChecked.setTextSize(13);
 
         cancel.setOnClickListener(v -> onCancelClicked());
         primary.setOnClickListener(v -> {
@@ -480,10 +611,42 @@ public final class UpdatesActivity extends Activity {
         return p;
     }
 
+    private int color(int res) { return getResources().getColor(res, getTheme()); }
+
+    private LinearLayout panel(float density) {
+        LinearLayout p = new LinearLayout(this);
+        p.setOrientation(LinearLayout.VERTICAL);
+        int pad = Math.round(32 * density);
+        p.setPadding(pad, pad, pad, pad);
+        p.setBackgroundResource(R.drawable.upd_panel_bg);
+        return p;
+    }
+
+    private TextView chip(float density, boolean accent) {
+        TextView t = new TextView(this);
+        t.setTextSize(13);
+        t.setPadding(Math.round(10 * density), Math.round(4 * density),
+                Math.round(10 * density), Math.round(4 * density));
+        t.setBackgroundResource(accent ? R.drawable.upd_chip_accent : R.drawable.hub_chip_bg);
+        t.setTextColor(color(accent ? R.color.upd_panel_on_primary : R.color.upd_panel_subtle));
+        if (accent) t.setTypeface(t.getTypeface(), android.graphics.Typeface.BOLD);
+        return t;
+    }
+
+    private TextView detailRow(LinearLayout parent, float density) {
+        TextView t = new TextView(this);
+        t.setTextSize(15);
+        t.setTextColor(color(R.color.upd_panel_fg));
+        t.setLineSpacing(0f, 1.25f);
+        parent.addView(t, lp(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 0, 0, 0, Math.round(10 * density)));
+        return t;
+    }
+
     private Button createPrimaryButton(LinearLayout card, float density) {
         Button b = new Button(this);
-        b.setMinHeight(Math.round(72 * density));
-        b.setMinimumHeight(Math.round(72 * density));
+        b.setMinHeight(Math.round(60 * density));
+        b.setMinimumHeight(Math.round(60 * density));
         b.setTextSize(18);
         b.setTypeface(b.getTypeface(), android.graphics.Typeface.BOLD);
         b.setTextColor(getResources().getColor(R.color.upd_panel_on_primary));
@@ -690,6 +853,119 @@ public final class UpdatesActivity extends Activity {
 
         refreshInstalledVersionView();
         renderStatus();
+        renderProgressAndDetails();
+    }
+
+    /** versionName without the build-type suffix, or null. */
+    private String installedVersionName() {
+        try {
+            String n = getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
+            if (n == null || n.isEmpty()) return null;
+            int dash = n.indexOf('-');
+            return dash > 0 ? n.substring(0, dash) : n;
+        } catch (PackageManager.NameNotFoundException | RuntimeException e) {
+            return null;
+        }
+    }
+
+    /**
+     * Headline, version chips, the three steps, progress and the details
+     * panel. Purely a projection of attempt / stage / snapshot.
+     */
+    private void renderProgressAndDetails() {
+        if (headline == null) return;
+        Attempt pinned = attempt;
+        Attempt target = pinned != null ? pinned : offeredAttempt();
+        UpdateRepository.Snapshot s = current;
+
+        toVersionChip.setVisibility(target != null ? View.VISIBLE : View.GONE);
+        versionArrow.setVisibility(target != null ? View.VISIBLE : View.GONE);
+        if (target != null) toVersionChip.setText(target.version());
+
+        // Steps done (0..3) and the one in progress (-1 for none).
+        int done;
+        int active;
+        switch (stage) {
+            case DOWNLOADING: done = 0; active = 0; break;
+            case VERIFYING: done = 1; active = 1; break;
+            case INSTALLER:
+            case AWAITING_SYSTEM:
+            case INSTALLER_UNCONFIRMED: done = 2; active = 2; break;
+            default:
+                done = target != null && target.hasCachedApk() ? 2 : 0;
+                active = -1;
+        }
+
+        String head;
+        if (stage == Stage.DOWNLOADING) head = "Downloading " + (target == null ? "" : target.version());
+        else if (stage == Stage.VERIFYING) head = "Checking the signature";
+        else if (stage == Stage.INSTALLER || stage == Stage.AWAITING_SYSTEM) head = "Finish in the Android installer";
+        else if (stage == Stage.INSTALLER_UNCONFIRMED) head = "Install not confirmed yet";
+        else if (actionError != null) head = "Update didn’t finish";
+        else if (stage == Stage.CHECKING || (s != null && s.checking)) head = "Checking for updates…";
+        else if (target != null) head = target.hasCachedApk() ? "Ready to install" : "Version " + target.version() + " is available";
+        else if (s != null && s.lastSuccessAtMs > 0) head = "You’re up to date";
+        else if (s != null && s.lastError != null) head = "Couldn’t check for updates";
+        else head = "App updates";
+        headline.setText(head);
+
+        stepsList.setVisibility(target != null ? View.VISIBLE : View.GONE);
+        for (int i = 0; i < 3; i++) {
+            boolean isDone = i < done && i != active;
+            boolean isNow = i == active || (active < 0 && i == done && target != null);
+            stepMarks[i].setText(isDone ? "\u2713" : String.valueOf(i + 1));
+            stepMarks[i].setBackgroundResource(isDone ? R.drawable.upd_step_done
+                    : isNow ? R.drawable.upd_step_now : R.drawable.upd_step_todo);
+            stepMarks[i].setTextColor(color(isDone ? R.color.upd_panel_on_primary
+                    : isNow ? R.color.upd_panel_primary : R.color.hub_panel_faint));
+            stepLabels[i].setTextColor(color(isDone || isNow ? R.color.upd_panel_fg : R.color.hub_panel_faint));
+        }
+        stepProgress.setProgress(Math.min(100, done * 33 + (active >= 0 ? 17 : 0)));
+
+        if (target != null) {
+            detailVersion.setText("Version " + target.version() + " (build " + target.manifest.versionCode + ")");
+            detailSize.setText(target.hasCachedApk() ? "Already downloaded and verified"
+                    : "Download size " + UpdateRepository.formatBytes(target.manifest.bytes));
+            detailSize.setVisibility(View.VISIBLE);
+            releaseNotes.setVisibility(releaseNotesUrl(target) != null ? View.VISIBLE : View.GONE);
+        } else {
+            detailVersion.setText("No newer version found.");
+            detailSize.setVisibility(View.GONE);
+            releaseNotes.setVisibility(View.GONE);
+        }
+
+        long last = s == null ? 0 : s.lastSuccessAtMs;
+        if (last <= 0) {
+            lastChecked.setText("Not checked yet");
+        } else {
+            long mins = Math.max(0, (System.currentTimeMillis() - last) / 60000L);
+            lastChecked.setText(mins < 1 ? "Last checked just now"
+                    : mins < 60 ? "Last checked " + mins + " min ago"
+                    : "Last checked " + (mins / 60) + " h ago");
+        }
+    }
+
+    /** GitHub release page for the target, derived from its signed asset URL. */
+    private static String releaseNotesUrl(Attempt target) {
+        String url = target.manifest.url;
+        if (url == null || !url.startsWith(UpdateManifest.PREFIX)) return null;
+        String rest = url.substring(UpdateManifest.PREFIX.length());
+        int slash = rest.indexOf('/');
+        if (slash <= 0) return null;
+        String base = UpdateManifest.PREFIX.substring(0, UpdateManifest.PREFIX.length() - "download/".length());
+        return base + "tag/" + rest.substring(0, slash);
+    }
+
+    private void openReleaseNotes() {
+        Attempt pinned = attempt;
+        Attempt target = pinned != null ? pinned : offeredAttempt();
+        String url = target == null ? null : releaseNotesUrl(target);
+        if (url == null) return;
+        try {
+            startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
+        } catch (ActivityNotFoundException | SecurityException e) {
+            Toast.makeText(this, url, Toast.LENGTH_LONG).show();
+        }
     }
 
     private String offeredAttemptLabel() {
@@ -701,9 +977,9 @@ public final class UpdatesActivity extends Activity {
     private void refreshInstalledVersionView() {
         if (installedVersionView == null) return;
         long installed = installedVersion();
-        installedVersionView.setText(installed < 0
-                ? "Installed version: unavailable"
-                : "Installed version: " + installed);
+        String name = installedVersionName();
+        installedVersionView.setText(name != null ? "Installed " + name
+                : installed < 0 ? "Installed version unavailable" : "Installed build " + installed);
     }
 
     private void renderStatus() {
@@ -1836,6 +2112,9 @@ public final class UpdatesActivity extends Activity {
     int cancelVisibilityForTest() { return cancel == null ? View.GONE : cancel.getVisibility(); }
     boolean isCancelVisibleForTest() { return cancel != null && cancel.getVisibility() == View.VISIBLE; }
     boolean isBackVisibleForTest() { return back != null && back.getVisibility() == View.VISIBLE; }
+    int toVersionChipVisibilityForTest() { return toVersionChip == null ? View.GONE : toVersionChip.getVisibility(); }
+    int stepsVisibilityForTest() { return stepsList == null ? View.GONE : stepsList.getVisibility(); }
+    String headlineForTest() { return headline == null ? null : headline.getText().toString(); }
 
     /** True once the OS installer has taken the APK. */
     boolean handedToSystemForTest() { return handedToSystem; }

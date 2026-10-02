@@ -1,8 +1,27 @@
 diff --git a/app/src/main/AndroidManifest.xml b/app/src/main/AndroidManifest.xml
-index a48575f2..a2313fd0 100644
+index a48575f2..5f1f7b0f 100644
 --- a/app/src/main/AndroidManifest.xml
 +++ b/app/src/main/AndroidManifest.xml
-@@ -243,6 +243,7 @@
+@@ -188,6 +188,18 @@
+         <!-- Vibertemis XR Preview: in-app setup screen. Not exported.
+              Accessible only from MainHubActivity. -->
+         <activity android:name="com.vibertemis.quest.pcvr.PcvrSettingsActivity" android:exported="false" />
++        <!-- Vibertemis settings: section rail, presets and native pickers
++             over the upstream preference keys. Opened from the hub. -->
++        <activity
++            android:name="com.vibertemis.quest.hub.QuestSettingsActivity"
++            android:exported="false"
++            android:theme="@style/Theme.Vibertemis.Settings"
++            android:resizeableActivity="true"
++            android:enableOnBackInvokedCallback="true"
++            android:configChanges="mcc|mnc|touchscreen|keyboard|keyboardHidden|navigation|screenLayout|fontScale|uiMode|orientation|screenSize|smallestScreenSize|layoutDirection"
++            android:label="Settings">
++            <meta-data android:name="pvr.app.type" android:value="2d" />
++        </activity>
+         <activity
+             android:name="com.vibertemis.quest.hub.SetupActivity"
+             android:exported="false"
+@@ -243,6 +255,7 @@
          </activity>
          <activity
              android:name=".preferences.StreamSettings"

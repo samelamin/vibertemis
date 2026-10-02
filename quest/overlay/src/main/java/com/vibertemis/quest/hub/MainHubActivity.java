@@ -28,7 +28,6 @@ import com.vibertemis.quest.pcvr.PcvrSettingsActivity;
 import com.vibertemis.quest.pcvr.VrSetupDiscovery;
 import com.limelight.PcView;
 import com.limelight.R;
-import com.limelight.preferences.StreamSettings;
 import org.json.JSONObject;
 
 /**
@@ -927,7 +926,7 @@ public class MainHubActivity extends Activity {
         try {
             Intent i = new Intent();
             i.setComponent(new ComponentName(getPackageName(),
-                    StreamSettings.class.getName()));
+                    QuestSettingsActivity.class.getName()));
             launchPending = true;
             startActivity(i);
         } catch (ActivityNotFoundException e) {
