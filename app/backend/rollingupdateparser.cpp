@@ -204,12 +204,30 @@ bool sameCandidate(const RollingUpdateCandidate &left, const RollingUpdateCandid
 
 } // namespace
 
+namespace {
+const char CompareQuery[] = "per_page=1&page=2";
+}
+
+QUrl RollingUpdateParser::compareUrl(const QString &baseCommit, const QString &headCommit)
+{
+    QUrl url(QStringLiteral("https://api.github.com/repos/") + QString::fromLatin1(Repository)
+             + QStringLiteral("/compare/") + baseCommit + QStringLiteral("...") + headCommit);
+    url.setQuery(QString::fromLatin1(CompareQuery));
+    return url;
+}
+
 bool RollingUpdateParser::isApprovedUrl(const QUrl &url)
 {
+    // The only query ever allowed is the fixed small-page compare request.
+    const bool compareQuery = url.hasQuery()
+        && url.query() == QString::fromLatin1(CompareQuery)
+        && url.host().toLower() == QStringLiteral("api.github.com")
+        && url.path().startsWith(QStringLiteral("/repos/") + QString::fromLatin1(Repository)
+                                 + QStringLiteral("/compare/"));
     if (!url.isValid()
         || url.scheme() != QStringLiteral("https")
         || !url.userInfo().isEmpty()
-        || url.hasQuery()
+        || (url.hasQuery() && !compareQuery)
         || !url.fragment().isEmpty()
         || url.port() != -1) {
         return false;

@@ -534,6 +534,7 @@ private slots:
     void rollingParserResolvesAnnotatedTags();
     void rollingParserRejectsInvalidTagGraphs();
     void rollingParserClassifiesCommitRelations();
+    void rollingCompareUrlIsSmallAndApproved();
     void rollingParserRequiresNewerSequence();
     void steamDeckSessionClassifiesEnvironment_data();
     void steamDeckSessionClassifiesEnvironment();
@@ -1354,6 +1355,28 @@ void AutoUpdateTest::rollingParserClassifiesCommitRelations()
     QCOMPARE(RollingUpdateParser::parseCommitRelation(QByteArray("{\"status\":\"behind\"}")), CommitRelation::CandidateBehind);
     QCOMPARE(RollingUpdateParser::parseCommitRelation(QByteArray("{\"status\":\"diverged\"}")), CommitRelation::Diverged);
     QCOMPARE(RollingUpdateParser::parseCommitRelation(QByteArray("{\"status\":\"unknown\"}")), CommitRelation::Unknown);
+}
+
+void AutoUpdateTest::rollingCompareUrlIsSmallAndApproved()
+{
+    const QString base(40, QLatin1Char('a'));
+    const QString head(40, QLatin1Char('b'));
+    const QUrl compare = RollingUpdateParser::compareUrl(base, head);
+    QCOMPARE(compare.toString(),
+             QStringLiteral("https://api.github.com/repos/samelamin/vibertemis/compare/")
+             + base + QStringLiteral("...") + head + QStringLiteral("?per_page=1&page=2"));
+    QVERIFY(RollingUpdateParser::isApprovedUrl(compare));
+
+    // Only that exact query, and only on the compare path.
+    QUrl otherQuery(compare);
+    otherQuery.setQuery(QStringLiteral("per_page=100"));
+    QVERIFY(!RollingUpdateParser::isApprovedUrl(otherQuery));
+    QVERIFY(!RollingUpdateParser::isApprovedUrl(QUrl(
+        QStringLiteral("https://api.github.com/repos/samelamin/vibertemis/releases?per_page=1&page=2"))));
+    QVERIFY(!RollingUpdateParser::isApprovedUrl(QUrl(
+        QStringLiteral("https://api.github.com/repos/someone/else/compare/a...b?per_page=1&page=2"))));
+    QVERIFY(!RollingUpdateParser::isApprovedUrl(QUrl(
+        QStringLiteral("https://github.com/samelamin/vibertemis/releases?per_page=1&page=2"))));
 }
 
 void AutoUpdateTest::rollingParserRequiresNewerSequence()

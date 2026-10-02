@@ -21,8 +21,6 @@ const char RollingTagReferenceUrl[] =
     "https://api.github.com/repos/samelamin/vibertemis/git/ref/tags/steam-deck-latest";
 const char GitTagObjectPrefix[] =
     "https://api.github.com/repos/samelamin/vibertemis/git/tags/";
-const char ComparePrefix[] =
-    "https://api.github.com/repos/samelamin/vibertemis/compare/";
 const qint64 JsonLimit = 1024 * 1024;
 const qint64 ManifestLimit = 64 * 1024;
 const int RedirectLimit = 5;
@@ -1115,9 +1113,8 @@ void AutoUpdateChecker::finishTagReference(const QByteArray &body,
                 return;
             }
             setCandidate(bound.value);
-            const QUrl compare(QString::fromLatin1(ComparePrefix)
-                + BuildInfo::commit() + QStringLiteral("...")
-                + m_Candidate.sourceCommit);
+            const QUrl compare = RollingUpdateParser::compareUrl(
+                BuildInfo::commit(), m_Candidate.sourceCommit);
             issueRequest(compare, RollingCompare, JsonLimit);
         }
         return;
@@ -1187,9 +1184,8 @@ void AutoUpdateChecker::finishTagObject(const QByteArray &body,
             return;
         }
         setCandidate(bound.value);
-        issueRequest(QUrl(QString::fromLatin1(ComparePrefix)
-                          + BuildInfo::commit() + QStringLiteral("...")
-                          + m_Candidate.sourceCommit),
+        issueRequest(RollingUpdateParser::compareUrl(BuildInfo::commit(),
+                                                     m_Candidate.sourceCommit),
                      RollingCompare, JsonLimit);
     }
 }

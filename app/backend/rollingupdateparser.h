@@ -60,6 +60,11 @@ public:
     static UpdateResult<RollingUpdateCandidate> bindTagResolution(
         const RollingUpdateCandidate &candidate, const TagResolution &resolution);
     static CommitRelation parseCommitRelation(const QByteArray &document);
+    // GitHub compare URL for base...head that asks for page 2 of one commit
+    // per page. That page still carries status and ahead_by but omits the
+    // file list, which on page 1 can exceed the JSON response limit (a jump
+    // across the Quest merge was 1.38 MB).
+    static QUrl compareUrl(const QString &baseCommit, const QString &headCommit);
     static UpdateResult<bool> matchesRelease(const RollingUpdateCandidate &expected,
                                              const QByteArray &document);
     static UpdateResult<bool> matchesManifest(const RollingUpdateCandidate &expected,
