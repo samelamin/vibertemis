@@ -253,7 +253,7 @@ public class MainHubActivityTest {
         pairing = HostClientTest.pairing("host", 28540);
     }
 
-    private static ShadowApplication app() { return ShadowApplication.getInstance(); }
+    private static ShadowApplication app() { return org.robolectric.Shadows.shadowOf(org.robolectric.RuntimeEnvironment.getApplication()); }
 
     private void setHeadset(boolean headset) {
         ShadowPackageManager spm = Shadows.shadowOf(ctx.getPackageManager());
@@ -261,7 +261,7 @@ public class MainHubActivityTest {
     }
 
     private void grantMic(boolean granted) {
-        ShadowApplication app = ShadowApplication.getInstance();
+        ShadowApplication app = org.robolectric.Shadows.shadowOf(org.robolectric.RuntimeEnvironment.getApplication());
         if (granted) {
             app.grantPermissions(Manifest.permission.RECORD_AUDIO);
         } else {

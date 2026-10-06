@@ -26,6 +26,7 @@ import com.vibertemis.quest.pcvr.PairingStore;
 import com.vibertemis.quest.pcvr.PcvrOptions;
 import com.vibertemis.quest.pcvr.PcvrSettingsActivity;
 import com.vibertemis.quest.pcvr.VrSetupDiscovery;
+import com.limelight.Game;
 import com.limelight.PcView;
 import com.limelight.R;
 import org.json.JSONObject;
@@ -640,6 +641,9 @@ public class MainHubActivity extends Activity {
     protected void onResume() {
         super.onResume();
         resumed = true;
+        if (returnToLiveStream()) {
+            return;
+        }
         if (pairingNotice != null) {
             showPairingNotice(pairingNotice);
             pairingNotice = null;
@@ -712,6 +716,56 @@ public class MainHubActivity extends Activity {
         // the badge would stay hidden until the next recreation.
         bindUpdateRepository();
         triggerUpdateCheckIfIdle(false);
+    }
+
+    /**
+     * Opening the app from the headset's library while a Screen stream is
+     * still up (the user went to the Quest home or another app) goes straight
+     * back to that stream instead of the hub, so it does not have to be
+     * reconnected. Only for a plain launcher start: a PCVR return or any
+     * other intent is the hub's to handle.
+     */
+    private boolean returnToLiveStream() {
+        Intent launch = getIntent();
+        if (launch == null || !Intent.ACTION_MAIN.equals(launch.getAction())) {
+            return false;
+        }
+        Class<? extends Game> live = liveStreamActivity();
+        if (live == null) {
+            return false;
+        }
+        int streamTask = liveStreamTaskId();
+        Log.i(TAG, "Live stream found behind the launcher, returning to " + live.getSimpleName());
+        Intent i = new Intent(this, live);
+        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
+        if (!Game.class.equals(live)) {
+            // As the immersive start carries it, see ServerHelper
+            i.addCategory("com.oculus.intent.category.VR");
+        }
+        try {
+            startActivity(i);
+        } catch (ActivityNotFoundException | SecurityException e) {
+            Log.w(TAG, "Could not return to the live stream: " + e.getMessage());
+            return false;
+        }
+        // The hub was started in a task of its own; take that task away too so
+        // its panel does not float beside the stream. Never the stream's task.
+        if (getTaskId() != streamTask) {
+            finishAndRemoveTask();
+        } else {
+            finish();
+        }
+        return true;
+    }
+
+    /** Test seam over {@link Game#liveStreamActivity()}. */
+    protected Class<? extends Game> liveStreamActivity() {
+        return Game.liveStreamActivity();
+    }
+
+    /** Test seam over {@link Game#liveStreamTaskId()}. */
+    protected int liveStreamTaskId() {
+        return Game.liveStreamTaskId();
     }
 
     @Override

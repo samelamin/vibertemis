@@ -11,13 +11,14 @@
 #   - Binary pins are full-file SHA-256 sums (verified by `sha256sum`).
 #   - Submodule pins are full git commits inside their parent repository.
 #
-moonlight-xr            ae173a4966bb68af749d45ed87c8b9737a0ce570  https://github.com/Gilleece/moonlight-android-xr.git                                -
-moonlight-common-c      8af4562af672dd6b9ed28553ead172984fd9a683  https://github.com/moonlight-stream/moonlight-common-c.git                          app/src/main/jni/moonlight-core/moonlight-common-c
-moonlight-enet          d3a323fc8b9559786ee059205db74e8027c756f7  https://github.com/lsalzman/enet.git                                              app/src/main/jni/moonlight-core/moonlight-common-c/enet
+moonlight-xr            686429ab8c91ad1c8bb128a7c7e3188802c3bcf4  https://github.com/Gilleece/moonlight-android-xr.git                                -
+moonlight-common-c      874ac9548f1bd6f095ef2b435c42cdde460e7821  https://github.com/moonlight-stream/moonlight-common-c.git                          app/src/main/jni/moonlight-core/moonlight-common-c
+moonlight-enet          aca87840b57f045a1f7f9299e4b1b9b8e2a5e2f1  https://github.com/lsalzman/enet.git                                              app/src/main/jni/moonlight-core/moonlight-common-c/enet
+moonlight-nanors        b1e3c22ca0cdc0bb83e3cd6ed1a2fc77869ed99a  https://github.com/sleepybishop/nanors.git                                    app/src/main/jni/moonlight-core/moonlight-common-c/nanors
 alvr-client-apk         be68feeb02665e3d69f1cdbcabf38ea4d15c42868a7ec6b5e698dbefee4e4e36  https://github.com/alvr-org/ALVR/releases/download/v20.14.1/alvr_client_android.apk  lib/arm64-v8a/libalvr_client_openxr.so
 alvr-source             a9f6542fa507a841f40ab4f3fcb531427cd02550  https://github.com/alvr-org/ALVR.git                                                -
 openxr-loader           1.1.49                                  https://repo1.maven.org/maven2/org/khronos/openxr/openxr_loader_for_android/   org.khronos.openxr:openxr_loader_for_android
-gradle                  8.7                                     https://services.gradle.org/distributions/gradle-8.7-bin.zip                     -
-agp                     8.5.1                                   https://repo1.maven.org/maven2/com/android/tools/build/gradle/                     -
-android-sdk             34                                      platform-tools/platforms/android-34                                                -
-android-ndk             27.0.12077973                           NDK r27 (Python 3.12 toolchain)                                                   -
+gradle                  9.7.1                                   https://services.gradle.org/distributions/gradle-9.7.1-bin.zip                    -
+agp                     9.4.0                                   https://repo1.maven.org/maven2/com/android/tools/build/gradle/                     -
+android-sdk             37.0                                    platform-tools/platforms/android-37.0                                              -
+android-ndk             29.0.14206865                           NDK r29 (app native code; r27.0.12077973 still stages libc++_shared for ALVR)                                                   -

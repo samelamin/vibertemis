@@ -75,7 +75,7 @@ public class VrCapabilitiesTest {
     @Test
     public void processIdentity_exactName_accepts() {
         Context ctx = RuntimeEnvironment.getApplication();
-        ShadowApplication.getInstance().setProcessName(
+        org.robolectric.Shadows.shadowOf(org.robolectric.RuntimeEnvironment.getApplication()).setProcessName(
                 ctx.getPackageName() + SteamVrActivity.PROCESS_SUFFIX);
 
         SteamVrActivity activity = Robolectric.buildActivity(
@@ -86,7 +86,7 @@ public class VrCapabilitiesTest {
     @Test
     public void processIdentity_mainProcess_rejects() {
         Context ctx = RuntimeEnvironment.getApplication();
-        ShadowApplication.getInstance().setProcessName(ctx.getPackageName());
+        org.robolectric.Shadows.shadowOf(org.robolectric.RuntimeEnvironment.getApplication()).setProcessName(ctx.getPackageName());
 
         SteamVrActivity activity = Robolectric.buildActivity(
                 SteamVrActivity.class).get();
@@ -97,7 +97,7 @@ public class VrCapabilitiesTest {
     public void processIdentity_otherPackagePcvr_rejects() {
         // Some other APK could happen to declare :pcvr. We only accept
         // exact equality with our own package name + ":pcvr".
-        ShadowApplication.getInstance().setProcessName(
+        org.robolectric.Shadows.shadowOf(org.robolectric.RuntimeEnvironment.getApplication()).setProcessName(
                 "com.example.somethingelse:pcvr");
 
         SteamVrActivity activity = Robolectric.buildActivity(
@@ -107,7 +107,7 @@ public class VrCapabilitiesTest {
 
     @Test
     public void processIdentity_nullProcessName_rejects() {
-        ShadowApplication.getInstance().setProcessName(null);
+        org.robolectric.Shadows.shadowOf(org.robolectric.RuntimeEnvironment.getApplication()).setProcessName(null);
 
         SteamVrActivity activity = Robolectric.buildActivity(
                 SteamVrActivity.class).get();
@@ -117,7 +117,7 @@ public class VrCapabilitiesTest {
     @Test
     public void processIdentity_suffixOnly_rejects() {
         // endsWith(":pcvr") would accept this; exact equality must not.
-        ShadowApplication.getInstance().setProcessName(":pcvr");
+        org.robolectric.Shadows.shadowOf(org.robolectric.RuntimeEnvironment.getApplication()).setProcessName(":pcvr");
 
         SteamVrActivity activity = Robolectric.buildActivity(
                 SteamVrActivity.class).get();

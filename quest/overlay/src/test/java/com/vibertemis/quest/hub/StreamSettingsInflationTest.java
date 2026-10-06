@@ -272,20 +272,20 @@ public class StreamSettingsInflationTest {
     }
 
     /** The nested VR depth row builds the real single-choice dialog (only
-     *  off/model survive the release filter) and dismissing it writes nothing. */
+     *  zipdepth/model/off survive the pattern filter) and dismissing it writes nothing. */
     @Test
     public void nestedVrDepthRow_opensRealListDialog_andDismissKeepsValue() {
         setHeadset(true);
         PreferenceScreen screen = root(inflate());
         ListPreference depth = (ListPreference) screen.findPreference("list_vr_depth_source");
-        assertEquals("only off/model survive the release filter", 2, depth.getEntryValues().length);
-        assertEquals("off", depth.getValue());
+        assertEquals("only zipdepth/model/off survive the pattern filter", 3, depth.getEntryValues().length);
+        assertEquals("zipdepth", depth.getValue());
         tap(depth, screen);
         AlertDialog dialog = ShadowAlertDialog.getLatestAlertDialog();
         assertNotNull("tapping VR depth must open the real list dialog", dialog);
         assertTrue(dialog.isShowing());
         dialog.dismiss();
-        assertEquals("dismissing must not change the stored depth source", "off", depth.getValue());
+        assertEquals("dismissing must not change the stored depth source", "zipdepth", depth.getValue());
     }
 
     /** The renderer row is an ordinary checkbox: a tap toggles and persists it. */

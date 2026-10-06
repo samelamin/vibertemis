@@ -31,13 +31,13 @@
 # Environment overrides (all optional):
 #   ANDROID_HOME / ANDROID_SDK_ROOT  path to Android SDK
 #                                     default: $HOME/Android/Sdk (Linux/macOS convention)
-#   JAVA_HOME                        JDK 17+ (AGP 8.5.1 supports JDK 17..21)
+#   JAVA_HOME                        JDK 17+ (AGP 9.4.0 needs JDK 17+)
 #                                     default: PATH-resolved java
 #   GRADLE_USER_HOME                 Gradle dependency cache
 #                                     default: $HOME/.gradle
 #
 # Notes:
-#   - AGP 8.5.1 requires JDK 17+; this build was tested with JDK 21.
+#   - AGP 9.4.0 requires JDK 17+; preview 14 was built with JDK 18.
 #   - NDK 27.0.12077973 (Python 3.12 toolchain) is pinned in quest/pins/pins.txt.
 #   - Debug APKs are signed with the AGP debug keystore so users can sideload.
 #   - No release keystore is shipped; see quest/README.md for instructions to
@@ -68,6 +68,11 @@ else
 fi
 
 # 3. Locate a JDK 17+ runtime.
+# macOS: /usr/bin/java is a stub, not a JDK home, and Gradle hangs with
+# JAVA_HOME=/usr, so ask the system for the real one.
+if [[ -z "${JAVA_HOME:-}" && -x /usr/libexec/java_home ]]; then
+  JAVA_HOME="$(/usr/libexec/java_home -v 17+ 2>/dev/null || true)"
+fi
 if [[ -z "${JAVA_HOME:-}" ]]; then
   if command -v java >/dev/null 2>&1; then
     JAVA_BIN="$(command -v java)"
@@ -84,27 +89,27 @@ if [[ -z "${JAVA_HOME:-}" ]]; then
 fi
 export JAVA_HOME
 
-# 4. Locate the NDK inside the SDK and write a fresh local.properties so the
-#    SDK path is captured for Gradle.
+# 4. Locate the pinned NDK inside the SDK (it only stages libc++_shared.so
+#    for the ALVR libraries; the app's own native code builds with the
+#    ndkVersion upstream's build.gradle names) and write a fresh
+#    local.properties so the SDK path is captured for Gradle.
 NDK_DIR="${ANDROID_SDK}/ndk/${NDK_VERSION}"
 [[ -d "${NDK_DIR}" ]] || die "NDK ${NDK_VERSION} not installed under ${ANDROID_SDK}/ndk; sdkmanager 'ndk;${NDK_VERSION}' first"
 
 cat > "${UPSTREAM}/local.properties" <<EOF
 sdk.dir=${ANDROID_SDK}
-ndk.dir=${NDK_DIR}
 EOF
 
 # 5. Export the SDK + NDK locations and the Gradle cache root.
 export ANDROID_HOME="${ANDROID_SDK}"
 export ANDROID_SDK_ROOT="${ANDROID_SDK}"
-export ANDROID_NDK_HOME="${NDK_DIR}"
 if [[ -z "${GRADLE_USER_HOME:-}" ]]; then
   export GRADLE_USER_HOME="${HOME}/.gradle"
 fi
 
 log "JAVA_HOME          = ${JAVA_HOME}"
 log "ANDROID_HOME       = ${ANDROID_HOME}"
-log "ANDROID_NDK_HOME   = ${ANDROID_NDK_HOME}"
+log "Pinned NDK         = ${NDK_DIR}"
 log "GRADLE_USER_HOME   = ${GRADLE_USER_HOME}"
 
 cd "${UPSTREAM}"
@@ -122,8 +127,13 @@ python3 "${REPO_ROOT}/quest/native/check-android.py"
 #     preview9 APK that shipped without this runtime (see
 #     quest/docs/native-runtime-provenance.md).
 JNILIBS_DIR="${UPSTREAM}/app/src/main/jniLibs/arm64-v8a"
-NDK_LLVM_BIN="${NDK_DIR}/toolchains/llvm/prebuilt/linux-x86_64/bin"
-NDK_RUNTIME_SRC="${NDK_DIR}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so"
+# The NDK ships its host toolchain as linux-x86_64 or darwin-x86_64 (universal on Apple silicon)
+case "$(uname -s)" in
+  Darwin) NDK_HOST_TAG="darwin-x86_64" ;;
+  *) NDK_HOST_TAG="linux-x86_64" ;;
+esac
+NDK_LLVM_BIN="${NDK_DIR}/toolchains/llvm/prebuilt/${NDK_HOST_TAG}/bin"
+NDK_RUNTIME_SRC="${NDK_DIR}/toolchains/llvm/prebuilt/${NDK_HOST_TAG}/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so"
 NDK_RUNTIME_DST="${JNILIBS_DIR}/libc++_shared.so"
 mkdir -p "${JNILIBS_DIR}"
 log "Staging libc++_shared.so from pinned NDK ${NDK_VERSION} (aarch64-linux-android)"
@@ -194,7 +204,6 @@ log "NDK notices concatenated into ${NOTICE_FILE}"
     :app:testNonRootDebugUnitTest \
     :app:assembleNonRootDebug \
     -Pandroid.useAndroidX=true \
-    -Dorg.gradle.jvmargs="-Xmx3072m" \
     --no-daemon \
     --stacktrace \
     --console=plain

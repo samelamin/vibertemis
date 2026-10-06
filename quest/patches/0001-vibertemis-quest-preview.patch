@@ -1,30 +1,35 @@
 diff --git a/app/build.gradle b/app/build.gradle
-index f5bdc022..2d101250 100644
+index c7af89f9..7124e46e 100644
 --- a/app/build.gradle
 +++ b/app/build.gradle
-@@ -18,14 +18,30 @@ android {
+@@ -152,11 +152,18 @@ android {
      namespace 'com.limelight'
  
      defaultConfig {
 -        minSdk 21
+-        targetSdk 36
+-
+-        versionName "12.1-xr0.4.2"
+-        versionCode = 31406
 +        // Quest3 + ALVR v20.14.1 require API 26 (Android 8.0): native
 +        // audio session routing (aaudio), Vulkan 1.1, and Horizon OS
 +        // shipping target. OpenXR loader prefab declares minSdk 24 but
 +        // it is only loaded on headsets, so minSdk 26 is safe app-wide.
 +        minSdk 26
-         targetSdk 34
- 
--        versionName "12.1-xr0.3"
--        versionCode = 31403
++        targetSdk 34
++
 +        // Vibertemis XR Preview test build identity. versionCode is the
 +        // gradle-internal integer; the versionName string is the one
 +        // surfaced to the user in the launcher.
-+        versionName "0.1.0-quest-preview.13"
-+        versionCode = 13
++        versionName "0.1.0-quest-preview.14"
++        versionCode = 14
  
          // Generate native debug symbols to allow Google Play to symbolicate our native crashes
          ndk.debugSymbolLevel = 'FULL'
-+
+@@ -165,6 +172,14 @@ android {
+         buildConfigField "String", "REPORT_URL", javaString(reportUrl.toString())
+         buildConfigField "String", "REPORT_TOKEN", javaString(reportToken.toString())
+         buildConfigField "String", "GIT_HASH", javaString(gitHash)
 +        // First Quest3 test package: arm64-v8a only. The Khronos OpenXR
 +        // loader prefab (org.khronos.openxr:openxr_loader_for_android:1.1.49)
 +        // ships arm64-v8a + armeabi-v7a + x86 + x86_64; this filter drops
@@ -36,7 +41,7 @@ index f5bdc022..2d101250 100644
      }
  
      flavorDimensions.add("root")
-@@ -52,7 +68,9 @@ android {
+@@ -192,7 +207,9 @@ android {
                  }
              }
  
@@ -47,7 +52,7 @@ index f5bdc022..2d101250 100644
              dimension "root"
              buildConfigField "boolean", "ROOT_BUILD", "true"
          }
-@@ -64,7 +82,9 @@ android {
+@@ -204,7 +221,9 @@ android {
                  }
              }
  
@@ -58,7 +63,7 @@ index f5bdc022..2d101250 100644
              dimension "root"
              buildConfigField "boolean", "ROOT_BUILD", "false"
          }
-@@ -108,11 +128,19 @@ android {
+@@ -249,11 +268,19 @@ android {
          }
      }
  
@@ -78,9 +83,9 @@ index f5bdc022..2d101250 100644
 +            resValue "string", "app_label", "Vibertemis XR Preview (Debug)"
 +            resValue "string", "app_label_root", "Vibertemis XR Preview (Root Debug)"
  
-             minifyEnabled true
-             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
-@@ -120,8 +148,8 @@ android {
+             // The renderer's setprop tuning knobs and frame capture live in
+             // debug builds only
+@@ -270,8 +297,8 @@ android {
          release {
              // This fork ships under its own applicationId, so the unofficial
              // suffix upstream asks forks to keep is no longer needed.
@@ -91,15 +96,12 @@ index f5bdc022..2d101250 100644
  
              if (canSign) {
                  signingConfig signingConfigs.release
-@@ -151,4 +179,10 @@ dependencies {
-     implementation 'com.squareup.okhttp3:okhttp:4.12.0'
-     implementation 'org.jmdns:jmdns:3.5.9'
-     implementation 'com.github.cgutman:ShieldControllerExtensions:1.0.1'
-+
-+    // Vibertemis XR Preview overlay tests. Only meaningful tests; upstream
-+    // v0.3 has no Java tests of its own.
-+    testImplementation 'junit:junit:4.13.2'
-+    testImplementation 'org.robolectric:robolectric:4.11.1'
+@@ -315,4 +342,7 @@ dependencies {
+     // kXML 2, BSD style licence (its XmlPull API classes are public domain), the
+     // parser Android itself reads host answers with, so tests can read them too
+     testImplementation 'net.sf.kxml:kxml2:2.3.0'
++    // Vibertemis XR Preview overlay tests
++    testImplementation 'org.robolectric:robolectric:4.17'
 +    testImplementation 'androidx.test:core:1.5.0'
  }
 diff --git a/app/proguard-rules.pro b/app/proguard-rules.pro
@@ -116,21 +118,21 @@ index aa6ffd35..695aaa27 100644
 +    public void onPcvrCodec(java.lang.String);
 +}
 diff --git a/app/src/main/AndroidManifest.xml b/app/src/main/AndroidManifest.xml
-index 8fb03b32..eb634991 100644
+index 3d5e7c88..cd581e1d 100644
 --- a/app/src/main/AndroidManifest.xml
 +++ b/app/src/main/AndroidManifest.xml
-@@ -19,6 +19,7 @@
-     <uses-permission android:name="android.permission.VIBRATE" />
+@@ -20,6 +20,7 @@
      <uses-permission android:name="android.permission.WAKE_LOCK" />
      <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+     <uses-permission android:name="android.permission.CAPTURE_KEYBOARD" />
 +    <uses-permission android:name="android.permission.RECORD_AUDIO"/>
      <uses-permission android:name="com.android.providers.tv.permission.READ_EPG_DATA"/>
      <uses-permission android:name="com.android.providers.tv.permission.WRITE_EPG_DATA"/>
  
-@@ -109,6 +110,14 @@
-         <meta-data
-             android:name="com.oculus.supportedDevices"
-             android:value="quest2|questpro|quest3" />
+@@ -135,6 +136,14 @@
+         <uses-native-library
+             android:name="libopenxr.google.so"
+             android:required="false" />
 +        <!-- Application-level focus-aware flag: official ALVR Cargo.toml
 +             places application.meta_data `com.oculus.vr.focusaware = true`
 +             at this level so Horizon OS dims the system UI and pauses
@@ -142,7 +144,7 @@ index 8fb03b32..eb634991 100644
  
          <provider
              android:name=".PosterContentProvider"
-@@ -149,9 +158,25 @@
+@@ -175,9 +184,25 @@
              <meta-data android:name="WindowManagerPreference:FreeformWindowSize" android:value="system-default" />
              <meta-data android:name="WindowManagerPreference:FreeformWindowOrientation" android:value="landscape" />
  
@@ -169,7 +171,7 @@ index 8fb03b32..eb634991 100644
                  <category android:name="android.intent.category.LAUNCHER" />
                  <category android:name="android.intent.category.MULTIWINDOW_LAUNCHER" />
                  <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
-@@ -159,6 +184,41 @@
+@@ -185,6 +210,41 @@
              </intent-filter>
              <meta-data android:name="pvr.app.type" android:value="2d" />
          </activity>
@@ -212,27 +214,18 @@ index 8fb03b32..eb634991 100644
          <activity
              android:name=".ShortcutTrampoline"
 diff --git a/app/src/main/java/com/limelight/preferences/PreferenceConfiguration.java b/app/src/main/java/com/limelight/preferences/PreferenceConfiguration.java
-index e88bca0e..53e5ca91 100644
+index 8891ee6f..d5b53bdb 100644
 --- a/app/src/main/java/com/limelight/preferences/PreferenceConfiguration.java
 +++ b/app/src/main/java/com/limelight/preferences/PreferenceConfiguration.java
-@@ -9,6 +9,7 @@ import android.view.Display;
- 
- import com.limelight.FileLog;
+@@ -12,6 +12,7 @@ import com.limelight.binding.video.DepthPresets;
+ import com.limelight.binding.video.MidasDepthSource;
+ import com.limelight.binding.video.XrShared;
  import com.limelight.nvstream.jni.MoonBridge;
 +import com.vibertemis.quest.hub.VrCapabilities;
  
  public class PreferenceConfiguration {
      public enum FormatOption {
-@@ -152,7 +153,7 @@ public class PreferenceConfiguration {
-     private static final int DEFAULT_VR_DISTANCE = 30;
-     private static final int DEFAULT_VR_SCREEN_SIZE = 30;
-     private static final int DEFAULT_VR_CURVATURE = 0;
--    private static final String DEFAULT_VR_DEPTH_SOURCE = "model";
-+    private static final String DEFAULT_VR_DEPTH_SOURCE = "off";
-     // Standard everywhere, which caps the room at a size every headset here can
-     // hold. Gen 1 headsets are seeded onto low instead, see seedGen1PerfProfile.
-     private static final String DEFAULT_VR_ENV_RES = "standard";
-@@ -795,28 +796,19 @@ public class PreferenceConfiguration {
+@@ -1368,7 +1369,8 @@ public class PreferenceConfiguration {
          config.enablePip = prefs.getBoolean(ENABLE_PIP_PREF_STRING, DEFAULT_ENABLE_PIP);
          config.enablePerfOverlay = prefs.getBoolean(ENABLE_PERF_OVERLAY_STRING, DEFAULT_ENABLE_PERF_OVERLAY);
          config.enableGlRenderPath = prefs.getBoolean(ENABLE_GL_RENDER_PATH_PREF_STRING, DEFAULT_ENABLE_GL_RENDER_PATH);
@@ -242,38 +235,23 @@ index e88bca0e..53e5ca91 100644
          config.vrHeadLocked = prefs.getBoolean(VR_HEAD_LOCKED_PREF_STRING, DEFAULT_VR_HEAD_LOCKED);
          config.vrDistance = prefs.getInt(VR_DISTANCE_PREF_STRING, DEFAULT_VR_DISTANCE);
          config.vrScreenSize = prefs.getInt(VR_SCREEN_SIZE_PREF_STRING, DEFAULT_VR_SCREEN_SIZE);
-         config.vrCurvature = prefs.getInt(VR_CURVATURE_PREF_STRING, DEFAULT_VR_CURVATURE);
-         String depthSource = prefs.getString(VR_DEPTH_SOURCE_PREF_STRING, DEFAULT_VR_DEPTH_SOURCE);
--        if (depthSource.equals("flat")) {
--            config.vrDepthMode = 1;
--        }
--        else if (depthSource.equals("ramp")) {
--            config.vrDepthMode = 2;
--        }
--        else if (depthSource.equals("blob")) {
--            config.vrDepthMode = 3;
--        }
--        else if (depthSource.equals("eyetest")) {
--            config.vrDepthMode = 4;
--        }
--        else if (depthSource.equals("shifttest")) {
--            config.vrDepthMode = 5;
--        }
--        else if (depthSource.equals("model")) {
-+        // Vibertemis XR Preview: synthetic test patterns (flat, ramp,
-+        // blob, eyetest, shifttest) are filtered out of the inflated
-+        // list at SettingsFragment.onCreate. Only "model" and the
-+        // default "off" reach here, so the depth-source switch collapses
-+        // to a single "model" -> 6 vs everything-else -> 0 branch.
-+        if ("model".equals(depthSource)) {
-             config.vrDepthMode = 6;
-         }
-         else {
+@@ -1377,6 +1379,11 @@ public class PreferenceConfiguration {
+         String depthSource = depthSourceForHeadset(
+                 prefs.getString(VR_DEPTH_SOURCE_PREF_STRING, DEFAULT_VR_DEPTH_SOURCE),
+                 isXr2Gen1Headset());
++        // Vibertemis XR Preview: the synthetic test patterns are not offered,
++        // so one stored from outside the app runs as off rather than as a pattern
++        if (!isDepthModel(depthSource)) {
++            depthSource = "off";
++        }
+         config.vrDepthModel = DEFAULT_VR_DEPTH_SOURCE;
+         if (depthSource.equals("flat")) {
+             config.vrDepthMode = XrShared.DEPTH_MODE_FLAT;
 diff --git a/app/src/main/java/com/limelight/preferences/StreamSettings.java b/app/src/main/java/com/limelight/preferences/StreamSettings.java
-index 3bc8220e..05979eb5 100644
+index d731e7bf..aa3059e5 100644
 --- a/app/src/main/java/com/limelight/preferences/StreamSettings.java
 +++ b/app/src/main/java/com/limelight/preferences/StreamSettings.java
-@@ -35,6 +35,10 @@ import com.limelight.R;
+@@ -37,6 +37,10 @@ import com.limelight.binding.video.EnvironmentIds;
  import com.limelight.binding.video.MediaCodecHelper;
  import com.limelight.utils.Dialog;
  import com.limelight.utils.UiHelper;
@@ -284,7 +262,7 @@ index 3bc8220e..05979eb5 100644
  
  import java.lang.reflect.Method;
  import java.util.ArrayList;
-@@ -136,6 +140,16 @@ public class StreamSettings extends Activity {
+@@ -138,6 +142,16 @@ public class StreamSettings extends Activity {
          private int nativeResolutionStartIndex = Integer.MAX_VALUE;
          private boolean nativeFramerateShown = false;
  
@@ -301,44 +279,21 @@ index 3bc8220e..05979eb5 100644
          private void setValue(String preferenceKey, String value) {
              ListPreference pref = (ListPreference) findPreference(preferenceKey);
  
-@@ -324,20 +338,22 @@ public class StreamSettings extends Activity {
-                 category.removePreference(findPreference("checkbox_absolute_mouse_mode"));
-             }
+@@ -366,10 +380,11 @@ public class StreamSettings extends Activity {
  
--            // The synthetic depth patterns are development tools. They only
--            // confuse in a release build, so the list keeps the two real
--            // choices there.
+             // The synthetic depth patterns are development tools. They only
+             // confuse in a release build, so the list keeps the real choices
+-            // there.
++            // there. Vibertemis XR Preview ships its debug build to users, so
++            // the patterns are kept out of the list in both builds.
+             final ListPreference depthPref = (ListPreference) findPreference(
+                     PreferenceConfiguration.VR_DEPTH_SOURCE_PREF_STRING);
 -            if (!BuildConfig.DEBUG) {
--                ListPreference depthPref = (ListPreference) findPreference(
--                        PreferenceConfiguration.VR_DEPTH_SOURCE_PREF_STRING);
--                String[] keep = { "off", "model" };
--                keepPreferenceEntries(depthPref, keep);
--                // Only reachable by setting it from outside the app, since the
--                // two builds do not share preferences, but a value that is no
--                // longer in the list shows as a blank selection
--                if (!Arrays.asList(keep).contains(depthPref.getValue())) {
--                    depthPref.setValue("model");
--                }
-+            // Vibertemis XR Preview: synthetic-depth patterns (flat,
-+            // ramp, blob, eyetest, shifttest) are filtered out of the
-+            // inflated list in BOTH debug and release builds. An
-+            // invalid stored value falls back to "off" so the depth
-+            // model is never silently enabled.
-+            ListPreference depthPref = (ListPreference) findPreference(
-+                    PreferenceConfiguration.VR_DEPTH_SOURCE_PREF_STRING);
-+            String[] keep = { "off", "model" };
-+            keepPreferenceEntries(depthPref, keep);
-+            // Only reachable by setting it from outside the app, since the
-+            // two builds do not share preferences, but a value that is no
-+            // longer in the list shows as a blank selection. Fall back to
-+            // "off" so an invalid value never silently enables the
-+            // depth model.
-+            if (!Arrays.asList(keep).contains(depthPref.getValue())) {
-+                depthPref.setValue("off");
-             }
- 
-             // Where the log actually is, which is the first thing anyone
-@@ -406,6 +422,52 @@ public class StreamSettings extends Activity {
++            {
+                 String[] keep = { PreferenceConfiguration.VR_DEPTH_SOURCE_ZIPDEPTH,
+                         PreferenceConfiguration.VR_DEPTH_SOURCE_MIDAS, "off" };
+                 keepPreferenceEntries(depthPref, keep);
+@@ -476,6 +491,52 @@ public class StreamSettings extends Activity {
                  category_gamepad_settings.removePreference(findPreference("seekbar_vibrate_fallback_strength"));
              }
  
@@ -391,7 +346,7 @@ index 3bc8220e..05979eb5 100644
              Display display = getActivity().getWindowManager().getDefaultDisplay();
              float maxSupportedFps = display.getRefreshRate();
  
-@@ -732,6 +794,97 @@ public class StreamSettings extends Activity {
+@@ -811,6 +872,97 @@ public class StreamSettings extends Activity {
                      return true;
                  }
              });
@@ -512,7 +467,7 @@ index 65291b96..2f3b77a4 100644
  </adaptive-icon>
 \ No newline at end of file
 diff --git a/app/src/main/res/xml/preferences.xml b/app/src/main/res/xml/preferences.xml
-index 1891f2c1..16ff284f 100644
+index 08f4beb3..193ecb2b 100644
 --- a/app/src/main/res/xml/preferences.xml
 +++ b/app/src/main/res/xml/preferences.xml
 @@ -2,6 +2,37 @@
@@ -553,22 +508,16 @@ index 1891f2c1..16ff284f 100644
      <PreferenceCategory android:title="@string/category_vr_settings"
          android:key="category_vr_settings">
          <CheckBoxPreference
-@@ -31,11 +62,11 @@
-             android:defaultValue="false"/>
+@@ -90,7 +121,7 @@
+             android:persistent="false" />
          <ListPreference
              android:key="list_vr_depth_source"
 -            android:title="@string/title_vr_depth_source"
 +            android:title="@string/vq_depth_source_title"
              android:entries="@array/vr_depth_source_names"
              android:entryValues="@array/vr_depth_source_values"
--            android:summary="@string/summary_vr_depth_source"
--            android:defaultValue="model" />
-+            android:summary="@string/vq_depth_source_summary"
-+            android:defaultValue="off" />
-         <ListPreference
-             android:key="list_vr_env_res"
-             android:title="@string/title_vr_env_res"
-@@ -72,6 +103,7 @@
+             android:summary="@string/summary_vr_depth_source"
+@@ -172,6 +203,7 @@
              android:summary="@string/summary_vr_file_log"
              android:defaultValue="basic" />
      </PreferenceCategory>
@@ -576,7 +525,7 @@ index 1891f2c1..16ff284f 100644
      <PreferenceCategory android:title="@string/category_basic_settings"
          android:key="category_basic_settings">
          <ListPreference
-@@ -92,7 +124,7 @@
+@@ -192,7 +224,7 @@
              android:key="seekbar_bitrate_kbps"
              android:dialogMessage="@string/summary_seekbar_bitrate"
              seekbar:min="500"
@@ -585,11 +534,10 @@ index 1891f2c1..16ff284f 100644
              seekbar:step="500"
              seekbar:keyStep="1000"
              seekbar:divisor="1000"
-@@ -359,4 +391,111 @@
+@@ -469,6 +501,113 @@
              android:summary="@string/summary_privacy_policy"
              url="https://moonlight-stream.org/privacy.html"/>
      </PreferenceCategory-->
-+
 +    <!--
 +      Vibertemis XR Preview: Screen streaming presets.
 +
@@ -696,9 +644,12 @@ index 1891f2c1..16ff284f 100644
 +                android:selectable="false"/>
 +        </PreferenceCategory>
 +    </PreferenceScreen>
- </PreferenceScreen>
++
+     <PreferenceCategory android:title="@string/category_about"
+         android:key="category_about">
+         <Preference
 diff --git a/gradle.properties b/gradle.properties
-index e0212117..ab83e6fb 100644
+index c2265eb1..17c1ddf8 100644
 --- a/gradle.properties
 +++ b/gradle.properties
 @@ -12,6 +12,7 @@
@@ -707,5 +658,5 @@ index e0212117..ab83e6fb 100644
  org.gradle.jvmargs=-Xmx3072m
 +android.useAndroidX=true
  
- # When configured, Gradle will run in incubating parallel mode.
- # This option should only be used with decoupled projects. More details, visit
+ # Where the report a problem screens send reports, and the token the collector
+ # checks. Keep these empty here: the real values go in keystore.properties as

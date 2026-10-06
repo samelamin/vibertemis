@@ -213,7 +213,7 @@ public class VrSetupHubLifecycleTest {
         ctx = RuntimeEnvironment.getApplication();
         Shadows.shadowOf(ctx.getPackageManager())
                 .setSystemFeature(PackageManager.FEATURE_VR_HEADTRACKING, true);
-        ShadowApplication.getInstance().grantPermissions(Manifest.permission.RECORD_AUDIO);
+        org.robolectric.Shadows.shadowOf(org.robolectric.RuntimeEnvironment.getApplication()).grantPermissions(Manifest.permission.RECORD_AUDIO);
     }
 
     @After public void teardown() {

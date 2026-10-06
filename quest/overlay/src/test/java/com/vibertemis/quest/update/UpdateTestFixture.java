@@ -146,15 +146,28 @@ final class UpdateTestFixture {
         archive.versionName = versionCode + ".0.0.0";
         archive.signatures = new Signature[]{signer};
         if (Build.VERSION.SDK_INT >= 28) archive.signingInfo = signingInfoForTest(signer);
-        Shadows.shadowOf(context.getPackageManager())
-                .setPackageArchiveInfo(apkPath.getAbsolutePath(), archive);
+        publish(context, apkPath, archive);
     }
 
     /** Remove a previously published archive so the path reads as
      *  unparseable, which is what a corrupt download looks like. */
     static void clearArchiveInfo(Context context, File apkPath) {
-        Shadows.shadowOf(context.getPackageManager())
-                .setPackageArchiveInfo(apkPath.getAbsolutePath(), null);
+        publish(context, apkPath, null);
+    }
+
+    /**
+     * Production reads the canonical path, which is not the absolute one
+     * where the cache sits under a symlink (macOS /var -> /private/var), so
+     * the archive is published under both.
+     */
+    private static void publish(Context context, File apkPath, PackageInfo archive) {
+        ShadowPackageManager spm = Shadows.shadowOf(context.getPackageManager());
+        spm.setPackageArchiveInfo(apkPath.getAbsolutePath(), archive);
+        try {
+            spm.setPackageArchiveInfo(apkPath.getCanonicalPath(), archive);
+        } catch (java.io.IOException ignored) {
+            // The absolute path above is all there is
+        }
     }
 
     /**
@@ -193,8 +206,7 @@ final class UpdateTestFixture {
         archive.packageName = context.getPackageName();
         archive.versionCode = (int) versionCode;
         archive.versionName = versionCode + ".0.0.0";
-        Shadows.shadowOf(context.getPackageManager())
-                .setPackageArchiveInfo(apkPath.getAbsolutePath(), archive);
+        publish(context, apkPath, archive);
     }
 
     /** The same, for a release's verified copy. */

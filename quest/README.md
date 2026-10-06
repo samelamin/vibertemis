@@ -51,11 +51,18 @@ never applies a preset; upstream may still seed or migrate its own
 defaults. `auto` codec uses the existing Moonlight / Apollo / Sunshine
 negotiation — this preview claims no priority order.
 
-Synthetic-depth is exposed upstream and defaults to `off` here, so the
-screen path stays flat unless the user opts in to the depth model. The
-synthetic test patterns (`flat`, `ramp`, `blob`, `eyetest`,
-`shifttest`) are hidden in this preview build regardless of debug
-status; an invalid value falls back to `off`. Touch controllers behave
+Screen mode is built on Moonlight XR v0.4.2. Synthetic 3D defaults to
+upstream's ZipDepth model, so a Big Screen session starts in 3D; the 3D
+button on the session bar (or the cog's 3D tab, with Comfort / Balanced /
+Strong presets) turns it off for that session, and the depth source can
+be set to `off` in settings. The synthetic test patterns (`flat`, `ramp`,
+`blob`, `eyetest`, `shifttest`) are hidden in this preview build
+regardless of debug status; an invalid value falls back to `off`.
+
+Pressing the Meta button or opening another app keeps a Big Screen
+stream alive (muted) for 60 s. Opening Vibertemis again from the
+library in that time goes straight back to the running stream instead
+of the hub, with no reconnect. Touch controllers behave
 as a mouse pointer in screen mode; the standard gamepad buttons
 upstream already supports work for games.
 

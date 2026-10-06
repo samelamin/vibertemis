@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
-# Reproducible fetch of Moonlight XR v0.3 + ALVR v20.14.1 client native lib.
+# Reproducible fetch of Moonlight XR v0.4.2 + ALVR v20.14.1 client native lib.
 #
 # Inputs (pinned in quest/pins/pins.txt):
-#   Moonlight XR v0.3 source            commit ae173a4966bb68af749d45ed87c8b9737a0ce570
-#     moonlight-common-c (submodule)    commit 8af4562af672dd6b9ed28553ead172984fd9a683
-#     enet (nested submodule)          commit d3a323fc8b9559786ee059205db74e8027c756f7
+#   Moonlight XR v0.4.2 source            commit 686429ab8c91ad1c8bb128a7c7e3188802c3bcf4
+#     moonlight-common-c (submodule)    commit 874ac9548f1bd6f095ef2b435c42cdde460e7821
+#     enet (nested submodule)          commit aca87840b57f045a1f7f9299e4b1b9b8e2a5e2f1
+#     nanors (nested submodule)        commit b1e3c22ca0cdc0bb83e3cd6ed1a2fc77869ed99a
 #   ALVR v20.14.1 client APK            SHA-256 be68feeb02665e3d69f1cdbcabf38ea4d15c42868a7ec6b5e698dbefee4e4e36
 #     libalvr_client_openxr.so inside   SHA-256 extracted and re-hashed for integrity
 #
 # Outputs:
-#   build/quest/upstream/                                                 Moonlight XR v0.3 at pinned SHA, all submodules initialized
+#   build/quest/upstream/                                                 Moonlight XR v0.4.2 at pinned SHA, all submodules initialized
 #   build/quest/upstream/app/src/main/jniLibs/arm64-v8a/libalvr_client_openxr.so
 #
 # Idempotent: re-running after a successful fetch only re-verifies SHAs.
@@ -26,9 +27,10 @@ APK_PATH="${BUILD_ROOT}/alvr_client_android_v20.14.1.apk"
 
 PINS_FILE="${REPO_ROOT}/quest/pins/pins.txt"
 
-MOONLIGHT_PIN="ae173a4966bb68af749d45ed87c8b9737a0ce570"
-MOONLIGHT_COMMON_C_PIN="8af4562af672dd6b9ed28553ead172984fd9a683"
-MOONLIGHT_ENET_PIN="d3a323fc8b9559786ee059205db74e8027c756f7"
+MOONLIGHT_PIN="686429ab8c91ad1c8bb128a7c7e3188802c3bcf4"
+MOONLIGHT_COMMON_C_PIN="874ac9548f1bd6f095ef2b435c42cdde460e7821"
+MOONLIGHT_ENET_PIN="aca87840b57f045a1f7f9299e4b1b9b8e2a5e2f1"
+MOONLIGHT_NANORS_PIN="b1e3c22ca0cdc0bb83e3cd6ed1a2fc77869ed99a"
 MOONLIGHT_URL="https://github.com/Gilleece/moonlight-android-xr.git"
 
 APK_URL="https://github.com/alvr-org/ALVR/releases/download/v20.14.1/alvr_client_android.apk"
@@ -39,7 +41,7 @@ die() { printf '[fetch] ERROR: %s\n' "$*" >&2; exit 1; }
 
 mkdir -p "${BUILD_ROOT}"
 
-# 1. Moonlight XR v0.3 + recursive submodules.
+# 1. Moonlight XR v0.4.2 + recursive submodules.
 if [[ ! -d "${UPSTREAM}/.git" ]]; then
   log "Cloning Moonlight XR pinned at ${MOONLIGHT_PIN}"
   git clone "${MOONLIGHT_URL}" "${UPSTREAM}"
@@ -56,7 +58,9 @@ else
   fi
   # Ensure recursive submodules are initialised even if upstream was partly populated.
   if [[ ! -f "${UPSTREAM}/app/src/main/jni/moonlight-core/moonlight-common-c/CMakeLists.txt" \
-     || ! -f "${UPSTREAM}/app/src/main/jni/moonlight-core/moonlight-common-c/enet/include/enet/enet.h" ]]; then
+     || ! -f "${UPSTREAM}/app/src/main/jni/moonlight-core/moonlight-common-c/enet/include/enet/enet.h" \
+     || ! -d "${UPSTREAM}/app/src/main/jni/moonlight-core/moonlight-common-c/nanors/.git" \
+        && ! -f "${UPSTREAM}/app/src/main/jni/moonlight-core/moonlight-common-c/nanors/.git" ]]; then
     (cd "${UPSTREAM}" && git submodule update --init --recursive)
   fi
 fi
@@ -77,10 +81,16 @@ ACTUAL_ENET="$(cd "${UPSTREAM}/app/src/main/jni/moonlight-core/moonlight-common-
 [[ "${ACTUAL_ENET}" == "${MOONLIGHT_ENET_PIN}" ]] \
   || die "enet HEAD ${ACTUAL_ENET} != pinned ${MOONLIGHT_ENET_PIN}"
 
+ACTUAL_NANORS="$(cd "${UPSTREAM}/app/src/main/jni/moonlight-core/moonlight-common-c/nanors" \
+                 && git rev-parse HEAD)"
+[[ "${ACTUAL_NANORS}" == "${MOONLIGHT_NANORS_PIN}" ]] \
+  || die "nanors HEAD ${ACTUAL_NANORS} != pinned ${MOONLIGHT_NANORS_PIN}"
+
 log "Upstream commits verified:"
 log "  moonlight-xr        ${MOONLIGHT_PIN}"
 log "  moonlight-common-c  ${MOONLIGHT_COMMON_C_PIN}"
 log "  enet                ${MOONLIGHT_ENET_PIN}"
+log "  nanors              ${MOONLIGHT_NANORS_PIN}"
 
 # 2. ALVR v20.14.1 APK download (only if missing or wrong SHA).
 NEED_APK=1

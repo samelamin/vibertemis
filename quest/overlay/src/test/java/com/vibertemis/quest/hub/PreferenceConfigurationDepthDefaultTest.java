@@ -18,20 +18,15 @@ import static org.junit.Assert.assertEquals;
  * Regression tests for the synthetic-depth default and the collapsed
  * depth-source mapping.
  *
- * <p>Upstream {@code PreferenceConfiguration.DEFAULT_VR_DEPTH_SOURCE}
- * was {@code "model"} and the XML {@code defaultValue} on
- * {@code list_vr_depth_source} was {@code "model"} — so a fresh
- * install ran the depth model by default. The runtime cost is
- * significant; this preview ships with both defaults flipped to
- * {@code "off"}.
+ * <p>From Moonlight XR v0.4 the default depth source is upstream's
+ * {@code "zipdepth"}, a model light enough for every Quest, and a Big
+ * Screen session starts in 3D with a 3D button on its bar to switch it
+ * off for the session. {@code "off"} stays an explicit choice.
  *
- * <p>The depth-source switch is collapsed: synthetic test patterns
- * (flat, ramp, blob, eyetest, shifttest) are filtered out of the
- * inflated list at SettingsFragment.onCreate, so the only values
- * that reach {@code readPreferences} are {@code "off"} (default)
- * and {@code "model"} (explicit opt-in). {@code "model"} maps to 6;
- * everything else (including any stale flat/ramp/blob/eyetest/
- * shifttest value still on disk) maps to 0.
+ * <p>The synthetic test patterns (flat, ramp, blob, eyetest, shifttest)
+ * are filtered out of the inflated list at SettingsFragment.onCreate in
+ * both builds, and any stale or unknown value still on disk maps to 0
+ * rather than to a pattern.
  */
 @RunWith(RobolectricTestRunner.class)
 @Config(shadows = ShadowMoonBridge.class)
@@ -51,12 +46,22 @@ public class PreferenceConfigurationDepthDefaultTest {
                 .commit();
     }
 
-    /** Fresh install: no stored value, default falls through to "off" -> mode 0. */
+    /** Fresh install: no stored value, default is upstream's ZipDepth model -> mode 6,
+     *  so 3D is available in a Big Screen session and switched from its 3D button. */
     @Test
-    public void freshDefault_isOff_mode0() {
+    public void freshDefault_isZipDepth_mode6() {
         PreferenceConfiguration cfg = PreferenceConfiguration.readPreferences(ctx);
-        assertEquals("default depth mode must be off (0)",
-                0, cfg.vrDepthMode);
+        assertEquals("default depth mode must be the depth model (6)",
+                6, cfg.vrDepthMode);
+        assertEquals("zipdepth", cfg.vrDepthModel);
+    }
+
+    /** An explicit "off" is preserved as mode 0. */
+    @Test
+    public void explicitOff_preserved_mode0() {
+        putDepthSource("off");
+        PreferenceConfiguration cfg = PreferenceConfiguration.readPreferences(ctx);
+        assertEquals(0, cfg.vrDepthMode);
     }
 
     /** Explicit user choice of "model" is preserved as mode 6. */

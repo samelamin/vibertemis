@@ -40,7 +40,7 @@ import static org.junit.Assert.assertTrue;
  * back to {@code com.vibertemis.quest.hub.MainHubActivity}; the same
  * categories must NOT resolve to {@code .PcView}. The depth-source
  * list the user actually sees in the inflated UI must contain
- * exactly {@code off} and {@code model}.
+ * exactly {@code zipdepth}, {@code model} and {@code off}.
  */
 @RunWith(RobolectricTestRunner.class)
 @Config(shadows = ShadowMoonBridge.class)
@@ -130,13 +130,13 @@ public class ManifestAndDepthRegressionTest {
      * Drive the real inflated SettingsFragment the same way the
      * production activity does. After
      * {@code commitNow}, the {@code list_vr_depth_source} entry values
-     * must be exactly {@code ["off", "model"]} — the synthetic test
+     * must be exactly {@code ["zipdepth", "model", "off"]} — the synthetic test
      * patterns are filtered out at SettingsFragment.onCreate so they
      * never reach the user-visible list, in BOTH debug and release
      * builds.
      */
     @Test
-    public void inflatedDepthSourceList_isExactlyOffAndModel() {
+    public void inflatedDepthSourceList_isExactlyTheRealChoices() {
         Shadows.shadowOf(pm).setSystemFeature(
                 PackageManager.FEATURE_VR_HEADTRACKING, true);
         ActivityController<MainHubActivity> ac =
@@ -150,23 +150,24 @@ public class ManifestAndDepthRegressionTest {
         assertNotNull("list_vr_depth_source must be inflated", depthPref);
         CharSequence[] values = depthPref.getEntryValues();
         assertNotNull(values);
-        // Exactly two entries, in the production-declared order.
-        assertEquals("Inflated depth list must contain exactly 2 entries; got "
-                + Arrays.toString(values), 2, values.length);
-        assertEquals("off", values[0].toString());
+        // Exactly three entries, in the production-declared order.
+        assertEquals("Inflated depth list must contain exactly 3 entries; got "
+                + Arrays.toString(values), 3, values.length);
+        assertEquals("zipdepth", values[0].toString());
         assertEquals("model", values[1].toString());
+        assertEquals("off", values[2].toString());
         // Round-trip the entries too: names map 1:1 to values.
         CharSequence[] entries = depthPref.getEntries();
         assertNotNull(entries);
-        assertEquals(2, entries.length);
-        assertEquals("off", depthPref.getValue());
+        assertEquals(3, entries.length);
+        assertEquals("zipdepth", depthPref.getValue());
     }
 
     /**
      * Even when the upstream {@code vr_depth_source_values} array
      * still carries the synthetic test patterns (flat, ramp, blob,
      * eyetest, shifttest), the filter at SettingsFragment.onCreate
-     * must strip them down to {@code off} + {@code model}. The
+     * must strip them down to the real choices. The
      * inflated list is the user-visible surface; the upstream array
      * is internal. We assert the FILTER (the inflated list) rather
      * than the array — the array is allowed to grow in upstream
@@ -189,8 +190,8 @@ public class ManifestAndDepthRegressionTest {
         assertNotNull(values);
         Set<String> inflated = new HashSet<>();
         for (CharSequence v : values) inflated.add(v.toString());
-        assertEquals("Inflated depth list must be exactly {off, model}; got "
-                + inflated, new HashSet<>(Arrays.asList("off", "model")),
+        assertEquals("Inflated depth list must be exactly {zipdepth, model, off}; got "
+                + inflated, new HashSet<>(Arrays.asList("zipdepth", "model", "off")),
                 inflated);
     }
 

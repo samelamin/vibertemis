@@ -1,0 +1,87 @@
+diff --git a/app/src/main/java/com/limelight/Game.java b/app/src/main/java/com/limelight/Game.java
+index 222e2ab7..34457e37 100644
+--- a/app/src/main/java/com/limelight/Game.java
++++ b/app/src/main/java/com/limelight/Game.java
+@@ -89,6 +89,7 @@ import android.widget.TextView;
+ import android.widget.Toast;
+ 
+ import java.io.ByteArrayInputStream;
++import java.lang.ref.WeakReference;
+ import java.lang.reflect.InvocationTargetException;
+ import java.lang.reflect.Method;
+ import java.security.cert.CertificateException;
+@@ -133,6 +134,30 @@ public class Game extends Activity implements SurfaceHolder.Callback,
+     private boolean displayedFailureDialog = false;
+     private boolean connecting = false;
+     private boolean connected = false;
++
++    // The stream that is up, if any. Opening the app from the headset's library
++    // starts the launcher in a task of its own, since an immersive stream runs
++    // in a separate one, so without this the user was handed a second
++    // connection rather than the one still running behind the home screen.
++    private static volatile WeakReference<Game> liveStream = new WeakReference<>(null);
++
++    /**
++     * The activity class of a stream still up behind the launcher, or null
++     * when there is none to go back to. Main thread only.
++     */
++    public static Class<? extends Game> liveStreamActivity() {
++        Game game = liveStream.get();
++        if (game == null || game.isFinishing() || game.isDestroyed() || game.conn == null) {
++            return null;
++        }
++        return game.getClass();
++    }
++
++    /** The task that stream runs in, or -1 when there is none. Main thread only. */
++    public static int liveStreamTaskId() {
++        Game game = liveStream.get();
++        return liveStreamActivity() != null ? game.getTaskId() : -1;
++    }
+     private boolean autoEnterPip = false;
+     private boolean surfaceCreated = false;
+     private boolean attemptedConnection = false;
+@@ -1236,6 +1261,9 @@ public class Game extends Activity implements SurfaceHolder.Callback,
+         super.onDestroy();
+ 
+         FileLog.event("session ended");
++        if (liveStream.get() == this) {
++            liveStream.clear();
++        }
+ 
+         // The stream may still have been starting up when this activity went
+         // away, in which case the normal decoder teardown never runs and the
+@@ -1334,6 +1362,15 @@ public class Game extends Activity implements SurfaceHolder.Callback,
+         return doffHold != null && doffMayHold() && doffHold.activityStopped(why);
+     }
+ 
++    // The launcher bringing the user back to a stream already up. The intent is
++    // only the way back to this instance and is not a new launch, so it is not
++    // taken as this activity's intent and nothing is restarted.
++    @Override
++    protected void onNewIntent(Intent intent) {
++        super.onNewIntent(intent);
++        FileLog.event("brought back to the running stream from the launcher");
++    }
++
+     @Override
+     protected void onStart() {
+         super.onStart();
+@@ -2517,6 +2554,9 @@ public class Game extends Activity implements SurfaceHolder.Callback,
+     }
+ 
+     private void stopConnection() {
++        if (liveStream.get() == this) {
++            liveStream.clear();
++        }
+         if (connecting || connected) {
+             connecting = connected = false;
+             updatePipAutoEnter();
+@@ -2843,6 +2883,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
+             audioRenderer = new AndroidAudioRenderer(Game.this, prefConfig.enableAudioFx,
+                     prefConfig.vrVirtualSurround, this::vrHeadYaw);
+             conn.start(audioRenderer, decoderRenderer, Game.this);
++            liveStream = new WeakReference<>(Game.this);
+         }
+     }
+ 

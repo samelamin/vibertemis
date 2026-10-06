@@ -31,7 +31,7 @@ EXPECTED_UPSTREAM="${REPO_ROOT}/build/quest/upstream"
 OVERLAY="${REPO_ROOT}/quest/overlay"
 PATCHES_DIR="${REPO_ROOT}/quest/patches"
 
-MOONLIGHT_PIN="ae173a4966bb68af749d45ed87c8b9737a0ce570"
+MOONLIGHT_PIN="686429ab8c91ad1c8bb128a7c7e3188802c3bcf4"
 
 log() { printf '[overlay] %s\n' "$*" >&2; }
 die() { printf '[overlay] ERROR: %s\n' "$*" >&2; exit 1; }
@@ -80,10 +80,8 @@ ACTUAL_HEAD="$(cd "${UPSTREAM}" && git rev-parse HEAD)"
     app/proguard-rules.pro \
     app/src/main/AndroidManifest.xml \
     app/src/main/java/com/limelight/Game.java \
-    app/src/main/java/com/limelight/binding/video/XrRenderer.java \
     app/src/main/java/com/limelight/preferences/PreferenceConfiguration.java \
     app/src/main/java/com/limelight/preferences/StreamSettings.java \
-    app/src/main/jni/xr-renderer/xr_renderer.c \
     app/src/main/res/layout/activity_stream_settings.xml \
     app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml \
     app/src/main/res/xml/preferences.xml \
