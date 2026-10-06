@@ -6,8 +6,8 @@ namespace VibertemisManager.Core.Update;
 public sealed record ReleaseAsset(string Filename, Uri Url, long Bytes, string Sha256);
 public sealed record SignedRelease(long Sequence, string Version, string NativeProtocol, ReleaseAsset Windows)
 {
-    public const long CurrentSequence = 13;
-    public const string CurrentVersion = "0.1.0.13";
+    public const long CurrentSequence = 14;
+    public const string CurrentVersion = "0.1.0.14";
     public const string Channel = "quest-preview";
     public const string Protocol = "20.14.1-vibertemis-pyro.1";
     public const string Repository = "https://github.com/samelamin/vibertemis/releases/download/";

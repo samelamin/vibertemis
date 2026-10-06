@@ -1,7 +1,7 @@
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $repo = (Resolve-Path "$PSScriptRoot/../..").Path
-$setup = (Get-Item "$repo/build/installer/VibertemisVR-HostManager-Setup-0.1.0.13.exe").FullName
+$setup = (Get-Item "$repo/build/installer/VibertemisVR-HostManager-Setup-0.1.0.14.exe").FullName
 $root = Join-Path $env:RUNNER_TEMP ('Vibertemis smoke ü ' + [Guid]::NewGuid().ToString('N'))
 $dest = Join-Path $root 'Custom VR install'
 New-Item -ItemType Directory -Path $root | Out-Null

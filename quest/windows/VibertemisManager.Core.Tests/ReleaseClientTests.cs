@@ -128,7 +128,7 @@ public class ReleaseClientTests : IDisposable
         _handler.Map(SignedRelease.Repository + SignedRelease.TagPrefix + "0.1.0.7/quest-update.json.sig", Sign(older));
         var ex = await Assert.ThrowsAsync<System.Security.Cryptography.CryptographicException>(
             () => _client.CheckAsync(CancellationToken.None, publicKeyOverride: _trustKey));
-        Assert.Equal("0.1.0.13", SignedRelease.CurrentVersion);
+        Assert.Equal("0.1.0.14", SignedRelease.CurrentVersion);
         // Newest invalid must trigger; we should never have silently
         // downgraded to 0.1.0.7.
         Assert.DoesNotContain(_handler.Requests,
