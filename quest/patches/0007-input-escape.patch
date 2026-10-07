@@ -66,3 +66,39 @@
      XrSwapchain hintSwapchain;
      uint32_t hintImageCount;
      XrSwapchainImageOpenGLESKHR* hintImages;
+--- a/app/src/main/java/com/limelight/binding/video/XrRenderer.java
++++ b/app/src/main/java/com/limelight/binding/video/XrRenderer.java
+@@ -1354,7 +1354,11 @@
+         // one way the controllers switch themselves
+         nativeSetGamepad(nativeCtx, prefs.vrGamepadToggle, prefs.deadzonePercentage);
+         nativeSetControllerModel(nativeCtx, prefs.vrControllerModel);
+-        final boolean handHint = prefs.vrHandTracking && !prefs.vrHandLockHintSeen;
++        // Vibertemis: the hint is a modal sheet only a pinch closes, and on a
++        // Quest 3 it came up after a headset off and on with no pinch reaching
++        // it, leaving nothing in the session usable. The triple pinch is
++        // described in the Hand tracking setting instead.
++        final boolean handHint = false;
+         nativeSetHandHint(nativeCtx, handHint);
+ 
+         final int startRoom = cell;
+--- a/app/src/main/jni/xr-renderer/xr_session.c
++++ b/app/src/main/jni/xr-renderer/xr_session.c
+@@ -659,6 +659,18 @@
+             displayFocused(ctx);
+             break;
+         case XR_SESSION_STATE_STOPPING:
++            // Vibertemis: the headset came off or the app went to the
++            // background. Whatever comes back, the same session after a hold
++            // or the user reconnecting, starts with the hands usable rather
++            // than locked out by a triple pinch made before they left, which
++            // they may no longer remember making
++            if (ctx->handsLocked) {
++                LOGEV("hands unlocked as the session stopped");
++            }
++            ctx->handsLocked = 0;
++            for (int h = 0; h < HAND_COUNT; h++) {
++                triplePinchReset(&ctx->triplePinch[h]);
++            }
+             checkXr(xrEndSession(ctx->session), "xrEndSession");
+             ctx->sessionRunning = 0;
+             ctx->sessionEnds++;
