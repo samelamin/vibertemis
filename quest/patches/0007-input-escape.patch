@@ -1,6 +1,25 @@
+diff --git a/app/src/main/java/com/limelight/binding/video/XrRenderer.java b/app/src/main/java/com/limelight/binding/video/XrRenderer.java
+index 52cdb828..0c582915 100644
+--- a/app/src/main/java/com/limelight/binding/video/XrRenderer.java
++++ b/app/src/main/java/com/limelight/binding/video/XrRenderer.java
+@@ -1354,7 +1354,11 @@ public class XrRenderer implements SurfaceTexture.OnFrameAvailableListener {
+         // one way the controllers switch themselves
+         nativeSetGamepad(nativeCtx, prefs.vrGamepadToggle, prefs.deadzonePercentage);
+         nativeSetControllerModel(nativeCtx, prefs.vrControllerModel);
+-        final boolean handHint = prefs.vrHandTracking && !prefs.vrHandLockHintSeen;
++        // Vibertemis: the hint is a modal sheet only a pinch closes, and on a
++        // Quest 3 it came up after a headset off and on with no pinch reaching
++        // it, leaving nothing in the session usable. The triple pinch is
++        // described in the Hand tracking setting instead.
++        final boolean handHint = false;
+         nativeSetHandHint(nativeCtx, handHint);
+ 
+         final int startRoom = cell;
+diff --git a/app/src/main/jni/xr-renderer/xr_input.c b/app/src/main/jni/xr-renderer/xr_input.c
+index 5833697c..402abf4b 100644
 --- a/app/src/main/jni/xr-renderer/xr_input.c
 +++ b/app/src/main/jni/xr-renderer/xr_input.c
-@@ -1562,9 +1562,23 @@
+@@ -1562,9 +1562,23 @@ static void readSources(XrCtx* ctx, InputFrame* f) {
                  int bound = (ctx->extHandClick && ctx->onExtHands[h])
                          || (ctx->msftHandClick && ctx->onMsftHands[h]);
                  ctx->pinchSrc[h] = pinchSource(bound, ctx->handAim, ctx->jointTracking);
@@ -25,7 +44,7 @@
                  ctx->triggerDown[h] = ctx->pinchDown[h];
                  sayPinchSource(ctx, h);
              }
-@@ -2539,6 +2553,7 @@
+@@ -2539,6 +2553,7 @@ static void updateHintOpening(XrCtx* ctx, InputFrame* f) {
      }
      ctx->hintOpen = 1;
      ctx->hintShown = 1;
@@ -33,7 +52,7 @@
      ctx->hintHoverZone = HINT_ZONE_NONE;
      ctx->hintPose = handHintPose(ctx, &ctx->hintW, &ctx->hintH);
      // The press that puts it away wants a ray to aim with
-@@ -2551,6 +2566,11 @@
+@@ -2551,6 +2566,11 @@ static void updateHintOpening(XrCtx* ctx, InputFrame* f) {
  // asks is to be read, so any press puts it away: on "Don't show this again"
  // for good, anywhere else for this session.
  static void updateHandHint(XrCtx* ctx, InputFrame* f) {
@@ -45,9 +64,40 @@
      f->hover = HOVER_HINT;
      f->hand = -1;
      int zone = HINT_ZONE_NONE;
+@@ -3322,6 +3342,28 @@ static void updatePad(XrCtx* ctx) {
+         setPadMode(ctx, !ctx->padMode, padShortcutName(ctx->padShortcut));
+     }
+ 
++    // Vibertemis: in pointer mode the left controller's Options (menu) button
++    // opens and closes the settings panel, the way a Quest app's menu button
++    // is expected to. In gamepad mode it stays the game's Start. A press made
++    // with the grip down belongs to the gamepad shortcut instead.
++    int optionsNow = raw[HAND_LEFT].menu;
++    if (!ctx->padMode && !menuGrip && optionsNow && !ctx->optionsMenuWas
++            && !ctx->padGrip[HAND_LEFT]) {
++        if (ctx->cogOpen) {
++            ctx->cogOpen = 0;
++            LOGEV("settings panel closed by the Options button");
++        }
++        else if (!ctx->pickerOpen && !ctx->exitConfirmOpen && !ctx->reportOpen
++                && !ctx->hintOpen && !ctx->kofiOpen) {
++            ctx->cogOpen = 1;
++            ctx->cogTab = COG_TAB_SCREEN;
++            ctx->cogPose = cogPanelPose(ctx, &ctx->cogW, &ctx->cogH);
++            ctx->pointerAwake = 1;
++            LOGEV("settings panel opened by the Options button");
++        }
++    }
++    ctx->optionsMenuWas = optionsNow;
++
+     PadState s;
+     padMap(&seen[HAND_LEFT], &seen[HAND_RIGHT], ctx->padGrip, startOk, ctx->padDeadzone, &s);
+     int plugged = padPlugged(ctx);
+diff --git a/app/src/main/jni/xr-renderer/xr_renderer.h b/app/src/main/jni/xr-renderer/xr_renderer.h
+index cc04f3ad..37d5c625 100644
 --- a/app/src/main/jni/xr-renderer/xr_renderer.h
 +++ b/app/src/main/jni/xr-renderer/xr_renderer.h
-@@ -195,6 +195,9 @@
+@@ -195,6 +195,9 @@ static inline int64_t nowNs(void) {
  // in as a controller is put down does not bring it up.
  #define HINT_WIDTH_FRAC 0.40f
  #define HINT_POINTING_NS 500000000L
@@ -57,7 +107,7 @@
  
  // The Ko-fi sheet, over the middle of the picture like the hint and as wide
  #define KOFI_WIDTH_FRAC 0.40f
-@@ -1107,6 +1110,8 @@
+@@ -1107,6 +1110,8 @@ typedef struct {
      int hintShown;
      int hintOpen;
      int64_t hintPointingNs;
@@ -66,24 +116,20 @@
      XrSwapchain hintSwapchain;
      uint32_t hintImageCount;
      XrSwapchainImageOpenGLESKHR* hintImages;
---- a/app/src/main/java/com/limelight/binding/video/XrRenderer.java
-+++ b/app/src/main/java/com/limelight/binding/video/XrRenderer.java
-@@ -1354,7 +1354,11 @@
-         // one way the controllers switch themselves
-         nativeSetGamepad(nativeCtx, prefs.vrGamepadToggle, prefs.deadzonePercentage);
-         nativeSetControllerModel(nativeCtx, prefs.vrControllerModel);
--        final boolean handHint = prefs.vrHandTracking && !prefs.vrHandLockHintSeen;
-+        // Vibertemis: the hint is a modal sheet only a pinch closes, and on a
-+        // Quest 3 it came up after a headset off and on with no pinch reaching
-+        // it, leaving nothing in the session usable. The triple pinch is
-+        // described in the Hand tracking setting instead.
-+        final boolean handHint = false;
-         nativeSetHandHint(nativeCtx, handHint);
- 
-         final int startRoom = cell;
+@@ -1258,6 +1263,8 @@ typedef struct {
+     // panels to be put away now the controllers have gone to the pad; and
+     // what the log last said about it
+     int padMode;
++    // The left menu (Options) button as last read, for its press in pointer mode
++    int optionsMenuWas;
+     float padDeadzone;
+     int padShortcut;
+     PadToggle padToggle;
+diff --git a/app/src/main/jni/xr-renderer/xr_session.c b/app/src/main/jni/xr-renderer/xr_session.c
+index ce2a0217..0df084be 100644
 --- a/app/src/main/jni/xr-renderer/xr_session.c
 +++ b/app/src/main/jni/xr-renderer/xr_session.c
-@@ -659,6 +659,18 @@
+@@ -659,6 +659,18 @@ static void handleSessionStateChange(XrCtx* ctx, XrSessionState newState) {
              displayFocused(ctx);
              break;
          case XR_SESSION_STATE_STOPPING:

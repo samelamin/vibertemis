@@ -287,10 +287,11 @@ public class QuestSettingsActivity extends Activity {
     private void renderControls() {
         heading("Controls", "How Touch controllers and gamepads behave.");
         LinearLayout group = group();
-        toggle(group, "checkbox_vr_pointer", true, "Controllers as a mouse",
-                "Point and click on the virtual screen");
+        toggle(group, "checkbox_vr_pointer", true, "Point and click",
+                "Controllers and hands point at the screen and click. Off, nothing points");
         divider(group);
-        toggle(group, "checkbox_vr_gaze", true, "Look to point", "Aim the pointer with your head");
+        toggle(group, "checkbox_vr_gaze", true, "Look to point",
+                "Aim with your eyes on headsets with eye tracking (not Quest 3)");
         divider(group);
         toggle(group, "checkbox_mouse_emulation", true, "Mouse with a gamepad",
                 "Hold Start to move the mouse with the stick");
