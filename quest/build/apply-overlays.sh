@@ -82,6 +82,8 @@ ACTUAL_HEAD="$(cd "${UPSTREAM}" && git rev-parse HEAD)"
     app/src/main/java/com/limelight/Game.java \
     app/src/main/java/com/limelight/preferences/PreferenceConfiguration.java \
     app/src/main/java/com/limelight/preferences/StreamSettings.java \
+    app/src/main/jni/xr-renderer/xr_input.c \
+    app/src/main/jni/xr-renderer/xr_renderer.h \
     app/src/main/res/layout/activity_stream_settings.xml \
     app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml \
     app/src/main/res/xml/preferences.xml \

@@ -1,0 +1,68 @@
+--- a/app/src/main/jni/xr-renderer/xr_input.c
++++ b/app/src/main/jni/xr-renderer/xr_input.c
+@@ -1562,9 +1562,23 @@
+                 int bound = (ctx->extHandClick && ctx->onExtHands[h])
+                         || (ctx->msftHandClick && ctx->onMsftHands[h]);
+                 ctx->pinchSrc[h] = pinchSource(bound, ctx->handAim, ctx->jointTracking);
++                int pinchWas = ctx->pinchDown[h];
+                 ctx->pinchDown[h] = pinchStep(ctx->pinchSrc[h], ctx->onExtHands[h],
+-                                              ctx->pinchDown[h], value, ctx->aimPinch[h],
++                                              pinchWas, value, ctx->aimPinch[h],
+                                               ctx->tipsValid[h], ctx->tipGap[h]);
++                // The runtime's value has been seen to stay at rest on a Quest
++                // 3 after the headset came off and went back on, with the hand
++                // still tracked, which left no click and no triple pinch to
++                // unlock with. So while the value is not pressing, the
++                // runtime's own pinching flag counts too, or the joints where
++                // it gives no flag
++                if (ctx->pinchSrc[h] == PINCH_SRC_VALUE && !ctx->pinchDown[h]) {
++                    int fallback = ctx->handAim ? PINCH_SRC_AIM
++                            : (ctx->jointTracking ? PINCH_SRC_JOINTS : PINCH_SRC_NONE);
++                    ctx->pinchDown[h] = pinchStep(fallback, 0, pinchWas, value,
++                                                  ctx->aimPinch[h], ctx->tipsValid[h],
++                                                  ctx->tipGap[h]);
++                }
+                 ctx->triggerDown[h] = ctx->pinchDown[h];
+                 sayPinchSource(ctx, h);
+             }
+@@ -2539,6 +2553,7 @@
+     }
+     ctx->hintOpen = 1;
+     ctx->hintShown = 1;
++    ctx->hintOpenedNs = f->now;
+     ctx->hintHoverZone = HINT_ZONE_NONE;
+     ctx->hintPose = handHintPose(ctx, &ctx->hintW, &ctx->hintH);
+     // The press that puts it away wants a ray to aim with
+@@ -2551,6 +2566,11 @@
+ // asks is to be read, so any press puts it away: on "Don't show this again"
+ // for good, anywhere else for this session.
+ static void updateHandHint(XrCtx* ctx, InputFrame* f) {
++    // Nothing that cannot press may be left facing a modal it cannot close
++    if (f->now - ctx->hintOpenedNs >= HINT_TIMEOUT_NS) {
++        closeHandHint(ctx, f, 0, "its timeout");
++        return;
++    }
+     f->hover = HOVER_HINT;
+     f->hand = -1;
+     int zone = HINT_ZONE_NONE;
+--- a/app/src/main/jni/xr-renderer/xr_renderer.h
++++ b/app/src/main/jni/xr-renderer/xr_renderer.h
+@@ -195,6 +195,9 @@
+ // in as a controller is put down does not bring it up.
+ #define HINT_WIDTH_FRAC 0.40f
+ #define HINT_POINTING_NS 500000000L
++// The hint is only there to be read, so it goes by itself after this long
++// rather than holding everything behind it when no press reaches it
++#define HINT_TIMEOUT_NS 10000000000L
+ 
+ // The Ko-fi sheet, over the middle of the picture like the hint and as wide
+ #define KOFI_WIDTH_FRAC 0.40f
+@@ -1107,6 +1110,8 @@
+     int hintShown;
+     int hintOpen;
+     int64_t hintPointingNs;
++    // When the hint opened, for HINT_TIMEOUT_NS
++    int64_t hintOpenedNs;
+     XrSwapchain hintSwapchain;
+     uint32_t hintImageCount;
+     XrSwapchainImageOpenGLESKHR* hintImages;
