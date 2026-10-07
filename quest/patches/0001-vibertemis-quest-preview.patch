@@ -21,8 +21,8 @@ index c7af89f9..7124e46e 100644
 +        // Vibertemis XR Preview test build identity. versionCode is the
 +        // gradle-internal integer; the versionName string is the one
 +        // surfaced to the user in the launcher.
-+        versionName "0.1.0-quest-preview.14"
-+        versionCode = 14
++        versionName "0.1.0-quest-preview.15"
++        versionCode = 15
  
          // Generate native debug symbols to allow Google Play to symbolicate our native crashes
          ndk.debugSymbolLevel = 'FULL'

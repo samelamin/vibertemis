@@ -18,9 +18,9 @@
     <AssemblyTitle>VibertemisVR Host Manager</AssemblyTitle>
     <Product>VibertemisVR Host Manager</Product>
     <Company>Vibertemis</Company>
-    <Version>0.1.0.14</Version>
-    <FileVersion>0.1.0.14</FileVersion>
-    <InformationalVersion>0.1.0.14-quest-preview</InformationalVersion>
+    <Version>0.1.0.15</Version>
+    <FileVersion>0.1.0.15</FileVersion>
+    <InformationalVersion>0.1.0.15-quest-preview</InformationalVersion>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\VibertemisManager.Core\VibertemisManager.Core.csproj" />
