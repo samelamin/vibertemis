@@ -1578,6 +1578,7 @@ jobs:
 
     - name: Verify Flatpak build result
       run: |
+        flatpak build flatpak-build /app/libexec/tst_virtualdisplay
         flatpak build flatpak-build /app/libexec/artemis-codec-probe
         flatpak build flatpak-build test -x /app/bin/artemis
         flatpak build flatpak-build appstreamcli validate --no-net /app/share/metainfo/com.artemisdesktop.ArtemisDesktopDev.metainfo.xml

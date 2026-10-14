@@ -6,12 +6,15 @@ import SdlGamepadKeyNavigation 1.0
 import Session 1.0
 
 Item {
+    id: streamSegue
     property Session session
     property string appName
     property string stageText : isResume ? qsTr("Resuming %1...").arg(appName) :
                                            qsTr("Starting %1...").arg(appName)
     property bool isResume : false
     property bool quitAfter : false
+    property string recoveryText: ""
+    property bool waitingForRecovery: false
 
     function stageStarting(stage)
     {
@@ -54,18 +57,35 @@ Item {
             displayLaunchError(text)
             return
         }
-
-        window.visible = true
-        streamSegueRecoveryDialog.reconnectAvailable = true
-        streamSegueRecoveryDialog.reconnectSession = session
-        streamSegueRecoveryDialog.text = text + "\n\n" + qsTr("Resume the existing host session without starting a second copy of the app?")
-        streamSegueRecoveryDialog.open()
+        // The streaming thread still owns SDL here. Only show the dialog
+        // after sessionFinished confirms all connection resources are free.
+        recoveryText = text
     }
 
-    function reconnectStarted()
+    function resumeSession()
     {
-        streamSegueRecoveryDialog.visible = false
-        window.visible = false
+        if (!waitingForRecovery || !session)
+            return
+        var freshSession = session.createResumeSession()
+        if (!freshSession)
+            return
+        waitingForRecovery = false
+        var component = Qt.createComponent("StreamSegue.qml")
+        var nextSegue = component.createObject(stackView, {
+            "appName": appName, "session": freshSession, "isResume": true
+        })
+        stackView.replace(stackView.currentItem, nextSegue, StackView.Immediate)
+    }
+
+    function dismissRecovery()
+    {
+        if (!waitingForRecovery)
+            return
+        waitingForRecovery = false
+        if (session) session.cancelSession()
+        session = null
+        stackView.pop()
+        window.visible = true
     }
 
     function displayLaunchWarning(text)
@@ -96,8 +116,18 @@ Item {
             streamSegueErrorDialog.text += "\n\n" + qsTr("This PC's Internet connection is blocking Vibertemis. Streaming over the Internet may not work while connected to this network.")
         }
 
-        // Re-enable GUI gamepad usage now
+        // Re-enable GUI gamepad usage only after SDL input is destroyed.
         SdlGamepadKeyNavigation.enable()
+
+        if (recoveryText && session && session.recoveryAvailable()) {
+            waitingForRecovery = true
+            stageSpinner.running = false
+            window.visible = true
+            streamSegueRecoveryDialog.recoveryOwner = streamSegue
+            streamSegueRecoveryDialog.text = recoveryText
+            streamSegueRecoveryDialog.open()
+            return
+        }
 
         if (quitAfter) {
             if (streamSegueErrorDialog.text) {
@@ -131,18 +161,27 @@ Item {
     {
         // Garbage collect the Session object since it's pretty heavyweight
         // and keeps other libraries (like SDL_TTF) around until it is deleted.
-        session = null
-        gc()
+        if (!waitingForRecovery) {
+            session = null
+            gc()
+        }
     }
 
     StackView.onDeactivating: {
-        session.cancelRetry()
+        if (session) session.cancelRetry()
 
         // Show the toolbar again when popped off the stack
         toolBar.visible = true
 
         // Re-enable GUI gamepad usage now
         SdlGamepadKeyNavigation.enable()
+    }
+
+    Component.onDestruction: {
+        if (streamSegueRecoveryDialog.recoveryOwner === streamSegue) {
+            streamSegueRecoveryDialog.recoveryOwner = null
+            streamSegueRecoveryDialog.close()
+        }
     }
 
     StackView.onActivated: {
@@ -155,7 +194,6 @@ Item {
         session.connectionStarted.connect(connectionStarted)
         session.displayLaunchError.connect(displayLaunchError)
         session.displayLaunchRecovery.connect(displayLaunchRecovery)
-        session.reconnectStarted.connect(reconnectStarted)
         session.displayLaunchWarning.connect(displayLaunchWarning)
         session.quitStarting.connect(quitStarting)
         session.sessionFinished.connect(sessionFinished)

@@ -23,7 +23,6 @@
 #define REQUEST_TIMEOUT_MS 5000
 #define LAUNCH_TIMEOUT_MS 120000
 #define RESUME_TIMEOUT_MS 30000
-#define QUIT_TIMEOUT_MS 30000
 
 NvHTTP::NvHTTP(NvAddress address, uint16_t httpsPort, QSslCertificate serverCert) :
     m_ServerCert(serverCert)
@@ -292,22 +291,22 @@ NvHTTP::startApp(QString verb,
 }
 
 void
-NvHTTP::quitApp()
+NvHTTP::quitApp(int timeoutMs)
 {
     QString response =
             openConnectionToString(m_BaseUrlHttps,
                                    "cancel",
                                    nullptr,
-                                   QUIT_TIMEOUT_MS);
+                                   timeoutMs);
 
     qInfo() << "Quit response received";
 
     // Throws if the request failed
     verifyResponseStatus(response);
 
-    // Newer GFE versions will just return success even if quitting fails
-    // if we're not the original requester.
-    if (getCurrentGame(getServerInfo(NvHTTP::NVLL_ERROR)) != 0) {
+    // Verify that the host actually stopped. Keep verification bounded too
+    // when the caller requested a short, best-effort client exit.
+    if (getCurrentGame(getServerInfo(NvHTTP::NVLL_ERROR, timeoutMs < QUIT_TIMEOUT_MS)) != 0) {
         // Generate a synthetic GfeResponseException letting the caller know
         // that they can't kill someone else's stream.
         throw GfeHttpResponseException(599, "");

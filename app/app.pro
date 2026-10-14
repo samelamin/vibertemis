@@ -670,3 +670,6 @@ DEFINES += VIBERTEMIS_APPLICATION_ID=\\\"$$VIBERTEMIS_APPLICATION_ID\\\"
 isEmpty(VBT_DIAG_ENDPOINT): VBT_DIAG_ENDPOINT = $$(VBT_DIAG_ENDPOINT)
 isEmpty(VBT_DIAG_ENDPOINT): VBT_DIAG_ENDPOINT = https://crash-endpoint.crash-endpoint.workers.dev/v1/report
 DEFINES += VBT_DIAG_ENDPOINT=\\\"$$VBT_DIAG_ENDPOINT\\\"
+
+SOURCES += streaming/sessionrecovery.cpp
+HEADERS += streaming/sessionrecovery.h

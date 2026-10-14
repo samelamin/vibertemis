@@ -47,7 +47,6 @@
 #define SDL_CODE_GAMECONTROLLER_SET_MOTION_EVENT_STATE 103
 #define SDL_CODE_GAMECONTROLLER_SET_CONTROLLER_LED 104
 #define SDL_CODE_GAMECONTROLLER_SET_ADAPTIVE_TRIGGERS 105
-#define SDL_CODE_RECONNECT_SESSION 106
 
 #include <openssl/rand.h>
 
@@ -61,6 +60,7 @@
 #include <QCursor>
 #include <QWindow>
 #include <QScreen>
+#include <QQmlEngine>
 
 #define CONN_TEST_SERVER "qt.conntest.moonlight-stream.org"
 
@@ -139,6 +139,9 @@ void Session::clConnectionTerminated(int errorCode)
         VirtualDisplayLaunchPolicy::shouldSurfaceError(
             errorCode, intentionalLocal, connectionStarted);
 
+    if (!s_ActiveSession->m_Recovery.beginTermination(
+            surfaceRecovery, surfaceRecovery || surfaceError)) return;
+
     const unsigned int portFlags =
         LiGetPortFlagsFromTerminationErrorCode(errorCode);
 
@@ -161,7 +164,7 @@ void Session::clConnectionTerminated(int errorCode)
         s_ActiveSession->m_PortTestResults = 0;
     }
 
-    s_ActiveSession->m_UnexpectedTermination.store(surfaceRecovery);
+    s_ActiveSession->m_UnexpectedTermination.store(surfaceRecovery || surfaceError);
 
     if (surfaceRecovery) {
         QString errorText;
@@ -221,17 +224,12 @@ void Session::clConnectionTerminated(int errorCode)
                     errorCode);
     }
 
-    // Push a quit event to the main loop. The recovery flow relies on the
-    // main thread observing this SDL_QUIT so the deferred cleanup task can
-    // release connection-scoped resources. We push it for every class except
-    // the recovery path, which intentionally keeps the session alive until
-    // the user picks Resume or declines.
-    if (!surfaceRecovery) {
-        SDL_Event event;
-        event.type = SDL_QUIT;
-        event.quit.timestamp = SDL_GetTicks();
-        SDL_PushEvent(&event);
-    }
+    // Recovery must release the SDL thread too. On Linux the Qt thread is
+    // waiting for it, so retaining a dead stream prevents the dialog opening.
+    SDL_Event event = {};
+    event.type = SDL_QUIT;
+    event.quit.timestamp = SDL_GetTicks();
+    SDL_PushEvent(&event);
 }
 
 void Session::clLogMessage(const char* format, ...)
@@ -1497,67 +1495,65 @@ bool Session::validateLaunch(SDL_Window* testWindow)
 class DeferredSessionCleanupTask : public QRunnable
 {
 public:
-    DeferredSessionCleanupTask(Session* session) :
-        m_Session(session) {}
-
+    explicit DeferredSessionCleanupTask(Session* session) : m_Session(session) {}
 private:
-    virtual ~DeferredSessionCleanupTask() override
-    {
-        // Allow another session to start now that we're cleaned up
-        Session::s_ActiveSession = nullptr;
-        Session::s_ActiveSessionSemaphore.release();
-
-        // Notify that the session is ready to be cleaned up
-        emit m_Session->readyForDeletion();
-    }
-
     void run() override
     {
-        // Only quit the running app if our session terminated gracefully
-        bool shouldQuit =
-                !m_Session->m_UnexpectedTermination.load() &&
-                (m_Session->m_Preferences->quitAppAfter ||
-                 m_Session->m_ShouldExitAfterQuit);
-
-        // Notify the UI
-        if (shouldQuit) {
-            emit m_Session->quitStarting();
-        }
-        else {
-            emit m_Session->sessionFinished(m_Session->m_PortTestResults);
-        }
-
-        // The video decoder must already be destroyed, since it could
-        // try to interact with APIs that can only be called between
-        // LiStartConnection() and LiStopConnection().
+        m_Session->m_Recovery.beginCleanup();
         SDL_assert(m_Session->m_VideoDecoder == nullptr);
-
-        // Finish cleanup of the connection state
         LiStopConnection();
+        m_Session->m_ConnectionStarted.store(false);
 
-        // Perform a best-effort app quit
-        if (shouldQuit) {
-            NvHTTP http(m_Session->m_Computer);
-
-            // Logging is already done inside NvHTTP
+        const auto decision = SessionRecovery::cleanupDecision(
+            m_Session->m_UnexpectedTermination.load() || m_Session->m_Recovery.wasInterrupted(),
+            m_Session->m_Preferences->quitAppAfter,
+            m_Session->m_ShouldExitAfterQuit.load());
+        if (decision.quitHost) {
             try {
-                http.quitApp();
+                NvHTTP http(m_Session->m_Computer);
+                // Never cancel another app that replaced ours while asleep.
+                if (VirtualDisplayLaunchPolicy::canResumeExistingHostSession(
+                        m_Session->m_App.id,
+                        NvHTTP::getCurrentGame(http.getServerInfo(NvHTTP::NVLL_ERROR, true)))) {
+                    http.quitApp(decision.exitClient ? 2000 : NvHTTP::QUIT_TIMEOUT_MS);
+                }
             } catch (const GfeHttpResponseException&) {
             } catch (const QtNetworkReplyException&) {
             }
-
-            // Exit the entire program if requested
-            if (m_Session->m_ShouldExitAfterQuit) {
-                QCoreApplication::instance()->quit();
-            }
-
-            // Session is finished now
-            emit m_Session->sessionFinished(m_Session->m_PortTestResults);
         }
     }
 
+    ~DeferredSessionCleanupTask() override
+    {
+        // Neither UI completion nor a new Session may precede connection stop
+        // and release of the exclusive global moonlight-common-c slot.
+        Session::s_ActiveSession = nullptr;
+        Session::s_ActiveSessionSemaphore.release();
+        m_Session->m_Recovery.completeCleanup();
+        QMetaObject::invokeMethod(m_Session, &Session::notifyCleanupComplete,
+                                  Qt::QueuedConnection);
+    }
     Session* m_Session;
 };
+
+void Session::notifyCleanupComplete()
+{
+    // Runs on the Qt thread. Keep C++ ownership through both notifications:
+    // QML may pop its segue and call gc() synchronously from these signals.
+    if (m_ClipboardManager) m_ClipboardManager->disconnect();
+    emit sessionFinished(m_PortTestResults);
+    emit readyForDeletion();
+    const bool exitClient = m_ShouldExitAfterQuit.load();
+    if (m_Recovery.canResume()) {
+        // The recovery segue still holds a JS reference to this descriptor.
+        QQmlEngine::setObjectOwnership(this, QQmlEngine::JavaScriptOwnership);
+    } else {
+        // readyForDeletion may already have collected the JS wrapper while
+        // C++ ownership protected us. Do not depend on a second GC to delete.
+        deleteLater();
+    }
+    if (exitClient) QCoreApplication::quit();
+}
 
 void Session::getWindowDimensions(int& x, int& y,
                                   int& width, int& height)
@@ -1916,14 +1912,7 @@ public:
 // Called in a non-main thread
 bool Session::startConnectionAsync(bool resumeOnly, bool announceRetry)
 {
-    // Reset the resettable cancellation flag at the start of each authorized
-    // attempt. Without this, a previous session that left m_RetryCancellation
-    // set (e.g. StreamSegue cancelRetry() on deactivation after a successful
-    // stream) would silently abort the next one-tap reconnect with a "user
-    // cancelled" outcome. The reset is monotonic within the attempt: any
-    // cancel() that races with us after this point still wins, because we
-    // do not clear cancellation again until the next authorized attempt.
-    m_RetryCancellation.reset();
+    if (m_RetryCancellation.isCancelled()) return false;
 
     if (!resumeOnly) {
         SDL_Delay(1500);
@@ -2058,6 +2047,12 @@ bool Session::startConnectionAsync(bool resumeOnly, bool announceRetry)
         [this, &rtspSessionUrl, &rtspSessionUrlStorage, resumeOnly, &effectiveSops]() {
             try {
                 NvHTTP http(m_Computer);
+                if (resumeOnly && !VirtualDisplayLaunchPolicy::canResumeExistingHostSession(
+                        m_App.id, NvHTTP::getCurrentGame(http.getServerInfo(NvHTTP::NVLL_ERROR)))) {
+                    emit displayLaunchError(tr("The host is no longer running %1. Return to the app list to start it.").arg(m_App.name));
+                    return false;
+                }
+                if (m_RetryCancellation.isCancelled()) return false;
                 http.startApp(resumeOnly || m_Computer->currentGameId != 0
                                   ? "resume"
                                   : "launch",
@@ -2171,6 +2166,7 @@ void Session::cancelRetry()
 
 void Session::markIntentionalDisconnect()
 {
+    m_Recovery.cancel();
     // Local quit shortcuts (gamepad Start+Select+L1+R1, Ctrl+Alt+Shift+Q) and
     // the Quick Menu disconnect/quit buttons all funnel through here. Any
     // clConnectionTerminated callback that follows must be classified as
@@ -2180,105 +2176,27 @@ void Session::markIntentionalDisconnect()
     m_RetryCancellation.cancel();
 }
 
-void Session::requestReconnect()
+Session* Session::createResumeSession()
 {
-    SDL_Event event = {};
-    event.type = SDL_USEREVENT;
-    event.user.code = SDL_CODE_RECONNECT_SESSION;
-    SDL_PushEvent(&event);
+    if (!m_Recovery.takeResume()) return nullptr;
+    auto* resumed = new Session(m_Computer, m_App, m_Preferences);
+    resumed->m_ResumeOnly = true;
+    return resumed;
 }
 
 void Session::cancelSession()
 {
-    m_IntentionalDisconnect.store(true);
-    m_RetryCancellation.cancel();
-    if (m_ConnectionStarted.load()) {
+    markIntentionalDisconnect();
+    if (!m_Recovery.cleaned() && m_ConnectionStarted.load()) {
         SDL_Event event = {};
         event.type = SDL_QUIT;
-        event.quit.timestamp = SDL_GetTicks();
         SDL_PushEvent(&event);
-    }
-}
-
-void Session::reconnectSession()
-{
-    emit reconnectStarted();
-    m_UnexpectedTermination.store(false);
-
-    // A reconnect is by definition a legitimate, user-initiated attempt that
-    // must not be silenced by a leftover intentional-disconnect flag from a
-    // previous quit. Clear it here so a genuine failure during this attempt
-    // still surfaces the recovery dialog.
-    m_IntentionalDisconnect.store(false);
-
-    // Tear down the previous connection's moonlight-common-c state. The
-    // recovery path intentionally skips the SDL_QUIT push that would normally
-    // drive DeferredSessionCleanupTask, so LiStopConnection() has not run yet.
-    // Without it, moonlight-common-c would double-allocate the ENet peer, the
-    // video decoder, and the audio renderer when LiStartConnection() is
-    // called again below.
-    LiStopConnection();
-    m_ConnectionStarted.store(false);
-    m_VirtualDisplayRetrySuppress.store(false);
-    m_RetryCancellation.reset();
-
-    const auto exitAfterReconnectFailure = [this]() {
-        m_UnexpectedTermination.store(true);
-        SDL_Event event = {};
-        event.type = SDL_QUIT;
-        event.quit.timestamp = SDL_GetTicks();
-        SDL_PushEvent(&event);
-    };
-
-    int currentGameId = 0;
-    try {
-        NvHTTP http(m_Computer);
-        currentGameId = NvHTTP::getCurrentGame(
-            http.getServerInfo(NvHTTP::NVLL_ERROR));
-    } catch (const GfeHttpResponseException& e) {
-        emit displayLaunchError(
-            tr("Host returned error while reconnecting: %1").arg(e.toQString()));
-        exitAfterReconnectFailure();
-        return;
-    } catch (const QtNetworkReplyException& e) {
-        emit displayLaunchError(e.toQString());
-        exitAfterReconnectFailure();
-        return;
-    }
-
-    if (!VirtualDisplayLaunchPolicy::canResumeExistingHostSession(
-            m_App.id, currentGameId)) {
-        emit displayLaunchError(
-            tr("The host is no longer running %1. Return to the app list to start it without launching a duplicate session.")
-                .arg(m_App.name));
-        exitAfterReconnectFailure();
-        return;
-    }
-
-    // Run the connection handshake on a worker thread so the main thread can
-    // continue to pump SDL events (the connection callbacks push SDL_USEREVENT
-    // and SDL_QUIT that must be dispatched by us). Calling startConnectionAsync
-    // from the SDL event loop thread would deadlock the callbacks.
-    AsyncConnectionStartThread asyncConnThread(this, true, true);
-    asyncConnThread.start();
-    while (!asyncConnThread.wait(10)) {
-        QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
-        QCoreApplication::sendPostedEvents();
-    }
-
-    // Pump the event loop one last time to pick up anything the worker posted
-    // in its final frame, mirroring the initial launch path above.
-    QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
-    QCoreApplication::sendPostedEvents();
-
-    m_UnexpectedTermination.store(!m_AsyncConnectionSuccess);
-    if (!m_AsyncConnectionSuccess) {
-        exitAfterReconnectFailure();
     }
 }
 
 void Session::handleApplicationExit()
 {
+    m_Recovery.cancel();
     m_IntentionalDisconnect.store(true);
     m_RetryCancellation.cancel();
     if (m_ConnectionStarted.load()) {
@@ -2317,6 +2235,7 @@ void Session::sendWifiKeepaliveIfNeeded()
 
 void Session::setShouldExitAfterQuit()
 {
+    m_Recovery.cancel();
     m_ShouldExitAfterQuit = true;
     m_IntentionalDisconnect.store(true);
     m_RetryCancellation.cancel();
@@ -2342,6 +2261,7 @@ public:
 
 void Session::exec(QWindow* qtWindow)
 {
+    QQmlEngine::setObjectOwnership(this, QQmlEngine::CppOwnership);
     m_QtWindow = qtWindow;
 
     // Use a separate thread for the streaming session on X11 or Wayland
@@ -2383,8 +2303,8 @@ void Session::execInternal()
     // NB: This initializes the SDL video subsystem, so it must be
     // called on the main thread.
     if (!initialize()) {
-        emit sessionFinished(0);
-        emit readyForDeletion();
+        m_Recovery.completeCleanup();
+        QMetaObject::invokeMethod(this, &Session::notifyCleanupComplete, Qt::QueuedConnection);
         return;
     }
 
@@ -2398,7 +2318,7 @@ void Session::execInternal()
     // NB: m_InputHandler must be initialize before starting the connection.
     m_InputHandler = new SdlInputHandler(*m_Preferences, m_StreamConfig.width, m_StreamConfig.height);
 
-    AsyncConnectionStartThread asyncConnThread(this);
+    AsyncConnectionStartThread asyncConnThread(this, m_ResumeOnly);
     if (!m_ThreadedExec) {
         // Kick off the async connection thread while we sit here and pump the event loop
         asyncConnThread.start();
@@ -2636,7 +2556,27 @@ void Session::execInternal()
     // Hijack this thread to be the SDL main thread. We have to do this
     // because we want to suspend all Qt processing until the stream is over.
     SDL_Event event;
+#ifdef Q_OS_LINUX
+    SessionRecovery::SuspendDetector suspendDetector;
+    Uint32 nextSuspendCheck = 0;
+    const auto wokeFromSuspend = [&](bool force = false) {
+        const Uint32 now = SDL_GetTicks();
+        if (!force && !SDL_TICKS_PASSED(now, nextSuspendCheck)) return false;
+        nextSuspendCheck = now + 250;
+        qint64 bootNs = 0, monoNs = 0;
+        const bool valid = SessionRecovery::readSuspendClocks(bootNs, monoNs);
+        return suspendDetector.sample(bootNs, monoNs, valid);
+    };
+    wokeFromSuspend(true); // Establish a baseline even if the offset is zero.
+#endif
     for (;;) {
+#ifdef Q_OS_LINUX
+        if (wokeFromSuspend() && m_Recovery.beginTermination(true)) {
+            m_UnexpectedTermination.store(true);
+            emit displayLaunchRecovery(tr("Steam Deck woke from sleep. Resume your stream?"), true);
+            goto DispatchDeferredCleanup;
+        }
+#endif
 #if SDL_VERSION_ATLEAST(2, 0, 18) && !defined(STEAM_LINK)
         // SDL 2.0.18 has a proper wait event implementation that uses platform
         // support to block on events rather than polling on Windows, macOS, X11,
@@ -2668,6 +2608,14 @@ void Session::execInternal()
             presence.runCallbacks();
             sendWifiKeepaliveIfNeeded();
             continue;
+        }
+#endif
+#ifdef Q_OS_LINUX
+        // A render event queued before sleep must not reuse invalid GPU state.
+        if (wokeFromSuspend(true) && m_Recovery.beginTermination(true)) {
+            m_UnexpectedTermination.store(true);
+            emit displayLaunchRecovery(tr("Steam Deck woke from sleep. Resume your stream?"), true);
+            goto DispatchDeferredCleanup;
         }
 #endif
         switch (event.type) {
@@ -2710,9 +2658,6 @@ void Session::execInternal()
             case SDL_CODE_GAMECONTROLLER_SET_ADAPTIVE_TRIGGERS:
                 m_InputHandler->setAdaptiveTriggers((uint16_t)(uintptr_t)event.user.data1,
                                                     (DualSenseOutputReport *)event.user.data2);
-                break;
-            case SDL_CODE_RECONNECT_SESSION:
-                reconnectSession();
                 break;
             default:
                 SDL_assert(false);
@@ -2983,6 +2928,7 @@ void Session::execInternal()
     }
 
 DispatchDeferredCleanup:
+    m_Recovery.beginCleanup();
     // Uncapture the mouse and hide the window immediately,
     // so we can return to the Qt GUI ASAP.
     m_InputHandler->setCaptureActive(false);
@@ -3037,6 +2983,7 @@ DispatchDeferredCleanup:
     // This must be called after the decoder is deleted, because
     // the renderer may want to interact with the window
     SDL_DestroyWindow(m_Window);
+    m_Window = nullptr;
 
     if (iconSurface != nullptr) {
         SDL_FreeSurface(iconSurface);

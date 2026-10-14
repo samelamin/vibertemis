@@ -1,4 +1,6 @@
 #include <QtTest>
+#include <thread>
+#include "streaming/sessionrecovery.h"
 
 #include <QProcessEnvironment>
 #include <QTemporaryFile>
@@ -14,6 +16,11 @@ class VirtualDisplayLaunchTest : public QObject
     Q_OBJECT
 
 private slots:
+    void suspendDetectorDistinguishesSleepFromScheduling();
+    void suspendDetectorRejectsInvalidSamples();
+    void recoveryRequiresCleanupAndAllowsOneResume();
+    void recoveryCancelWinsAndRepeatedSessionsWork();
+    void cleanupDecisionPreservesQuitAfterFailure();
     void resolveEffectiveSopsForcesNonNvidiaVirtualDisplay();
     void resolveEffectiveSopsDoesNotForceNvidia();
     void resolveEffectiveSopsPreservesGfeUnsupportedModeSafeguard();
@@ -1055,6 +1062,95 @@ void VirtualDisplayLaunchTest::rtspSessionUrlHandoffSurvivesConnectRetriesWithRe
     }
     QCOMPARE(QByteArray(hostInfo.rtspSessionUrl), returnedUrl);
     QCOMPARE(hostInfo.rtspSessionUrl, rtspSessionUrlStorage.constData());
+}
+
+void VirtualDisplayLaunchTest::suspendDetectorDistinguishesSleepFromScheduling()
+{
+    SessionRecovery::SuspendDetector detector;
+    // Zero is a valid offset. A long stall advances both clocks equally.
+    QVERIFY(!detector.sample(0, 0));
+    QVERIFY(!detector.sample(30000000000LL, 30000000000LL));
+    // A timespec second boundary is ordinary elapsed time, not an underflow.
+    QVERIFY(!detector.sample(30999000000LL, 30999000000LL));
+    QVERIFY(!detector.sample(31001000000LL, 31001000000LL));
+    QVERIFY(detector.sample(37001000000LL, 32001000000LL));
+    QVERIFY(!detector.sample(38001000000LL, 33001000000LL));
+    QVERIFY(detector.sample(45001000000LL, 34001000000LL));
+}
+
+void VirtualDisplayLaunchTest::suspendDetectorRejectsInvalidSamples()
+{
+    SessionRecovery::SuspendDetector detector;
+    QVERIFY(!detector.sample(0, 0));
+    QVERIFY(!detector.sample(-1, -1, false));
+    QVERIFY(!detector.sample(10000000000LL, 1000000000LL)); // new baseline
+    QVERIFY(!detector.sample(0, 100));
+    QVERIFY(!detector.sample(0, 0)); // reset clock, no wake
+    QVERIFY(!detector.sample(500000000LL, 0)); // sub-threshold drift
+}
+
+void VirtualDisplayLaunchTest::recoveryRequiresCleanupAndAllowsOneResume()
+{
+    SessionRecovery::RecoveryGate gate;
+    QVERIFY(!gate.takeResume());
+    QVERIFY(gate.beginTermination(true));
+    QVERIFY(!gate.beginTermination(true));
+    QVERIFY(!gate.takeResume());
+    gate.beginCleanup();
+    QVERIFY(!gate.takeResume());
+    gate.completeCleanup();
+    QVERIFY(gate.canResume());
+    std::atomic<int> winners{0};
+    auto take = [&] { if (gate.takeResume()) ++winners; };
+    std::thread first(take), second(take);
+    first.join(); second.join();
+    QCOMPARE(winners.load(), 1);
+    QVERIFY(!gate.canResume());
+    QVERIFY(!gate.takeResume());
+}
+
+void VirtualDisplayLaunchTest::recoveryCancelWinsAndRepeatedSessionsWork()
+{
+    SessionRecovery::RecoveryGate cancelled;
+    QVERIFY(cancelled.beginTermination(true));
+    cancelled.cancel();
+    cancelled.beginCleanup();
+    cancelled.completeCleanup();
+    QVERIFY(!cancelled.canResume());
+    QVERIFY(!cancelled.takeResume());
+
+    SessionRecovery::RecoveryGate normal;
+    normal.beginCleanup();
+    QVERIFY(!normal.beginTermination(true)); // late callback cannot post SDL_QUIT
+    normal.completeCleanup();
+    QVERIFY(!normal.canResume());
+    QVERIFY(!normal.wasInterrupted());
+    SessionRecovery::RecoveryGate earlyFailure;
+    QVERIFY(earlyFailure.beginTermination(false, true));
+    QVERIFY(earlyFailure.wasInterrupted());
+    QVERIFY(!SessionRecovery::cleanupDecision(earlyFailure.wasInterrupted(), true, false).quitHost);
+
+    for (int cycle = 0; cycle < 5; ++cycle) {
+        SessionRecovery::RecoveryGate fresh;
+        QVERIFY(fresh.beginTermination(true));
+        fresh.beginCleanup();
+        fresh.completeCleanup();
+        QVERIFY(fresh.takeResume()); // every new Session may recover again
+    }
+}
+
+void VirtualDisplayLaunchTest::cleanupDecisionPreservesQuitAfterFailure()
+{
+    for (bool unexpected : {false, true}) {
+        for (bool preference : {false, true}) {
+            const auto quit = SessionRecovery::cleanupDecision(unexpected, preference, true);
+            QVERIFY(quit.exitClient);
+            QVERIFY(quit.quitHost);
+            const auto disconnect = SessionRecovery::cleanupDecision(unexpected, preference, false);
+            QVERIFY(!disconnect.exitClient);
+            QCOMPARE(disconnect.quitHost, !unexpected && preference);
+        }
+    }
 }
 
 QTEST_GUILESS_MAIN(VirtualDisplayLaunchTest)

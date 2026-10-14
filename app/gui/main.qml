@@ -822,24 +822,34 @@ ApplicationWindow {
 
     NavigableMessageDialog {
         id: streamSegueRecoveryDialog
+        modal: true
+        property var recoveryOwner: null
+        standardButtons: Dialog.Yes | Dialog.No
 
-        property bool reconnectAvailable: false
-        property var reconnectSession: null
-        standardButtons: reconnectAvailable ? Dialog.Yes | Dialog.No : Dialog.Ok
-
+        onAboutToShow: {
+            footer.standardButton(Dialog.Yes).text = qsTr("Resume")
+            footer.standardButton(Dialog.No).text = qsTr("Disconnect")
+        }
         onAccepted: {
-            window.visible = false
-            reconnectSession.requestReconnect()
+            var owner = recoveryOwner
+            recoveryOwner = null
+            if (owner) owner.resumeSession()
         }
-
         onRejected: {
-            window.visible = false
-            reconnectSession.cancelSession()
+            var owner = recoveryOwner
+            recoveryOwner = null
+            if (owner) owner.dismissRecovery()
         }
-
         onClosed: {
-            reconnectAvailable = false
-            reconnectSession = null
+            // Accept/reject may be emitted after close when transitions are
+            // disabled. Defer the fallback so accepting never becomes Cancel.
+            var closingOwner = recoveryOwner
+            Qt.callLater(function() {
+                if (closingOwner && recoveryOwner === closingOwner) {
+                    recoveryOwner = null
+                    closingOwner.dismissRecovery()
+                }
+            })
         }
     }
 

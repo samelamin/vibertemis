@@ -103,6 +103,9 @@ class NvHTTP : public QObject
     Q_OBJECT
 
 public:
+    // Legacy callers retain their timeout; client Quit can request a shorter one.
+    static constexpr int QUIT_TIMEOUT_MS = 30000;
+
     enum NvLogLevel {
         NVLL_NONE,
         NVLL_ERROR,
@@ -164,7 +167,7 @@ public:
     parseQuad(QString quad);
 
     void
-    quitApp();
+    quitApp(int timeoutMs = NvHTTP::QUIT_TIMEOUT_MS);
 
     void
     startApp(QString verb,

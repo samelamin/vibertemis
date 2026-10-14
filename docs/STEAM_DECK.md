@@ -539,3 +539,33 @@ unsupported panel/display rate as failed; record it as blocked with its mode lis
 [moonlight-flatpak]: https://github.com/flathub/com.moonlight_stream.Moonlight
 [apollo-display-mode]: https://github.com/ClassicOldSong/Apollo/wiki/Display-Mode-Override
 [apollo-stutter]: https://github.com/ClassicOldSong/Apollo/wiki/Stuttering-Clinic
+
+## Sleep, wake and reconnect
+
+When the Deck wakes during a stream, Vibertemis closes the stale client connection
+before offering **Resume**. Resume creates fresh video, audio and input state and
+checks that the PC is still running the same game. It never launches a second copy.
+Choose **Disconnect** to return to the app list. Sleep/network loss does not quit
+the game on the PC, even when the normal disconnect preference quits host apps.
+
+**Quit** in the streaming menu exits Vibertemis even after a connection error. It
+makes a bounded best-effort request to quit the matching PC app; an unreachable PC
+cannot keep the client waiting for the old 30-second cancellation timeout.
+
+Hardware acceptance still needs a Steam Deck and host PC:
+
+1. Stream Desktop or a game, sleep the Deck, then wake and choose Resume once.
+2. Check video, sound, controller, mouse and touch input. Repeat five cycles.
+3. Disconnect, reconnect once, and confirm input and video work immediately.
+4. Try Quit after losing Wi-Fi or turning off the host. Confirm Vibertemis closes.
+5. End or switch the host game while the Deck sleeps. Resume must refuse to start
+   a different game or launch a duplicate; return to the app list to start afresh.
+
+Build-side regression checks: `tests/virtualdisplay` covers suspend-clock samples,
+cleanup-gated recovery, duplicate Resume, cancellation, repeated sessions and Quit
+following unexpected termination. These checks do not replace the hardware test.
+
+Run `python3 tests/sessionjourney/test_recovery_dialog.py` with Qt's
+`qmltestrunner` installed to exercise the shipped recovery dialog and StreamSegue,
+including repeated fresh sessions, Resume/close ordering, and Disconnect. Transport
+is mocked in this UI test; native connection policy is tested separately.

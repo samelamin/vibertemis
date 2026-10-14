@@ -13,6 +13,7 @@
 #include "audio/renderers/renderer.h"
 #include "video/overlaymanager.h"
 #include "streaming/virtualdisplaylaunch.h"
+#include "streaming/sessionrecovery.h"
 
 #include "backend/quickmenumanager.h"
 #include "backend/servercommandmanager.h"
@@ -123,17 +124,18 @@ public:
             delete m_ServerCommandManager;
             m_ServerCommandManager = nullptr;
         }
-        if (m_ClipboardManager) {
-            delete m_ClipboardManager;
-            m_ClipboardManager = nullptr;
-        }
+        // Shared QML singleton; a retired Session must not delete the next
+        // session's clipboard manager.
+        m_ClipboardManager = nullptr;
     };
 
     Q_INVOKABLE void exec(QWindow* qtWindow);
 
     Q_INVOKABLE void cancelRetry();
 
-    Q_INVOKABLE void requestReconnect();
+    Q_INVOKABLE Session* createResumeSession();
+
+    Q_INVOKABLE bool recoveryAvailable() const { return m_Recovery.canResume(); }
 
     Q_INVOKABLE void cancelSession();
 
@@ -173,8 +175,6 @@ signals:
     void displayLaunchError(QString text);
 
     void displayLaunchRecovery(QString text, bool reconnectAvailable);
-
-    void reconnectStarted();
 
     void displayLaunchWarning(QString text);
 
@@ -229,7 +229,7 @@ private:
 
     void emitVirtualDisplayGenericFailure(int maxAttempts);
 
-    void reconnectSession();
+    void notifyCleanupComplete();
 
     void handleApplicationExit();
 
@@ -325,7 +325,9 @@ private:
     int m_MouseEmulationRefCount;
     int m_FlushingWindowEventsRef;
     QList<QString> m_LaunchWarnings;
-    bool m_ShouldExitAfterQuit;
+    std::atomic<bool> m_ShouldExitAfterQuit;
+    bool m_ResumeOnly{false};
+    SessionRecovery::RecoveryGate m_Recovery;
     Uint32 m_LastWifiKeepaliveTimeMs;
 
     bool m_AsyncConnectionSuccess;

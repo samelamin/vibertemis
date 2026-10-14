@@ -21,3 +21,6 @@ HEADERS += \
 
 target.path = /app/libexec
 INSTALLS += target
+
+SOURCES += ../../app/streaming/sessionrecovery.cpp
+HEADERS += ../../app/streaming/sessionrecovery.h
