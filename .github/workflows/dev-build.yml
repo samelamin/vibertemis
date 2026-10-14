@@ -1503,6 +1503,13 @@ jobs:
         sudo flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
         sudo flatpak install -y flathub org.kde.Platform//6.10 org.kde.Sdk//6.10
 
+    - name: Test recovery user journey
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libsdl2-dev qt6-declarative-dev-tools qml6-module-qttest qml6-module-qtquick qml6-module-qtquick-controls qml6-module-qtquick-templates qml6-module-qtquick-layouts qml6-module-qtquick-window qml6-module-qtqml-workerscript
+        python3 tests/sessionjourney/test_recovery_dialog.py
+        python3 tests/sessionjourney/test_sdl_exit_events.py
+
     - name: Validate tracked Flatpak manifest
       run: |
         python3 -m unittest discover -s packaging/flatpak/tests -p 'test_*.py' -v

@@ -26,6 +26,7 @@ public:
     bool canResume() const;
     bool takeResume();
     bool wasInterrupted() const { return (m_State.load() & Interrupted) != 0; }
+    bool terminating() const { return (m_State.load() & Terminating) != 0; }
     bool cleaned() const { return (m_State.load() & Cleaned) != 0; }
 private:
     enum : unsigned { Terminating = 1, Recoverable = 2, Cleaned = 4,
@@ -35,7 +36,8 @@ private:
 };
 
 struct CleanupDecision { bool quitHost; bool exitClient; };
-CleanupDecision cleanupDecision(bool unexpected, bool quitHostPreference, bool explicitQuit);
+CleanupDecision cleanupDecision(bool unexpected, bool quitHostPreference, bool explicitQuit,
+                                bool applicationQuit = false);
 
 #ifdef Q_OS_LINUX
 bool readSuspendClocks(qint64& bootNs, qint64& monotonicNs);

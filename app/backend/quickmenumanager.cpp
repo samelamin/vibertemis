@@ -186,17 +186,13 @@ void QuickMenuManager::disconnect()
     emit disconnectRequested();
 
     // Mark this as a user-initiated disconnect so any clConnectionTerminated
-    // callback that follows the SDL_QUIT path is classified as IntentionalLocal
+    // callback that follows cleanup is classified as IntentionalLocal
     // and never surfaces a recovery or error dialog.
     if (Session::get()) {
-        Session::get()->markIntentionalDisconnect();
+        Session::get()->cancelSession();
     }
 
-    // Send SDL quit event to disconnect
-    SDL_Event quitEvent;
-    quitEvent.type = SDL_QUIT;
-    quitEvent.quit.timestamp = SDL_GetTicks();
-    SDL_PushEvent(&quitEvent);
+
 }
 
 void QuickMenuManager::quit()
@@ -209,10 +205,7 @@ void QuickMenuManager::quit()
         Session::get()->setShouldExitAfterQuit();
     }
     
-    SDL_Event quitEvent;
-    quitEvent.type = SDL_QUIT;
-    quitEvent.quit.timestamp = SDL_GetTicks();
-    SDL_PushEvent(&quitEvent);
+    if (Session::get()) Session::get()->cancelSession();
 }
 
 void QuickMenuManager::executeServerCommand(const QString &command)

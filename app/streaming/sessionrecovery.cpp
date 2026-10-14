@@ -7,7 +7,7 @@ namespace SessionRecovery {
 bool SuspendDetector::sample(qint64 bootNs, qint64 monotonicNs, bool valid)
 {
     if (!valid || bootNs < 0 || monotonicNs < 0 || bootNs < monotonicNs) {
-        m_Initialized = false;
+        // A failed/preempted read must not erase a pre-sleep baseline.
         return false;
     }
     const qint64 offset = bootNs - monotonicNs;
@@ -49,9 +49,10 @@ bool RecoveryGate::takeResume()
     return true;
 }
 
-CleanupDecision cleanupDecision(bool unexpected, bool quitHostPreference, bool explicitQuit)
+CleanupDecision cleanupDecision(bool unexpected, bool quitHostPreference, bool explicitQuit,
+                                bool applicationQuit)
 {
-    return {explicitQuit || (!unexpected && quitHostPreference), explicitQuit};
+    return {explicitQuit || (!unexpected && quitHostPreference), explicitQuit || applicationQuit};
 }
 
 #ifdef Q_OS_LINUX

@@ -380,14 +380,9 @@ void SdlInputHandler::handleControllerButtonEvent(SDL_ControllerButtonEvent* eve
         // disconnecting so any clConnectionTerminated callback that
         // follows is classified as IntentionalLocal.
         if (Session::get()) {
-            Session::get()->markIntentionalDisconnect();
+            Session::get()->cancelSession();
         }
 
-        // Push a quit event to the main loop
-        SDL_Event event;
-        event.type = SDL_QUIT;
-        event.quit.timestamp = SDL_GetTicks();
-        SDL_PushEvent(&event);
 
         // Clear buttons down on this gamepad
         LiSendMultiControllerEvent(state->index, m_GamepadMask,

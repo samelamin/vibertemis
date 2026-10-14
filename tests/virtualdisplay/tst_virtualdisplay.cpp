@@ -1083,7 +1083,7 @@ void VirtualDisplayLaunchTest::suspendDetectorRejectsInvalidSamples()
     SessionRecovery::SuspendDetector detector;
     QVERIFY(!detector.sample(0, 0));
     QVERIFY(!detector.sample(-1, -1, false));
-    QVERIFY(!detector.sample(10000000000LL, 1000000000LL)); // new baseline
+    QVERIFY(detector.sample(10000000000LL, 1000000000LL)); // retain pre-sleep baseline
     QVERIFY(!detector.sample(0, 100));
     QVERIFY(!detector.sample(0, 0)); // reset clock, no wake
     QVERIFY(!detector.sample(500000000LL, 0)); // sub-threshold drift
@@ -1093,7 +1093,9 @@ void VirtualDisplayLaunchTest::recoveryRequiresCleanupAndAllowsOneResume()
 {
     SessionRecovery::RecoveryGate gate;
     QVERIFY(!gate.takeResume());
+    QVERIFY(!gate.terminating());
     QVERIFY(gate.beginTermination(true));
+    QVERIFY(gate.terminating());
     QVERIFY(!gate.beginTermination(true));
     QVERIFY(!gate.takeResume());
     gate.beginCleanup();
@@ -1132,6 +1134,9 @@ void VirtualDisplayLaunchTest::recoveryCancelWinsAndRepeatedSessionsWork()
 
     for (int cycle = 0; cycle < 5; ++cycle) {
         SessionRecovery::RecoveryGate fresh;
+        // A queued wakeup from the previous connection cannot terminate this
+        // fresh stream: it reads its own gate, not the old event's meaning.
+        QVERIFY(!fresh.terminating());
         QVERIFY(fresh.beginTermination(true));
         fresh.beginCleanup();
         fresh.completeCleanup();
@@ -1149,6 +1154,9 @@ void VirtualDisplayLaunchTest::cleanupDecisionPreservesQuitAfterFailure()
             const auto disconnect = SessionRecovery::cleanupDecision(unexpected, preference, false);
             QVERIFY(!disconnect.exitClient);
             QCOMPARE(disconnect.quitHost, !unexpected && preference);
+            const auto applicationQuit = SessionRecovery::cleanupDecision(unexpected, preference, false, true);
+            QVERIFY(applicationQuit.exitClient);
+            QCOMPARE(applicationQuit.quitHost, !unexpected && preference);
         }
     }
 }

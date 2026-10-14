@@ -673,3 +673,6 @@ DEFINES += VBT_DIAG_ENDPOINT=\\\"$$VBT_DIAG_ENDPOINT\\\"
 
 SOURCES += streaming/sessionrecovery.cpp
 HEADERS += streaming/sessionrecovery.h
+
+SOURCES += streaming/sessionevents.cpp
+HEADERS += streaming/sessionevents.h

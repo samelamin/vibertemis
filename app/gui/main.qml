@@ -822,6 +822,17 @@ ApplicationWindow {
 
     NavigableMessageDialog {
         id: streamSegueRecoveryDialog
+
+        // Create in this long-lived context: a retired segue is destroyed after
+        // replacement, so it cannot own the resumed segue's QML context.
+        function replaceWithResumedSession(freshSession, appName, quitAfter) {
+            var component = Qt.createComponent("StreamSegue.qml")
+            var nextSegue = component.createObject(stackView, {
+                "appName": appName, "session": freshSession,
+                "isResume": true, "quitAfter": quitAfter
+            })
+            stackView.replace(stackView.currentItem, nextSegue, StackView.Immediate)
+        }
         modal: true
         property var recoveryOwner: null
         standardButtons: Dialog.Yes | Dialog.No

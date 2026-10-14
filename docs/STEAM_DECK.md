@@ -111,15 +111,16 @@ RTSP URL when available and otherwise retains a bounded, cancellable retry of th
 Moonlight RTSP handshake. The original `/launch` or `/resume` request is never
 reissued during those retries, which prevents a duplicate host app or session.
 
-There is no reliable client-side suspend/resume or network-restored event that can
-safely restart an established connection. If the established session terminates
-after Deck sleep or a network interruption, Vibertemis offers **Resume**. Resume
-rechecks `/serverinfo` and requires a busy host state reporting the same app ID
-before issuing `/resume`; it never issues a second `/launch` or creates a second
-host app. A failed recheck returns the user to the existing app list so the app
-can be started explicitly. If the process receives no termination callback while
-the Deck sleeps, the client cannot detect that state and the same one-tap recovery
-path remains the safe boundary.
+On Linux, Vibertemis detects sleep during streaming by comparing clocks that do
+and do not advance during suspend. It also handles unexpected connection loss.
+Both paths tear down the stale stream before offering **Resume**, so recovery does
+not depend on receiving a host termination callback after sleep. Resume creates a
+fresh client session, rechecks `/serverinfo`, and requires a busy host reporting
+the same app ID before issuing `/resume`. It never issues another `/launch` or
+creates a second host app. If the host game ended or changed, recovery returns to
+the app list. If the network is still reconnecting, Resume remains available to
+try again. Actual Deck sleep and GPU recovery still require the hardware
+acceptance checks below.
 
 ### Disconnect classification
 
@@ -137,7 +138,7 @@ Four outcomes cover every termination the session can observe:
   back. No recovery or error dialog is shown.
 - **Unexpected mid-stream** — a non-zero termination code arrives after the
   session has started streaming, while the user has not initiated a quit.
-  Only this case surfaces the **Resume** dialog.
+  This case and detected Linux suspend surface the **Resume** dialog after cleanup.
 - **Pre-connection launch failure** — a non-zero termination code arrives
   before the session is marked started. This routes through the legacy
   actionable error dialog; no recovery is offered because the host app
@@ -551,6 +552,13 @@ the game on the PC, even when the normal disconnect preference quits host apps.
 **Quit** in the streaming menu exits Vibertemis even after a connection error. It
 makes a bounded best-effort request to quit the matching PC app; an unreachable PC
 cannot keep the client waiting for the old 30-second cancellation timeout.
+On the packaged SDL runtime, an OS quit request also exits the client; host-app
+termination follows the normal disconnect preference. Closing only the streaming
+window returns to the app list. Steam's **Exit Game** needs the Deck check below.
+Older SDL runtimes (before 2.0.22) retain their existing window-close/quit behavior;
+SIGTERM may only disconnect the stream there. The packaged Deck runtime supports
+the separate exit path. Unexpected failures preserve the host
+app, including failures during connection setup.
 
 Hardware acceptance still needs a Steam Deck and host PC:
 
@@ -558,7 +566,9 @@ Hardware acceptance still needs a Steam Deck and host PC:
 2. Check video, sound, controller, mouse and touch input. Repeat five cycles.
 3. Disconnect, reconnect once, and confirm input and video work immediately.
 4. Try Quit after losing Wi-Fi or turning off the host. Confirm Vibertemis closes.
-5. End or switch the host game while the Deck sleeps. Resume must refuse to start
+5. Use Steam's Exit Game during a stream and after wake; confirm the client exits.
+   In Desktop Mode, close only the stream window; confirm the app list returns.
+6. End or switch the host game while the Deck sleeps. Resume must refuse to start
    a different game or launch a duplicate; return to the app list to start afresh.
 
 Build-side regression checks: `tests/virtualdisplay` covers suspend-clock samples,

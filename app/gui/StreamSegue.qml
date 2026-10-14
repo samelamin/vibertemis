@@ -53,7 +53,7 @@ Item {
 
     function displayLaunchRecovery(text, reconnectAvailable)
     {
-        if (quitAfter || !reconnectAvailable) {
+        if (!reconnectAvailable) {
             displayLaunchError(text)
             return
         }
@@ -67,14 +67,13 @@ Item {
         if (!waitingForRecovery || !session)
             return
         var freshSession = session.createResumeSession()
-        if (!freshSession)
+        if (!freshSession) {
+            dismissRecovery()
             return
+        }
+        session = null
         waitingForRecovery = false
-        var component = Qt.createComponent("StreamSegue.qml")
-        var nextSegue = component.createObject(stackView, {
-            "appName": appName, "session": freshSession, "isResume": true
-        })
-        stackView.replace(stackView.currentItem, nextSegue, StackView.Immediate)
+        streamSegueRecoveryDialog.replaceWithResumedSession(freshSession, appName, quitAfter)
     }
 
     function dismissRecovery()
@@ -84,6 +83,10 @@ Item {
         waitingForRecovery = false
         if (session) session.cancelSession()
         session = null
+        if (quitAfter) {
+            Qt.quit()
+            return
+        }
         stackView.pop()
         window.visible = true
     }
@@ -102,11 +105,11 @@ Item {
 
     function quitStarting()
     {
-        // Avoid the push transition animation
-        var component = Qt.createComponent("QuitSegue.qml")
-        stackView.replace(stackView.currentItem, component.createObject(stackView, {"appName": appName}), StackView.Immediate)
-
-        // Show the Qt window again to show quit segue
+        stageText = qsTr("Quitting %1...").arg(appName)
+        stageLabel.visible = true
+        stageSpinner.visible = true
+        stageSpinner.running = true
+        hintText.visible = false
         window.visible = true
     }
 
@@ -119,8 +122,9 @@ Item {
         // Re-enable GUI gamepad usage only after SDL input is destroyed.
         SdlGamepadKeyNavigation.enable()
 
-        if (recoveryText && session && session.recoveryAvailable()) {
+        if (recoveryText && session && session.retainForRecovery()) {
             waitingForRecovery = true
+            streamSegueErrorDialog.text = ""
             stageSpinner.running = false
             window.visible = true
             streamSegueRecoveryDialog.recoveryOwner = streamSegue
@@ -177,7 +181,10 @@ Item {
         SdlGamepadKeyNavigation.enable()
     }
 
+    StackView.onRemoved: destroy()
+
     Component.onDestruction: {
+        if (waitingForRecovery && session) session.cancelSession()
         if (streamSegueRecoveryDialog.recoveryOwner === streamSegue) {
             streamSegueRecoveryDialog.recoveryOwner = null
             streamSegueRecoveryDialog.close()

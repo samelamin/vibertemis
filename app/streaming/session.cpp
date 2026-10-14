@@ -1,4 +1,5 @@
 #include "session.h"
+#include "sessionevents.h"
 #include "settings/refreshrateparser.h"
 #include "settings/streamingpreferences.h"
 #include "streaming/streamutils.h"
@@ -47,6 +48,28 @@
 #define SDL_CODE_GAMECONTROLLER_SET_MOTION_EVENT_STATE 103
 #define SDL_CODE_GAMECONTROLLER_SET_CONTROLLER_LED 104
 #define SDL_CODE_GAMECONTROLLER_SET_ADAPTIVE_TRIGGERS 105
+#define SDL_CODE_SESSION_TERMINATED 106
+
+static void freeStreamEventPayload(SDL_Event& event)
+{
+    if (event.type == SDL_USEREVENT &&
+        event.user.code == SDL_CODE_GAMECONTROLLER_SET_ADAPTIVE_TRIGGERS) {
+        SDL_free(event.user.data2);
+        event.user.data2 = nullptr;
+    }
+}
+
+static int SDLCALL discardStreamEvent(void*, SDL_Event* event)
+{
+    if (event->type == SDL_USEREVENT &&
+        (event->user.code == SDL_CODE_FRAME_READY ||
+         (event->user.code >= SDL_CODE_FLUSH_WINDOW_EVENT_BARRIER &&
+          event->user.code <= SDL_CODE_SESSION_TERMINATED))) {
+        freeStreamEventPayload(*event);
+        return 0;
+    }
+    return 1;
+}
 
 #include <openssl/rand.h>
 
@@ -224,11 +247,12 @@ void Session::clConnectionTerminated(int errorCode)
                     errorCode);
     }
 
-    // Recovery must release the SDL thread too. On Linux the Qt thread is
-    // waiting for it, so retaining a dead stream prevents the dialog opening.
+    // Wake SDL so it observes this Session's termination gate. A late event
+    // must not become a global SDL_QUIT: Qt gamepad navigation treats that as
+    // application exit, and a subsequent stream must ignore stale wakeups.
     SDL_Event event = {};
-    event.type = SDL_QUIT;
-    event.quit.timestamp = SDL_GetTicks();
+    event.type = SDL_USEREVENT;
+    event.user.code = SDL_CODE_SESSION_TERMINATED;
     SDL_PushEvent(&event);
 }
 
@@ -351,6 +375,7 @@ void Session::clSetAdaptiveTriggers(uint16_t controllerNumber, uint8_t eventFlag
     // Based on the following SDL code:
     // https://github.com/libsdl-org/SDL/blob/120c76c84bbce4c1bfed4e9eb74e10678bd83120/test/testgamecontroller.c#L286-L307
     DualSenseOutputReport *state = (DualSenseOutputReport *) SDL_malloc(sizeof(DualSenseOutputReport));
+    if (state == nullptr) return;
     SDL_zero(*state);
     state->validFlag0 = (eventFlags & DS_EFFECT_RIGHT_TRIGGER) | (eventFlags & DS_EFFECT_LEFT_TRIGGER);
     state->rightTriggerEffectType = typeRight;
@@ -359,7 +384,7 @@ void Session::clSetAdaptiveTriggers(uint16_t controllerNumber, uint8_t eventFlag
     SDL_memcpy(state->leftTriggerEffect, left, sizeof(state->leftTriggerEffect));
 
     setControllerLEDEvent.user.data2 = (void *) state;
-    SDL_PushEvent(&setControllerLEDEvent);
+    if (SDL_PushEvent(&setControllerLEDEvent) <= 0) SDL_free(state);
 }
 
 
@@ -1502,13 +1527,18 @@ private:
         m_Session->m_Recovery.beginCleanup();
         SDL_assert(m_Session->m_VideoDecoder == nullptr);
         LiStopConnection();
+        // All producers have stopped; discard leftover streaming events and
+        // free their payloads before GUI polling or a new Session can start.
+        SDL_FilterEvents(discardStreamEvent, nullptr);
         m_Session->m_ConnectionStarted.store(false);
 
         const auto decision = SessionRecovery::cleanupDecision(
             m_Session->m_UnexpectedTermination.load() || m_Session->m_Recovery.wasInterrupted(),
             m_Session->m_Preferences->quitAppAfter,
-            m_Session->m_ShouldExitAfterQuit.load());
+            m_Session->m_ShouldExitAfterQuit.load(),
+            m_Session->m_ApplicationExitRequested.load());
         if (decision.quitHost) {
+            emit m_Session->quitStarting();
             try {
                 NvHTTP http(m_Session->m_Computer);
                 // Never cancel another app that replaced ours while asleep.
@@ -1543,15 +1573,10 @@ void Session::notifyCleanupComplete()
     if (m_ClipboardManager) m_ClipboardManager->disconnect();
     emit sessionFinished(m_PortTestResults);
     emit readyForDeletion();
-    const bool exitClient = m_ShouldExitAfterQuit.load();
-    if (m_Recovery.canResume()) {
-        // The recovery segue still holds a JS reference to this descriptor.
-        QQmlEngine::setObjectOwnership(this, QQmlEngine::JavaScriptOwnership);
-    } else {
-        // readyForDeletion may already have collected the JS wrapper while
-        // C++ ownership protected us. Do not depend on a second GC to delete.
-        deleteLater();
-    }
+    const bool exitClient = m_ShouldExitAfterQuit.load() || m_ApplicationExitRequested.load();
+    // QML must explicitly retain a recovery descriptor during sessionFinished.
+    // It remains C++ owned until Resume/cancel releases it, avoiding GC races.
+    if (!m_RecoveryRetained || !m_Recovery.canResume()) deleteLater();
     if (exitClient) QCoreApplication::quit();
 }
 
@@ -2078,7 +2103,12 @@ bool Session::startConnectionAsync(bool resumeOnly, bool announceRetry)
                 return false;
             }
             catch (const QtNetworkReplyException& e) {
-                emit displayLaunchError(e.toQString());
+                if (resumeOnly && !m_RetryCancellation.isCancelled() &&
+                    m_Recovery.beginTermination(true)) {
+                    emit displayLaunchRecovery(tr("Can't reach the PC yet. Check your connection, then choose Resume.") + "\n\n" + e.toQString(), true);
+                } else {
+                    emit displayLaunchError(e.toQString());
+                }
                 return false;
             }
         },
@@ -2181,30 +2211,33 @@ Session* Session::createResumeSession()
     if (!m_Recovery.takeResume()) return nullptr;
     auto* resumed = new Session(m_Computer, m_App, m_Preferences);
     resumed->m_ResumeOnly = true;
+    deleteLater(); // fresh Session uses application-owned preferences
     return resumed;
+}
+
+bool Session::retainForRecovery()
+{
+    m_RecoveryRetained = m_Recovery.canResume();
+    return m_RecoveryRetained;
 }
 
 void Session::cancelSession()
 {
     markIntentionalDisconnect();
-    if (!m_Recovery.cleaned() && m_ConnectionStarted.load()) {
-        SDL_Event event = {};
-        event.type = SDL_QUIT;
-        SDL_PushEvent(&event);
+    if (m_Recovery.cleaned()) {
+        deleteLater();
+        return;
     }
+    m_Recovery.beginTermination(false, false);
+    SDL_Event event = {};
+    event.type = SDL_USEREVENT;
+    event.user.code = SDL_CODE_SESSION_TERMINATED;
+    SDL_PushEvent(&event);
 }
 
 void Session::handleApplicationExit()
 {
-    m_Recovery.cancel();
-    m_IntentionalDisconnect.store(true);
-    m_RetryCancellation.cancel();
-    if (m_ConnectionStarted.load()) {
-        SDL_Event event = {};
-        event.type = SDL_QUIT;
-        event.quit.timestamp = SDL_GetTicks();
-        SDL_PushEvent(&event);
-    }
+    cancelSession();
 }
 
 void Session::flushWindowEvents()
@@ -2296,6 +2329,10 @@ void Session::exec(QWindow* qtWindow)
 
 void Session::execInternal()
 {
+    // SDL 2.0.22+ can distinguish a stream-window close from an application
+    // quit. Keep legacy behavior on older runtimes that always combine them.
+    const bool distinguishApplicationQuit = SessionEvents::configureWindowCloseHandling();
+
     // Complete initialization in this deferred context to avoid
     // calling expensive functions in the constructor (during the
     // process of loading the StreamSegue).
@@ -2570,10 +2607,13 @@ void Session::execInternal()
     wokeFromSuspend(true); // Establish a baseline even if the offset is zero.
 #endif
     for (;;) {
+        // The state belongs to this Session; queued wakeups may belong to an
+        // older connection. Also exit if an SDL wakeup could not be queued.
+        if (m_Recovery.terminating()) goto DispatchDeferredCleanup;
 #ifdef Q_OS_LINUX
         if (wokeFromSuspend() && m_Recovery.beginTermination(true)) {
             m_UnexpectedTermination.store(true);
-            emit displayLaunchRecovery(tr("Steam Deck woke from sleep. Resume your stream?"), true);
+            emit displayLaunchRecovery(tr("Device woke from sleep. Resume your stream?"), true);
             goto DispatchDeferredCleanup;
         }
 #endif
@@ -2610,14 +2650,36 @@ void Session::execInternal()
             continue;
         }
 #endif
+        // All app-generated disconnects use a session wakeup now. SDL_QUIT
+        // means an OS/application exit request (including SDL's SIGTERM path)
+        // on supported runtimes. Steam Exit Game still needs a hardware check.
+        // Record it before the recovery checks so a simultaneous failure
+        // cannot consume the exit request and leave the client running.
+        const auto exitAction = SessionEvents::classifyExit(
+            event, SDL_GetWindowID(m_Window), distinguishApplicationQuit);
+        if (exitAction == SessionEvents::ExitAction::ExitApplication) {
+            m_ApplicationExitRequested.store(true);
+            markIntentionalDisconnect();
+        }
+        if (exitAction == SessionEvents::ExitAction::Disconnect) {
+            // Closing just the stream window returns to the app list. The
+            // SDL hint above prevents a second, global quit event following it.
+            markIntentionalDisconnect();
+            goto DispatchDeferredCleanup;
+        }
 #ifdef Q_OS_LINUX
         // A render event queued before sleep must not reuse invalid GPU state.
         if (wokeFromSuspend(true) && m_Recovery.beginTermination(true)) {
             m_UnexpectedTermination.store(true);
-            emit displayLaunchRecovery(tr("Steam Deck woke from sleep. Resume your stream?"), true);
+            emit displayLaunchRecovery(tr("Device woke from sleep. Resume your stream?"), true);
+            freeStreamEventPayload(event);
             goto DispatchDeferredCleanup;
         }
 #endif
+        if (m_Recovery.terminating()) {
+            freeStreamEventPayload(event);
+            goto DispatchDeferredCleanup;
+        }
         switch (event.type) {
         case SDL_QUIT:
             SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
@@ -2626,6 +2688,10 @@ void Session::execInternal()
 
         case SDL_USEREVENT:
             switch (event.user.code) {
+            case SDL_CODE_SESSION_TERMINATED:
+                // A stale wakeup from an older Session is harmless. The gate
+                // checks above handle termination of the current Session.
+                break;
             case SDL_CODE_FRAME_READY:
                 if (m_VideoDecoder != nullptr) {
                     m_VideoDecoder->renderFrameOnMainThread();

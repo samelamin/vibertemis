@@ -137,6 +137,8 @@ public:
 
     Q_INVOKABLE bool recoveryAvailable() const { return m_Recovery.canResume(); }
 
+    Q_INVOKABLE bool retainForRecovery();
+
     Q_INVOKABLE void cancelSession();
 
     // Mark the current session as intentionally disconnecting (user-initiated
@@ -326,7 +328,9 @@ private:
     int m_FlushingWindowEventsRef;
     QList<QString> m_LaunchWarnings;
     std::atomic<bool> m_ShouldExitAfterQuit;
+    std::atomic<bool> m_ApplicationExitRequested{false};
     bool m_ResumeOnly{false};
+    bool m_RecoveryRetained{false};
     SessionRecovery::RecoveryGate m_Recovery;
     Uint32 m_LastWifiKeepaliveTimeMs;
 

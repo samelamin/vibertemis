@@ -24,14 +24,9 @@ void SdlInputHandler::performSpecialKeyCombo(KeyCombo combo)
         // disconnecting so any clConnectionTerminated callback that
         // follows is classified as IntentionalLocal.
         if (Session::get()) {
-            Session::get()->markIntentionalDisconnect();
+            Session::get()->cancelSession();
         }
 
-        // Push a quit event to the main loop
-        SDL_Event event;
-        event.type = SDL_QUIT;
-        event.quit.timestamp = SDL_GetTicks();
-        SDL_PushEvent(&event);
         break;
 
     case KeyComboUngrabInput:
@@ -153,11 +148,7 @@ void SdlInputHandler::performSpecialKeyCombo(KeyCombo combo)
         // Indicate that we want to exit afterwards
         Session::get()->setShouldExitAfterQuit();
 
-        // Push a quit event to the main loop
-        SDL_Event quitExitEvent;
-        quitExitEvent.type = SDL_QUIT;
-        quitExitEvent.quit.timestamp = SDL_GetTicks();
-        SDL_PushEvent(&quitExitEvent);
+        Session::get()->cancelSession();
         break;
 
     // KeyComboToggleServerCommands removed - now handled through QuickMenu

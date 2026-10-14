@@ -13,7 +13,8 @@ ROOT = Path(__file__).resolve().parents[2]
 source = (ROOT / 'app/gui/main.qml').read_text()
 start = source.index('    NavigableMessageDialog {\n        id: streamSegueRecoveryDialog')
 end = source.index('\n    NavigableDialog {', start)
-dialog = source[start:end]
+dialog = source[start:end].replace('Qt.createComponent("StreamSegue.qml")',
+    'Qt.createComponent("' + (ROOT / 'app/gui/StreamSegue.qml').as_uri() + '")')
 runner = shutil.which('qmltestrunner') or '/usr/lib/qt6/bin/qmltestrunner'
 wrapper = '''import QtQuick 2.15
 import QtQuick.Controls 2.15
@@ -84,6 +85,7 @@ QtObject {
     property bool cleaned: false
     property bool consumed: false
     property bool resumeOnly: false
+    property var makeSession
     signal stageStarting(string stage)
     signal stageFailed(string stage, int errorCode, string failingPorts)
     signal connectionStarted()
@@ -95,12 +97,16 @@ QtObject {
     signal readyForDeletion()
     function exec(window) {}
     function cancelRetry() {}
-    function cancelSession() { consumed = true }
+    function cancelSession() { consumed = true; if (cleaned) destroy() }
     function recoveryAvailable() { return cleaned && !consumed }
+    function retainForRecovery() { return recoveryAvailable() }
     function createResumeSession() {
         if (!recoveryAvailable()) return null
         consumed = true
-        return Qt.createComponent("Session.qml").createObject(null, {resumeOnly: true})
+        var next = makeSession()
+        next.resumeOnly = true
+        destroy()
+        return next
     }
 }
 """
@@ -114,6 +120,9 @@ ApplicationWindow {
     id: window
     width: 800; height: 600; visible: true
     Item { id: toolBar }
+    function makeSession() {
+        return Qt.createComponent("Session/Session.qml").createObject(null, {makeSession: window.makeSession})
+    }
     StackView { id: stackView; anchors.fill: parent; initialItem: Item {} }
     QtObject {
         id: streamSegueErrorDialog
@@ -125,17 +134,51 @@ ApplicationWindow {
     TestCase {
         name: "ShippedStreamSegue"
         when: windowShown
+        function test_cancelledRecoveryReturnsToAppList() {
+            var current = window.makeSession()
+            var component = Qt.createComponent("GUI_PATH/StreamSegue.qml")
+            stackView.push(component.createObject(stackView, {session: current, appName: "Desktop"}))
+            tryCompare(stackView, "busy", false)
+            wait(150)
+            current.displayLaunchRecovery("Stream interrupted", true)
+            current.cleaned = true
+            current.sessionFinished(0)
+            current.readyForDeletion()
+            tryCompare(streamSegueRecoveryDialog, "opened", true)
+            current.consumed = true
+            streamSegueRecoveryDialog.accept()
+            tryCompare(stackView, "busy", false)
+            compare(stackView.depth, 1)
+        }
+        function test_quitProgressKeepsCompletionHandler() {
+            var current = window.makeSession()
+            var component = Qt.createComponent("GUI_PATH/StreamSegue.qml")
+            stackView.push(component.createObject(stackView, {session: current, appName: "Desktop"}))
+            tryCompare(stackView, "busy", false)
+            wait(150)
+            current.quitStarting()
+            compare(stackView.currentItem.session, current)
+            compare(stackView.currentItem.stageText, "Quitting Desktop...")
+            current.cleaned = true
+            current.sessionFinished(0)
+            current.readyForDeletion()
+            tryCompare(stackView, "busy", false)
+            compare(stackView.depth, 1)
+            current.destroy()
+        }
         function test_repeatedFreshResumeAndDisconnect() {
             var sessionComponent = Qt.createComponent("Session/Session.qml")
             compare(sessionComponent.status, Component.Ready)
-            var original = sessionComponent.createObject(null)
+            var original = window.makeSession()
             var component = Qt.createComponent("GUI_PATH/StreamSegue.qml")
             compare(component.status, Component.Ready, component.errorString())
-            stackView.push(component.createObject(stackView, {session: original, appName: "Desktop"}))
+            stackView.push(component.createObject(stackView, {session: original, appName: "Desktop", quitAfter: true}))
             tryCompare(stackView, "busy", false)
             wait(150)
+            var childCount = stackView.children.length
             for (var cycle = 0; cycle < 3; cycle++) {
                 var oldSession = stackView.currentItem.session
+                streamSegueErrorDialog.text = "obsolete error"
                 oldSession.displayLaunchRecovery("Stream interrupted", true)
                 compare(streamSegueRecoveryDialog.visible, false)
                 oldSession.cleaned = true
@@ -143,14 +186,18 @@ ApplicationWindow {
                 oldSession.readyForDeletion()
                 tryCompare(streamSegueRecoveryDialog, "opened", true)
                 compare(stackView.currentItem.session, oldSession)
+                compare(streamSegueErrorDialog.text, "")
                 streamSegueRecoveryDialog.accept()
                 tryCompare(stackView, "busy", false)
                 wait(150)
                 verify(stackView.currentItem.session !== oldSession)
                 verify(stackView.currentItem.session.resumeOnly)
                 compare(stackView.currentItem.appName, "Desktop")
+                compare(stackView.currentItem.quitAfter, true)
+                compare(stackView.children.length, childCount)
                 compare(stackView.depth, 2)
             }
+            stackView.currentItem.quitAfter = false
             var lastSession = stackView.currentItem.session
             lastSession.displayLaunchRecovery("Stream interrupted", true)
             lastSession.cleaned = true
