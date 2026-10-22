@@ -29,23 +29,16 @@ int main() {
     assert(SessionEvents::classifyExit(event, id, distinct) == ExitAction::Disconnect);
     assert(SessionEvents::classifyExit(event, id + 1, distinct) == ExitAction::None);
     assert(SessionEvents::classifyExit(event, id, false) == ExitAction::None);
+    assert(SessionEvents::classifyExit(event, id, distinct, true) == ExitAction::ExitApplication);
+    assert(SessionEvents::classifyExit(event, id + 1, distinct, true) == ExitAction::None);
     event.type = SDL_QUIT;
     assert(SessionEvents::classifyExit(event, id, distinct) == ExitAction::ExitApplication);
     assert(SessionEvents::classifyExit(event, id, false) == ExitAction::None);
     event.type = SDL_USEREVENT;
     assert(SessionEvents::classifyExit(event, id, distinct) == ExitAction::None);
-    // Real SDL signal handling: a SIGTERM must classify as application exit,
-    // even with last-window-close synthesis disabled.
-    std::raise(SIGTERM);
-    bool sawExit = false;
-    while (SDL_PollEvent(&event)) {
-        if (SessionEvents::classifyExit(event, id, distinct) == ExitAction::ExitApplication)
-            sawExit = true;
-    }
-    assert(sawExit);
     SDL_DestroyWindow(window);
     SDL_Quit();
-    std::cout << "PASS: window close disconnects; SIGTERM/SDL_QUIT exits; stale/other events ignored\n";
+    std::cout << "PASS: Desktop window close disconnects; Gaming close and SDL_QUIT exit; stale/other events ignored\n";
 }
 '''
 

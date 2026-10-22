@@ -134,6 +134,23 @@ ApplicationWindow {
     TestCase {
         name: "ShippedStreamSegue"
         when: windowShown
+        function test_failedAutomaticHandoffReturnsToList() {
+            var current = window.makeSession()
+            var component = Qt.createComponent("GUI_PATH/StreamSegue.qml")
+            stackView.push(component.createObject(stackView, {session: current, appName: "Desktop",
+                automaticHandoff: true, isResume: true}))
+            tryCompare(stackView, "busy", false)
+            wait(150)
+            current.displayLaunchRecovery("PC unavailable", true)
+            current.cleaned = true
+            current.sessionFinished(0)
+            current.readyForDeletion()
+            tryCompare(stackView, "busy", false)
+            compare(stackView.depth, 1)
+            compare(streamSegueRecoveryDialog.visible, false)
+            compare(streamSegueErrorDialog.text, "")
+            current.destroy()
+        }
         function test_cancelledRecoveryReturnsToAppList() {
             var current = window.makeSession()
             var component = Qt.createComponent("GUI_PATH/StreamSegue.qml")

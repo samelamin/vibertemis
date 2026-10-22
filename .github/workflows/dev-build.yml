@@ -1506,9 +1506,10 @@ jobs:
     - name: Test recovery user journey
       run: |
         sudo apt-get update
-        sudo apt-get install -y libsdl2-dev qt6-declarative-dev-tools qml6-module-qttest qml6-module-qtquick qml6-module-qtquick-controls qml6-module-qtquick-templates qml6-module-qtquick-layouts qml6-module-qtquick-window qml6-module-qtqml-workerscript
+        sudo apt-get install -y qt6-base-dev libsdl2-dev qt6-declarative-dev-tools qml6-module-qttest qml6-module-qtquick qml6-module-qtquick-controls qml6-module-qtquick-templates qml6-module-qtquick-layouts qml6-module-qtquick-window qml6-module-qtqml-workerscript
         python3 tests/sessionjourney/test_recovery_dialog.py
         python3 tests/sessionjourney/test_sdl_exit_events.py
+        python3 tests/processlifecycle/test_process_lifecycle.py
 
     - name: Validate tracked Flatpak manifest
       run: |
@@ -1586,6 +1587,7 @@ jobs:
     - name: Verify Flatpak build result
       run: |
         flatpak build flatpak-build /app/libexec/tst_virtualdisplay
+        flatpak build flatpak-build env VIBERTEMIS_LIFECYCLE_PROBE=/app/libexec/lifecycle_probe python3 /app/libexec/test_process_lifecycle.py
         flatpak build flatpak-build /app/libexec/artemis-codec-probe
         flatpak build flatpak-build test -x /app/bin/artemis
         flatpak build flatpak-build appstreamcli validate --no-net /app/share/metainfo/com.artemisdesktop.ArtemisDesktopDev.metainfo.xml

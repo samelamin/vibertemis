@@ -2,6 +2,9 @@
 #include "backend/computermanager.h"
 #include "backend/computerseeker.h"
 #include "streaming/session.h"
+#ifdef Q_OS_LINUX
+#include "backend/instanceguard.h"
+#endif
 
 #include <QCoreApplication>
 #include <QTimer>
@@ -79,7 +82,8 @@ public:
         // Occurs when searched computer is found
         case Event::ComputerFound:
             if (m_State == StateSeekComputer) {
-                if (event.computer->pairState == NvComputer::PS_PAIRED) {
+                if (event.computer->pairState == NvComputer::PS_PAIRED &&
+                    (!m_ResumeAppId || event.computer->uuid == m_ComputerName)) {
                     m_State = StateSeekApp;
                     m_Computer = event.computer;
                     m_TimeoutTimer->start(APP_SEEK_TIMEOUT);
@@ -100,9 +104,21 @@ public:
                 if (-1 != index) {
                     app = m_Computer->appList[index];
                     m_TimeoutTimer->stop();
-                    if (isNotStreaming() || isStreamingApp(app)) {
+#ifdef Q_OS_LINUX
+                    // A manual session may have superseded this pending handoff
+                    // while discovery was running. Never start it later.
+                    if (m_ResumeAppId && !ProcessLifecycle::InstanceGuard::instance().handoff().isValid()) {
+                        m_State = StateFailure;
+                        emit q->failed(QObject::tr("The previous session was superseded."));
+                        break;
+                    }
+#endif
+                    if (m_ResumeAppId && !isStreamingApp(app)) {
+                        m_State = StateFailure;
+                        emit q->failed(QObject::tr("The previous host session is no longer running."));
+                    } else if (isNotStreaming() || isStreamingApp(app)) {
                         m_State = StateStartSession;
-                        session = new Session(m_Computer, app, m_Preferences);
+                        session = new Session(m_Computer, app, m_Preferences, m_ResumeAppId > 0);
                         emit q->sessionCreated(app.name, session);
                     } else {
                         emit q->appQuitRequired(getCurrentAppName());
@@ -143,7 +159,8 @@ public:
     int getAppIndex() const
     {
         for (int i = 0; i < m_Computer->appList.length(); i++) {
-            if (m_Computer->appList[i].name.toLower() == m_AppName.toLower()) {
+            if (m_ResumeAppId ? m_Computer->appList[i].id == m_ResumeAppId :
+                m_Computer->appList[i].name.toLower() == m_AppName.toLower()) {
                 return i;
             }
         }
@@ -178,6 +195,7 @@ public:
     ComputerSeeker *m_ComputerSeeker;
     NvComputer *m_Computer;
     State m_State;
+    int m_ResumeAppId = 0;
     QTimer *m_TimeoutTimer;
 };
 
@@ -195,6 +213,13 @@ Launcher::Launcher(QString computer, QString app,
     d->m_TimeoutTimer->setSingleShot(true);
     connect(d->m_TimeoutTimer, &QTimer::timeout,
             this, &Launcher::onTimeout);
+}
+
+void Launcher::setResumeOnlyAppId(int appId)
+{
+    Q_D(Launcher);
+    Q_ASSERT(d->m_State == StateInit);
+    d->m_ResumeAppId = appId;
 }
 
 Launcher::~Launcher()

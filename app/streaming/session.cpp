@@ -1,5 +1,9 @@
 #include "session.h"
 #include "sessionevents.h"
+#ifdef Q_OS_LINUX
+#include "backend/shutdowncoordinator.h"
+#include "backend/instanceguard.h"
+#endif
 #include "settings/refreshrateparser.h"
 #include "settings/streamingpreferences.h"
 #include "streaming/streamutils.h"
@@ -719,7 +723,7 @@ bool Session::populateDecoderProperties(SDL_Window* window)
     return true;
 }
 
-Session::Session(NvComputer* computer, NvApp& app, StreamingPreferences *preferences)
+Session::Session(NvComputer* computer, NvApp& app, StreamingPreferences *preferences, bool resumeOnly)
     : m_Preferences(preferences ? preferences : StreamingPreferences::get()),
       m_IsFullScreen(m_Preferences->windowMode != StreamingPreferences::WM_WINDOWED || !WMUtils::isRunningDesktopEnvironment()),
       m_Computer(computer),
@@ -748,6 +752,7 @@ Session::Session(NvComputer* computer, NvApp& app, StreamingPreferences *prefere
     m_ServerCommandManager(new ServerCommandManager()),
     m_ClipboardManager(ClipboardManager::instance())
 {
+    m_ResumeOnly = resumeOnly;
     connect(QCoreApplication::instance(),
             &QCoreApplication::aboutToQuit,
             this,
@@ -1536,8 +1541,8 @@ private:
             m_Session->m_UnexpectedTermination.load() || m_Session->m_Recovery.wasInterrupted(),
             m_Session->m_Preferences->quitAppAfter,
             m_Session->m_ShouldExitAfterQuit.load(),
-            m_Session->m_ApplicationExitRequested.load());
-        if (decision.quitHost) {
+            m_Session->m_ApplicationExitRequested.load(), m_Session->m_PreserveHostOnExit.load());
+        if (decision.quitHost && !m_Session->m_PreserveHostOnExit.load()) {
             emit m_Session->quitStarting();
             try {
                 NvHTTP http(m_Session->m_Computer);
@@ -1545,7 +1550,12 @@ private:
                 if (VirtualDisplayLaunchPolicy::canResumeExistingHostSession(
                         m_Session->m_App.id,
                         NvHTTP::getCurrentGame(http.getServerInfo(NvHTTP::NVLL_ERROR, true)))) {
-                    http.quitApp(decision.exitClient ? 2000 : NvHTTP::QUIT_TIMEOUT_MS);
+                    int timeout = decision.exitClient ? 2000 : NvHTTP::QUIT_TIMEOUT_MS;
+#ifdef Q_OS_LINUX
+                    if (ProcessLifecycle::ShutdownCoordinator::instance().shutdownRequested())
+                        timeout = int(qMin<qint64>(timeout, ProcessLifecycle::ShutdownCoordinator::instance().remainingMs() - 1500));
+#endif
+                    if (timeout > 0 && !m_Session->m_PreserveHostOnExit.load()) http.quitApp(timeout);
                 }
             } catch (const GfeHttpResponseException&) {
             } catch (const QtNetworkReplyException&) {
@@ -1557,9 +1567,12 @@ private:
     {
         // Neither UI completion nor a new Session may precede connection stop
         // and release of the exclusive global moonlight-common-c slot.
+        m_Session->m_Recovery.completeCleanup();
+#ifdef Q_OS_LINUX
+        ProcessLifecycle::ActiveSessionRegistry::instance().unregisterSession(m_Session, m_Session->m_Recovery.canResume());
+#endif
         Session::s_ActiveSession = nullptr;
         Session::s_ActiveSessionSemaphore.release();
-        m_Session->m_Recovery.completeCleanup();
         QMetaObject::invokeMethod(m_Session, &Session::notifyCleanupComplete,
                                   Qt::QueuedConnection);
     }
@@ -2209,6 +2222,9 @@ void Session::markIntentionalDisconnect()
 Session* Session::createResumeSession()
 {
     if (!m_Recovery.takeResume()) return nullptr;
+#ifdef Q_OS_LINUX
+    ProcessLifecycle::ActiveSessionRegistry::instance().clearRecovery(this);
+#endif
     auto* resumed = new Session(m_Computer, m_App, m_Preferences);
     resumed->m_ResumeOnly = true;
     deleteLater(); // fresh Session uses application-owned preferences
@@ -2223,6 +2239,9 @@ bool Session::retainForRecovery()
 
 void Session::cancelSession()
 {
+#ifdef Q_OS_LINUX
+    ProcessLifecycle::ActiveSessionRegistry::instance().clearRecovery(this);
+#endif
     markIntentionalDisconnect();
     if (m_Recovery.cleaned()) {
         deleteLater();
@@ -2237,7 +2256,12 @@ void Session::cancelSession()
 
 void Session::handleApplicationExit()
 {
+#ifdef Q_OS_LINUX
+    requestApplicationExit(ProcessLifecycle::ShutdownCoordinator::instance().shutdownReason() ==
+                           ProcessLifecycle::ShutdownReason::ReplaceRequest);
+#else
     cancelSession();
+#endif
 }
 
 void Session::flushWindowEvents()
@@ -2266,12 +2290,26 @@ void Session::sendWifiKeepaliveIfNeeded()
     }
 }
 
+void Session::requestApplicationExit(bool preserveHost)
+{
+    if (preserveHost) m_PreserveHostOnExit.store(true);
+    m_Recovery.cancel();
+    m_ApplicationExitRequested.store(true);
+    markIntentionalDisconnect();
+    m_Recovery.beginTermination(false, false);
+    SDL_Event event = {}; event.type = SDL_USEREVENT; event.user.code = SDL_CODE_SESSION_TERMINATED;
+    SDL_PushEvent(&event);
+}
+
 void Session::setShouldExitAfterQuit()
 {
     m_Recovery.cancel();
     m_ShouldExitAfterQuit = true;
     m_IntentionalDisconnect.store(true);
     m_RetryCancellation.cancel();
+#ifdef Q_OS_LINUX
+    ProcessLifecycle::ShutdownCoordinator::instance().requestShutdown(ProcessLifecycle::ShutdownReason::ApplicationExit);
+#endif
 }
 
 class ExecThread : public QThread
@@ -2296,6 +2334,15 @@ void Session::exec(QWindow* qtWindow)
 {
     QQmlEngine::setObjectOwnership(this, QQmlEngine::CppOwnership);
     m_QtWindow = qtWindow;
+#ifdef Q_OS_LINUX
+    ProcessLifecycle::ActiveSessionRegistry::Snapshot snapshot;
+    snapshot.hostUuid = m_Computer->uuid; snapshot.appId = m_App.id;
+    ProcessLifecycle::ActiveSessionRegistry::instance().registerSession(this,
+        [this](ProcessLifecycle::ShutdownReason reason) {
+            requestApplicationExit(reason == ProcessLifecycle::ShutdownReason::ReplaceRequest);
+        }, snapshot);
+    ProcessLifecycle::InstanceGuard::instance().clearHandoff();
+#endif
 
     // Use a separate thread for the streaming session on X11 or Wayland
     // to ensure we don't stomp on Qt's GL context. This breaks when using
@@ -2332,6 +2379,9 @@ void Session::execInternal()
     // SDL 2.0.22+ can distinguish a stream-window close from an application
     // quit. Keep legacy behavior on older runtimes that always combine them.
     const bool distinguishApplicationQuit = SessionEvents::configureWindowCloseHandling();
+#ifdef Q_OS_LINUX
+    const bool gamingMode = SteamDeckSession::current() == SteamDeckSession::Gaming;
+#endif
 
     // Complete initialization in this deferred context to avoid
     // calling expensive functions in the constructor (during the
@@ -2340,6 +2390,9 @@ void Session::execInternal()
     // NB: This initializes the SDL video subsystem, so it must be
     // called on the main thread.
     if (!initialize()) {
+#ifdef Q_OS_LINUX
+        ProcessLifecycle::ActiveSessionRegistry::instance().unregisterSession(this);
+#endif
         m_Recovery.completeCleanup();
         QMetaObject::invokeMethod(this, &Session::notifyCleanupComplete, Qt::QueuedConnection);
         return;
@@ -2350,6 +2403,7 @@ void Session::execInternal()
 
     // We're now active
     s_ActiveSession = this;
+
 
     // Initialize the gamepad code with our preferences
     // NB: m_InputHandler must be initialize before starting the connection.
@@ -2656,8 +2710,17 @@ void Session::execInternal()
         // Record it before the recovery checks so a simultaneous failure
         // cannot consume the exit request and leave the client running.
         const auto exitAction = SessionEvents::classifyExit(
-            event, SDL_GetWindowID(m_Window), distinguishApplicationQuit);
+            event, SDL_GetWindowID(m_Window), distinguishApplicationQuit,
+#ifdef Q_OS_LINUX
+            gamingMode
+#else
+            false
+#endif
+        );
         if (exitAction == SessionEvents::ExitAction::ExitApplication) {
+#ifdef Q_OS_LINUX
+            ProcessLifecycle::ShutdownCoordinator::instance().requestShutdown(ProcessLifecycle::ShutdownReason::SdlApplicationExit);
+#endif
             m_ApplicationExitRequested.store(true);
             markIntentionalDisconnect();
         }
@@ -2688,6 +2751,9 @@ void Session::execInternal()
 
         case SDL_USEREVENT:
             switch (event.user.code) {
+            case SessionEvents::ActivateWindowEvent: // no pointer payload
+                SDL_RaiseWindow(m_Window);
+                break;
             case SDL_CODE_SESSION_TERMINATED:
                 // A stale wakeup from an older Session is harmless. The gate
                 // checks above handle termination of the current Session.

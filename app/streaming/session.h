@@ -4,6 +4,9 @@
 
 #include <QSemaphore>
 #include <QWindow>
+#ifdef Q_OS_LINUX
+#include "backend/shutdowncoordinator.h"
+#endif
 
 #include <Limelight.h>
 #include <opus_multistream.h>
@@ -111,11 +114,14 @@ class Session : public QObject
     friend class ExecThread;
 
 public:
-    explicit Session(NvComputer* computer, NvApp& app, StreamingPreferences *preferences = nullptr);
+    explicit Session(NvComputer* computer, NvApp& app, StreamingPreferences *preferences = nullptr, bool resumeOnly = false);
 
     // NB: This may not get destroyed for a long time! Don't put any cleanup here.
     // Use Session::exec() or DeferredSessionCleanupTask instead.
     virtual ~Session() {
+#ifdef Q_OS_LINUX
+        ProcessLifecycle::ActiveSessionRegistry::instance().clearRecovery(this);
+#endif
         if (m_QuickMenuManager) {
             delete m_QuickMenuManager;
             m_QuickMenuManager = nullptr;
@@ -134,6 +140,8 @@ public:
     Q_INVOKABLE void cancelRetry();
 
     Q_INVOKABLE Session* createResumeSession();
+    // Thread-safe cancellation only; QObject lifetime is guarded externally.
+    void requestApplicationExit(bool preserveHost = false);
 
     Q_INVOKABLE bool recoveryAvailable() const { return m_Recovery.canResume(); }
 
@@ -330,6 +338,7 @@ private:
     std::atomic<bool> m_ShouldExitAfterQuit;
     std::atomic<bool> m_ApplicationExitRequested{false};
     bool m_ResumeOnly{false};
+    std::atomic<bool> m_PreserveHostOnExit{false};
     bool m_RecoveryRetained{false};
     SessionRecovery::RecoveryGate m_Recovery;
     Uint32 m_LastWifiKeepaliveTimeMs;

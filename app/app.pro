@@ -6,6 +6,11 @@ unix:!macx {
     DEFINES += VIBERTEMIS_HAS_DESKTOP_PORTAL
 }
 
+linux {
+    SOURCES += backend/shutdowncoordinator.cpp backend/instanceguard.cpp
+    HEADERS += backend/shutdowncoordinator.h backend/instanceguard.h
+}
+
 unix:!macx {
     message(Crash diagnostics enabled)
 

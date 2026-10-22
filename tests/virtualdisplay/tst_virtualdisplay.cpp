@@ -1155,6 +1155,9 @@ void VirtualDisplayLaunchTest::cleanupDecisionPreservesQuitAfterFailure()
             QVERIFY(!disconnect.exitClient);
             QCOMPARE(disconnect.quitHost, !unexpected && preference);
             const auto applicationQuit = SessionRecovery::cleanupDecision(unexpected, preference, false, true);
+            const auto replacement = SessionRecovery::cleanupDecision(unexpected, preference, true, true, true);
+            QVERIFY(replacement.exitClient);
+            QVERIFY(!replacement.quitHost);
             QVERIFY(applicationQuit.exitClient);
             QCOMPARE(applicationQuit.quitHost, !unexpected && preference);
         }

@@ -12,6 +12,7 @@ Item {
     property string stageText : isResume ? qsTr("Resuming %1...").arg(appName) :
                                            qsTr("Starting %1...").arg(appName)
     property bool isResume : false
+    property bool automaticHandoff : false
     property bool quitAfter : false
     property string recoveryText: ""
     property bool waitingForRecovery: false
@@ -34,6 +35,7 @@ Item {
 
     function connectionStarted()
     {
+        automaticHandoff = false
         // Hide the UI contents so the user doesn't
         // see them briefly when we pop off the StackView
         stageSpinner.visible = false
@@ -122,6 +124,10 @@ Item {
         // Re-enable GUI gamepad usage only after SDL input is destroyed.
         SdlGamepadKeyNavigation.enable()
 
+        if (automaticHandoff) {
+            recoveryText = ""
+            streamSegueErrorDialog.text = ""
+        }
         if (recoveryText && session && session.retainForRecovery()) {
             waitingForRecovery = true
             streamSegueErrorDialog.text = ""

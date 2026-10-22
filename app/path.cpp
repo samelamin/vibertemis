@@ -30,6 +30,16 @@ QString Path::getQmlCacheDir()
     return s_QmlCacheDir;
 }
 
+QString Path::getDataDir()
+{
+    // The per-profile data directory. It is identical for every launch of this
+    // profile - including every Flatpak instance of the same application id -
+    // which is exactly what a single-instance lock needs. Callers must
+    // mkpath(".") before creating files inside it.
+    return QFile::exists(QDir::currentPath() + "/portable.dat") ? QDir::currentPath() :
+        QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+}
+
 QByteArray Path::readDataFile(QString fileName)
 {
     QFile dataFile(getDataFilePath(fileName));

@@ -230,3 +230,23 @@ HDR, latency, controls, logs, and the LCD/OLED acceptance matrix, continue with
 the [advanced Steam Deck streaming and validation guide](STEAM_DECK.md).
 Report reproducible results in the
 [Vibertemis issue tracker](https://github.com/samelamin/vibertemis/issues).
+
+## Quitting and reopening
+
+Steam's **Exit Game** and Vibertemis **Quit** close the client, including when
+it has lost focus or is waiting for the PC. Cleanup normally finishes quickly;
+a stalled client has a five-second shutdown deadline. **Disconnect** still
+returns to the app without exiting.
+
+In Gaming Mode, reopening while an older copy remains asks that copy to close
+first. The new copy starts only after the old process exits, preserving the
+host game and attempting to resume that same game. If resume is unavailable,
+the PC list remains available. A driver that cannot terminate produces a clear
+restart error instead of another client process. Allow up to six seconds after
+the old copy acknowledges shutdown. Desktop Mode reopening activates the
+existing window.
+
+These protections apply after the first launch of the updated app. If an older
+build was already stuck during the update, restart the Deck once to clear that
+old process; the new build cannot communicate with the previous build's missing
+control service.

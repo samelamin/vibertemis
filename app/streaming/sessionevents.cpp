@@ -11,8 +11,11 @@ bool configureWindowCloseHandling()
 }
 
 ExitAction classifyExit(const SDL_Event& event, Uint32 streamWindowId,
-                        bool distinguishApplicationQuit)
+                        bool distinguishApplicationQuit, bool gamingMode)
 {
+    if (gamingMode && (event.type == SDL_QUIT ||
+        (event.type == SDL_WINDOWEVENT && event.window.event == SDL_WINDOWEVENT_CLOSE &&
+         event.window.windowID == streamWindowId))) return ExitAction::ExitApplication;
     if (!distinguishApplicationQuit) return ExitAction::None;
     if (event.type == SDL_QUIT) return ExitAction::ExitApplication;
     if (event.type == SDL_WINDOWEVENT && event.window.event == SDL_WINDOWEVENT_CLOSE &&

@@ -57,7 +57,22 @@ ApplicationWindow {
         SdlGamepadKeyNavigation.enable()
     }
 
+    Connections {
+        target: handoffLauncher
+        function onSessionCreated(appName, session) {
+            var component = Qt.createComponent("StreamSegue.qml")
+            var segue = component.createObject(stackView, {"appName": appName, "session": session,
+                "isResume": true, "automaticHandoff": true, "quitAfter": false})
+            if (segue) stackView.push(segue)
+            else session.deleteLater()
+        }
+        function onFailed(text) { console.warn("Session handoff: " + text) }
+    }
+
     Component.onCompleted: {
+        Qt.callLater(function() {
+            if (handoffLauncher) handoffLauncher.execute(ComputerManager)
+        })
         // Show the window according to the user's preferences
         if (SystemProperties.hasDesktopEnvironment) {
             if (StreamingPreferences.uiDisplayMode == StreamingPreferences.UI_MAXIMIZED) {

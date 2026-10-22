@@ -24,6 +24,7 @@ public:
                       StreamingPreferences* preferences,
                       QObject *parent = nullptr);
     ~Launcher();
+    void setResumeOnlyAppId(int appId);
     Q_INVOKABLE void execute(ComputerManager *manager);
     Q_INVOKABLE void quitRunningApp();
     Q_INVOKABLE bool isExecuted() const;

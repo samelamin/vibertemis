@@ -10,6 +10,9 @@ public:
     static QString getBoxArtCacheDir();
     static QString getQmlCacheDir();
 
+    // Per-profile data directory, shared by every launch of this profile.
+    static QString getDataDir();
+
     static QByteArray readDataFile(QString fileName);
     static void writeCacheFile(QString fileName, QByteArray data);
     static void deleteCacheFile(QString fileName);

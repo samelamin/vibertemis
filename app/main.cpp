@@ -1,4 +1,12 @@
 #include <QGuiApplication>
+#ifdef Q_OS_LINUX
+#include "backend/shutdowncoordinator.h"
+#include "backend/instanceguard.h"
+#include "streaming/sessionevents.h"
+#include "backend/steamdecksession.h"
+#include <QStandardPaths>
+#include <unistd.h>
+#endif
 #include <QCoreApplication>
 #include <QFileInfo>
 #include <QJsonDocument>
@@ -408,6 +416,16 @@ int main(int argc, char *argv[])
         return 0;
     }
 
+#ifdef Q_OS_LINUX
+    const qint64 launchTimeNs = ProcessLifecycle::ShutdownCoordinator::monotonicNowNs();
+    SDL_SetHintWithPriority("SDL_NO_SIGNAL_HANDLERS", "1", SDL_HINT_OVERRIDE);
+    auto& shutdown = ProcessLifecycle::ShutdownCoordinator::instance();
+    if (!shutdown.installProcessSignalHandling()) {
+        std::fputs("Vibertemis could not initialize reliable process shutdown.\n", stderr);
+        ::_exit(1);
+    }
+    ProcessLifecycle::StreamHandoff handoff;
+#endif
     SDL_SetMainReady();
 
     if (QFile(QDir::currentPath() + "/portable.dat").exists()) {
@@ -436,7 +454,8 @@ int main(int argc, char *argv[])
     if (IS_UNSPECIFIED_HANDLE(oldConsoleHandles.error))
 #endif
     {
-        s_LoggerFile = new QFile(tempDir.filePath(QString("Artemis-%1.log").arg(QDateTime::currentSecsSinceEpoch())));
+        s_LoggerFile = new QFile(tempDir.filePath(QString("Artemis-%1-%2.log")
+            .arg(QDateTime::currentSecsSinceEpoch()).arg(QCoreApplication::applicationPid())));
         // QFile::open() fails silently if the parent directory does not
         // exist. On a fresh Flatpak install the StateLocation directory does
         // not exist until something creates it, so mkpath(".") is mandatory
@@ -480,22 +499,6 @@ int main(int argc, char *argv[])
     CrashHandler::install();
 #endif
 
-#ifdef LOG_TO_FILE
-    // Prune the oldest existing logs if there are more than 10
-    QStringList existingLogNames = tempDir.entryList(QStringList("Artemis-*.log"), QDir::NoFilter, QDir::SortFlag::Time);
-    for (int i = 10; i < existingLogNames.size(); i++) {
-        qInfo() << "Removing old log file:" << existingLogNames.at(i);
-        QFile(tempDir.filePath(existingLogNames.at(i))).remove();
-    }
-#ifdef Q_OS_LINUX
-    // Prune the oldest existing crash files if there are more than 10
-    QStringList existingCrashNames = tempDir.entryList(QStringList("Artemis-crash-*.txt"), QDir::NoFilter, QDir::SortFlag::Time);
-    for (int i = 10; i < existingCrashNames.size(); i++) {
-        qInfo() << "Removing old crash file:" << existingCrashNames.at(i);
-        QFile(tempDir.filePath(existingCrashNames.at(i))).remove();
-    }
-#endif
-#endif
 
 #if defined(Q_OS_WIN32)
     // Force AntiHooking.dll to be statically imported and loaded
@@ -701,9 +704,62 @@ int main(int argc, char *argv[])
 
     QGuiApplication app(argc, argv);
     QGuiApplication::setApplicationDisplayName("Vibertemis");
+#ifdef Q_OS_LINUX
+    app.setQuitOnLastWindowClosed(false);
+    QObject::connect(&app, &QGuiApplication::lastWindowClosed, &app, [&shutdown] {
+        shutdown.requestShutdown(ProcessLifecycle::ShutdownReason::ApplicationExit);
+    });
+    shutdown.setQuitDispatcher([&app] {
+        QMetaObject::invokeMethod(&app, &QCoreApplication::quit, Qt::QueuedConnection);
+    });
+    // Destroyed before app, after engine: foreign threads can no longer queue
+    // calls into Qt while its destructor is executing.
+    struct DispatchLifetime {
+        ~DispatchLifetime() {
+            ProcessLifecycle::InstanceGuard::instance().setActivationHandler({});
+            ProcessLifecycle::ShutdownCoordinator::instance().setQuitDispatcher({});
+        }
+    } dispatchLifetime;
+    QObject::connect(&app, &QCoreApplication::aboutToQuit, &app, [&shutdown] {
+        shutdown.requestShutdown(ProcessLifecycle::ShutdownReason::ApplicationExit);
+    });
+#endif
 
     GlobalCommandLineParser parser;
     GlobalCommandLineParser::ParseResult commandLineParserResult = parser.parse(app.arguments());
+#ifdef Q_OS_LINUX
+    if (commandLineParserResult == GlobalCommandLineParser::NormalStartRequested) {
+        QString runtimeDir = QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation);
+        const QString flatpakId = qEnvironmentVariable("FLATPAK_ID");
+        if (!flatpakId.isEmpty()) runtimeDir = QDir(runtimeDir).filePath("app/" + flatpakId);
+        QString error;
+        auto& guard = ProcessLifecycle::InstanceGuard::instance();
+        const auto result = guard.enter(Path::getDataDir(), runtimeDir,
+            SteamDeckSession::current() == SteamDeckSession::Gaming, launchTimeNs, &error);
+        if (result != ProcessLifecycle::InstanceGuard::Primary) {
+            if (result == ProcessLifecycle::InstanceGuard::Failed)
+                std::fprintf(stderr, "%s\n", qPrintable(error));
+            const QString crashPath = CrashHandler::crashFilePath();
+            if (!crashPath.isEmpty() && QFileInfo(crashPath).size() == 0) QFile::remove(crashPath);
+            shutdown.requestShutdown(ProcessLifecycle::ShutdownReason::ApplicationExit);
+            return result == ProcessLifecycle::InstanceGuard::Activated ? 0 : 1;
+        }
+        handoff = guard.handoff();
+        // A lightweight SDL event activates the streaming window on its owner
+        // thread; Qt activation is queued for when its event loop is available.
+        guard.setActivationHandler([&app] {
+            SDL_Event event = {}; event.type = SDL_USEREVENT; event.user.code = SessionEvents::ActivateWindowEvent;
+            SDL_PushEvent(&event);
+            QMetaObject::invokeMethod(&app, [] {
+                for (auto* window : QGuiApplication::topLevelWindows()) {
+                    if (window->isVisible()) { window->raise(); window->requestActivate(); }
+                }
+            }, Qt::QueuedConnection);
+        });
+        qInfo() << "Process lifecycle ready; pid" << getpid() << "parent" << getppid()
+                << "gaming" << (SteamDeckSession::current() == SteamDeckSession::Gaming);
+    }
+#endif
     switch (commandLineParserResult) {
     case GlobalCommandLineParser::ListRequested:
         // Don't log to the console since it will jumble the command output
@@ -712,6 +768,23 @@ int main(int argc, char *argv[])
     default:
         break;
     }
+
+#ifdef LOG_TO_FILE
+    // Prune the oldest existing logs if there are more than 10
+    QStringList existingLogNames = tempDir.entryList(QStringList("Artemis-*.log"), QDir::NoFilter, QDir::SortFlag::Time);
+    for (int i = 10; i < existingLogNames.size(); i++) {
+        qInfo() << "Removing old log file:" << existingLogNames.at(i);
+        QFile(tempDir.filePath(existingLogNames.at(i))).remove();
+    }
+#ifdef Q_OS_LINUX
+    // Prune the oldest existing crash files if there are more than 10
+    QStringList existingCrashNames = tempDir.entryList(QStringList("Artemis-crash-*.txt"), QDir::NoFilter, QDir::SortFlag::Time);
+    for (int i = 10; i < existingCrashNames.size(); i++) {
+        qInfo() << "Removing old crash file:" << existingCrashNames.at(i);
+        QFile(tempDir.filePath(existingCrashNames.at(i))).remove();
+    }
+#endif
+#endif
 
     SDL_version compileVersion;
     SDL_VERSION(&compileVersion);
@@ -876,6 +949,24 @@ int main(int argc, char *argv[])
     }
 
     QQmlApplicationEngine engine;
+    QObject* handoffLauncher = nullptr;
+#ifdef Q_OS_LINUX
+    // QQmlApplicationEngine normally queues an immediate Qt quit. Replace that
+    // connection so an active Session can finish cleanup first.
+    QObject::disconnect(&engine, SIGNAL(quit()), &app, nullptr);
+    QObject::connect(&engine, &QQmlEngine::quit, &app, [&shutdown] {
+        shutdown.requestShutdown(ProcessLifecycle::ShutdownReason::ApplicationExit);
+    });
+    if (handoff.isValid()) {
+        auto* launcher = new CliStartStream::Launcher(handoff.hostUuid, QString(), StreamingPreferences::get(), &app);
+        launcher->setResumeOnlyAppId(handoff.appId);
+        handoffLauncher = launcher;
+        QObject::connect(launcher, &CliStartStream::Launcher::failed, &app, [] {
+            ProcessLifecycle::InstanceGuard::instance().clearHandoff();
+        });
+    }
+#endif
+    engine.rootContext()->setContextProperty("handoffLauncher", handoffLauncher);
     QString initialView;
     bool hasGUI = true;
 
@@ -929,8 +1020,12 @@ int main(int argc, char *argv[])
 
         // Load the main.qml file
         engine.load(QUrl(QStringLiteral("qrc:/gui/main.qml")));
-        if (engine.rootObjects().isEmpty())
+        if (engine.rootObjects().isEmpty()) {
+#ifdef Q_OS_LINUX
+            shutdown.requestShutdown(ProcessLifecycle::ShutdownReason::StartupFailure);
+#endif
             return -1;
+        }
     }
 
     int err = app.exec();
@@ -949,7 +1044,16 @@ int main(int argc, char *argv[])
 
     // Give worker tasks time to properly exit. Fixes PendingQuitTask
     // sometimes freezing and blocking process exit.
+#ifdef Q_OS_LINUX
+    shutdown.requestShutdown(ProcessLifecycle::ShutdownReason::ApplicationExit);
+    qInfo() << "Process shutdown:" << ProcessLifecycle::shutdownReasonName(shutdown.shutdownReason());
+    // Do not clear queued cleanup tasks: they must run before their completion
+    // signals/destructors. The independent watchdog bounds this and later waits.
+    if (!QThreadPool::globalInstance()->waitForDone(shutdown.remainingMs()))
+        ::_exit(ProcessLifecycle::kShutdownForcedExitCode);
+#else
     QThreadPool::globalInstance()->waitForDone(30000);
+#endif
 
     // Restore the default logger for all libraries before shutting down ours
 #if SDL_VERSION_ATLEAST(3, 0, 0)

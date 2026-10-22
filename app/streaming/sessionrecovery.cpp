@@ -50,9 +50,9 @@ bool RecoveryGate::takeResume()
 }
 
 CleanupDecision cleanupDecision(bool unexpected, bool quitHostPreference, bool explicitQuit,
-                                bool applicationQuit)
+                                bool applicationQuit, bool preserveHost)
 {
-    return {explicitQuit || (!unexpected && quitHostPreference), explicitQuit || applicationQuit};
+    return {!preserveHost && (explicitQuit || (!unexpected && quitHostPreference)), explicitQuit || applicationQuit};
 }
 
 #ifdef Q_OS_LINUX

@@ -37,7 +37,7 @@ private:
 
 struct CleanupDecision { bool quitHost; bool exitClient; };
 CleanupDecision cleanupDecision(bool unexpected, bool quitHostPreference, bool explicitQuit,
-                                bool applicationQuit = false);
+                                bool applicationQuit = false, bool preserveHost = false);
 
 #ifdef Q_OS_LINUX
 bool readSuspendClocks(qint64& bootNs, qint64& monotonicNs);
