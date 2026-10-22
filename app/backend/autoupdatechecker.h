@@ -57,7 +57,9 @@ public:
         DownloadError,
         VerificationError,
         RestoreError,
-        Cancelled
+        Cancelled,
+        Installed,
+        InstallationUnknown
     };
     Q_ENUM(State)
 
@@ -99,6 +101,7 @@ public:
     Q_INVOKABLE void start();
     Q_INVOKABLE void checkNow();
     Q_INVOKABLE void downloadUpdate();
+    Q_INVOKABLE void installUpdate();
     Q_INVOKABLE void cancel();
     Q_INVOKABLE void retry();
     Q_INVOKABLE void discardPendingUpdate();
@@ -222,6 +225,7 @@ private:
     RollingTagObject m_TagReference;
     QList<RollingTagObject> m_TagObjects;
     PendingUpdateRecord m_RestoreRecord;
+    bool m_InstallAfterVerification = false;
     bool m_Restoring;
     bool m_ReloadPendingRecord;
     bool m_HandOffRetry;

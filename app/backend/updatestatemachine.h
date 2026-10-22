@@ -24,7 +24,9 @@ public:
         HandOffFailed,
         DiscardPending,
         Retry,
-        Cancel
+        Cancel,
+        InstallCompleted,
+        InstallOutcomeUnknown
     };
 
     static UpdateResult<AutoUpdateChecker::State> reduce(

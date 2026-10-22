@@ -56,8 +56,6 @@ NavigableDialog {
     function manualCommandAvailable() {
         return AutoUpdateChecker.manualInstallCommand !== "" &&
                (AutoUpdateChecker.state === AutoUpdateChecker.ReadyForDesktop ||
-                AutoUpdateChecker.state === AutoUpdateChecker.ReadyToHandOff ||
-                AutoUpdateChecker.state === AutoUpdateChecker.HandingOff ||
                 AutoUpdateChecker.state === AutoUpdateChecker.HandOffRequested ||
                 AutoUpdateChecker.state === AutoUpdateChecker.HandOffError)
     }
@@ -110,9 +108,9 @@ NavigableDialog {
         case AutoUpdateChecker.ReadyForDesktop:
             return qsTr("Ready for Desktop Mode")
         case AutoUpdateChecker.ReadyToHandOff:
-            return qsTr("Ready to open the installer")
+            return qsTr("Ready to install")
         case AutoUpdateChecker.HandingOff:
-            return qsTr("Requesting installer")
+            return qsTr("Installing update")
         case AutoUpdateChecker.HandOffRequested:
             return qsTr("Installer requested")
         case AutoUpdateChecker.CheckError:
@@ -124,7 +122,11 @@ NavigableDialog {
         case AutoUpdateChecker.RestoreError:
             return qsTr("Downloaded update unavailable")
         case AutoUpdateChecker.HandOffError:
-            return qsTr("Could not request the installer")
+            return qsTr("Update installation failed")
+        case AutoUpdateChecker.Installed:
+            return qsTr("Update installed")
+        case AutoUpdateChecker.InstallationUnknown:
+            return qsTr("Installation status unavailable")
         case AutoUpdateChecker.Cancelled:
             return qsTr("Update cancelled")
         default:
@@ -142,21 +144,24 @@ NavigableDialog {
             return qsTr("No newer update is available.")
         case AutoUpdateChecker.Available:
             return AutoUpdateChecker.rollingInstallSupported ?
-                       qsTr("Build %1 is ready to download.").arg(AutoUpdateChecker.availableBuild) :
+                       qsTr("Update downloads, verifies, and installs build %1 in Desktop Mode.").arg(AutoUpdateChecker.availableBuild) :
                        qsTr("Version %1 is available on the release page.").arg(AutoUpdateChecker.availableBuild)
         case AutoUpdateChecker.Downloading:
             return qsTr("The Flatpak is being saved to your Downloads folder.")
         case AutoUpdateChecker.Verifying:
             return qsTr("Checking the file size, checksum, and release identity.")
         case AutoUpdateChecker.ReadyForDesktop:
-            return qsTr("Switch to Desktop Mode, reopen the application, and choose Retry. " +
+            return qsTr("Switch to Desktop Mode, reopen the application, and choose Install update. " +
                         "The verified downloaded file will remain in Downloads.")
         case AutoUpdateChecker.ReadyToHandOff:
-            return qsTr("The verified Flatpak is ready. Opening it requests your desktop installer; you remain in control.")
+            return qsTr("The verified update is ready to install. No separate installer is needed.")
         case AutoUpdateChecker.HandingOff:
-            return qsTr("Requesting the desktop installer for the verified Flatpak.")
+            return qsTr("Installing the verified update. You can leave this window open to see the result.")
         case AutoUpdateChecker.HandOffRequested:
             return qsTr("The installer was requested. Complete or cancel the visible installation there.")
+        case AutoUpdateChecker.Installed:
+            return qsTr("Close and reopen the application to use the new build.")
+        case AutoUpdateChecker.InstallationUnknown:
         case AutoUpdateChecker.CheckError:
         case AutoUpdateChecker.DownloadError:
         case AutoUpdateChecker.VerificationError:
@@ -263,6 +268,7 @@ NavigableDialog {
         Label {
             Layout.fillWidth: true
             text: updateDialog.stateMessage()
+            textFormat: Text.PlainText
             font.pointSize: 12
             color: window.ui.muted
             wrapMode: Text.Wrap
@@ -399,12 +405,12 @@ NavigableDialog {
         SheetButton {
             id: downloadButton
             primary: updateDialog.firstAction() === downloadButton
-            text: qsTr("Download")
+            text: qsTr("Update")
             visible: AutoUpdateChecker.state === AutoUpdateChecker.Available &&
                      AutoUpdateChecker.rollingInstallSupported
             enabled: visible
             activeFocusOnTab: visible && enabled
-            onClicked: AutoUpdateChecker.downloadUpdate()
+            onClicked: AutoUpdateChecker.installUpdate()
             Keys.onReturnPressed: clicked()
             Keys.onEnterPressed: clicked()
             Keys.onRightPressed: nextItemInFocusChain(true).forceActiveFocus(Qt.TabFocus)
@@ -459,11 +465,11 @@ NavigableDialog {
         SheetButton {
             id: openInstallerButton
             primary: updateDialog.firstAction() === openInstallerButton
-            text: qsTr("Open installer")
+            text: qsTr("Install update")
             visible: AutoUpdateChecker.state === AutoUpdateChecker.ReadyToHandOff
             enabled: AutoUpdateChecker.state === AutoUpdateChecker.ReadyToHandOff
             activeFocusOnTab: visible && enabled
-            onClicked: AutoUpdateChecker.openInstaller()
+            onClicked: AutoUpdateChecker.installUpdate()
             Keys.onReturnPressed: clicked()
             Keys.onEnterPressed: clicked()
             Keys.onRightPressed: nextItemInFocusChain(true).forceActiveFocus(Qt.TabFocus)
@@ -490,7 +496,7 @@ NavigableDialog {
 
         SheetButton {
             id: laterButton
-            text: qsTr("Later")
+            text: AutoUpdateChecker.state === AutoUpdateChecker.Installed ? qsTr("Done") : qsTr("Later")
             visible: true
             enabled: true
             activeFocusOnTab: true

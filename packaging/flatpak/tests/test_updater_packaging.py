@@ -244,7 +244,6 @@ class UpdaterQmlContractTests(unittest.TestCase):
                 r"AutoUpdateChecker\.Downloading.*?"
                 r"AutoUpdateChecker\.Verifying.*?"
                 r"AutoUpdateChecker\.ReadyForDesktop.*?"
-                r"AutoUpdateChecker\.ReadyToHandOff.*?"
                 r"AutoUpdateChecker\.HandOffRequested.*?"
                 r"AutoUpdateChecker\.DownloadError.*?"
                 r"AutoUpdateChecker\.VerificationError.*?"
@@ -302,6 +301,8 @@ class UpdaterQmlContractTests(unittest.TestCase):
             "ReadyForDesktop",
             "ReadyToHandOff",
             "HandOffRequested",
+            "Installed",
+            "InstallationUnknown",
             "CheckError",
             "DownloadError",
             "VerificationError",
@@ -311,23 +312,22 @@ class UpdaterQmlContractTests(unittest.TestCase):
                 self.assertIn(f"AutoUpdateChecker.{state}", self.dialog)
 
         for label in (
-            "Download",
+            "Update",
             "Cancel",
             "Retry",
             "Later",
             "View release",
-            "Open installer",
+            "Install update",
             "Copy manual command",
         ):
             with self.subTest(label=label):
                 self.assertIn(f'qsTr("{label}")', self.dialog)
 
         for action in (
-            "downloadUpdate",
+            "installUpdate",
             "cancel",
             "retry",
             "openReleasePage",
-            "openInstaller",
         ):
             with self.subTest(action=action):
                 self.assertIn(f"AutoUpdateChecker.{action}()", self.dialog)
@@ -406,7 +406,10 @@ class UpdaterQmlContractTests(unittest.TestCase):
             ),
         )
         self.assertIn("installer requested", self.dialog.lower())
-        self.assertNotIn("installed", self.dialog.lower())
+        self.assertRegex(self.dialog, r'case AutoUpdateChecker\.Installed:\s*return qsTr\("Update installed"\)')
+        manual = self.dialog.split("function manualCommandAvailable()", 1)[1].split("}", 1)[0]
+        for busy in ("HandingOff", "Installed", "InstallationUnknown"):
+            self.assertNotIn(f"AutoUpdateChecker.{busy}", manual)
         self.assertNotIn("updated successfully", self.dialog.lower())
 
     def test_manual_command_uses_only_the_verified_downloads_path(self):

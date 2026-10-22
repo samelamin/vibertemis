@@ -19,6 +19,8 @@
 #include "backend/autoupdatechecker.h"
 #include "backend/buildinfo.h"
 #include "backend/desktopinstallerportal.h"
+#include "backend/flatpakinstaller.h"
+#include "flatpakdbusfixture.h"
 #include "backend/pendingupdate.h"
 #include "backend/releaseversionselector.h"
 #include "backend/rollingupdateparser.h"
@@ -243,6 +245,16 @@ public:
 
     int calls = 0;
     QSharedPointer<QFile> file;
+};
+
+class FakeFlatpakHostTransport : public FlatpakHostTransport
+{
+public:
+    void start(int fd) override { ++calls; descriptor = fd; }
+    void acknowledge() { emit started(true, 420, false, QString()); }
+    void finish(uint status = 0) { emit exited(420, status, QStringLiteral("installer detail")); }
+    int calls = 0;
+    int descriptor = -1;
 };
 
 class FakeDesktopPortalTransport : public DesktopPortalTransport
@@ -506,6 +518,13 @@ class AutoUpdateTest : public QObject
     Q_OBJECT
 
 private slots:
+    void directInstallerDbusContract();
+    void directInstallerLifecycle();
+    void directInstallerFailures();
+    void oneClickInstall();
+    void installRequiresExplicitAction();
+    void invalidDownloadNeverInstalls();
+    void restoredInstallAndRetry();
     void rollingReleaseDoesNotMaskVersionedRelease();
     void normalFirstReleaseIsSelected();
     void emptyReleaseArrayHasNoSelection();
@@ -2258,6 +2277,8 @@ void AutoUpdateTest::stateMachine()
         {S::ReadyToHandOff, E::Cancel, S::Cancelled},
         {S::ReadyToHandOff, E::BeginHandOff, S::HandingOff},
         {S::HandingOff, E::HandOffAccepted, S::HandOffRequested},
+        {S::HandingOff, E::InstallCompleted, S::Installed},
+        {S::HandingOff, E::InstallOutcomeUnknown, S::InstallationUnknown},
         {S::HandingOff, E::HandOffFailed, S::HandOffError},
         {S::HandOffRequested, E::BeginCheck, S::Checking},
         {S::HandOffRequested, E::Retry, S::Verifying},
@@ -2308,6 +2329,311 @@ void AutoUpdateTest::stateMachine()
     QVERIFY(meta.indexOfProperty("errorMessage") >= 0);
     QVERIFY(meta.indexOfProperty("rollingInstallSupported") >= 0);
 
+}
+
+void AutoUpdateTest::directInstallerDbusContract()
+{
+#ifdef VIBERTEMIS_HAS_DESKTOP_PORTAL
+    if (qgetenv("VIBERTEMIS_TEST_PRIVATE_DBUS") != "1") {
+        QSKIP("Run under dbus-run-session with VIBERTEMIS_TEST_PRIVATE_DBUS=1 for the wire test");
+    }
+    // A second connection forces real bus serialization, including SCM_RIGHTS.
+    QDBusConnection service = QDBusConnection::connectToBus(
+        QDBusConnection::SessionBus, QStringLiteral("installer-fixture"));
+    QVERIFY(service.isConnected());
+    QVERIFY(service.registerService(QStringLiteral("org.freedesktop.Flatpak")));
+    qDBusRegisterMetaType<TestDescriptorMap>();
+    FlatpakDbusFixture fixture;
+    QVERIFY(service.registerVirtualObject(QStringLiteral("/org/freedesktop/Flatpak/Development"), &fixture));
+    QTemporaryDir root;
+    const QString path = root.filePath(QStringLiteral("verified.flatpak"));
+    QFile writer(path);
+    QVERIFY(writer.open(QIODevice::WriteOnly));
+    writer.write("verified original inode");
+    writer.close();
+    QSharedPointer<QFile> file(new QFile(path));
+    QVERIFY(file->open(QIODevice::ReadOnly));
+    // Replacement by name must not affect the descriptor sent to the installer.
+    QVERIFY(QFile::rename(path, path + QStringLiteral(".old")));
+    QVERIFY(writer.open(QIODevice::WriteOnly));
+    writer.write("unverified replacement");
+    writer.close();
+    FlatpakInstaller installer;
+    QSignalSpy results(&installer, &InstallerPortal::response);
+    installer.openFlatpak(file);
+    QTRY_COMPARE(results.size(), 1);
+    QVERIFY2(fixture.error.isEmpty(), qPrintable(fixture.error));
+    QCOMPARE(fixture.cwd, QByteArray("/\0", 2));
+    QList<QByteArray> expected;
+    for (const QString &arg : FlatpakInstaller::commandArguments()) {
+        QByteArray bytes = arg.toUtf8(); bytes.append('\0'); expected.append(bytes);
+    }
+    QCOMPARE(fixture.argv, expected);
+    QCOMPARE(fixture.descriptorKeys, (QList<uint>{0, 1, 2, 3}));
+    QCOMPARE(fixture.flags, uint(0));
+    QVERIFY(fixture.readOnly);
+    QCOMPARE(fixture.offset, qint64(0));
+    QCOMPARE(fixture.payload, QByteArray("verified original inode"));
+    QVERIFY(!results.last().at(0).toBool());
+    QVERIFY(results.last().at(1).toString().contains(QStringLiteral("insufficient disk space")));
+    fixture.status = 0;
+    installer.openFlatpak(file);
+    QTRY_COMPARE(results.size(), 2);
+    QVERIFY(results.last().at(0).toBool());
+    QCOMPARE(fixture.calls, 2);
+    service.unregisterObject(QStringLiteral("/org/freedesktop/Flatpak/Development"));
+    service.unregisterService(QStringLiteral("org.freedesktop.Flatpak"));
+    QDBusConnection::disconnectFromBus(QStringLiteral("installer-fixture"));
+#else
+    QSKIP("Linux Flatpak wire contract");
+#endif
+}
+
+void AutoUpdateTest::directInstallerLifecycle()
+{
+    QTemporaryDir root;
+    const QString path = root.filePath(QStringLiteral("update.flatpak"));
+    QFile writer(path);
+    QVERIFY(writer.open(QIODevice::WriteOnly));
+    writer.write("verified fixture");
+    writer.close();
+    QSharedPointer<QFile> file(new QFile(path));
+    QVERIFY(file->open(QIODevice::ReadOnly));
+    file->seek(8);
+    FakeFlatpakHostTransport transport;
+    FlatpakInstaller installer(&transport, 1000);
+    QSignalSpy results(&installer, &InstallerPortal::response);
+    installer.openFlatpak(file);
+    QCOMPARE(file->pos(), qint64(0));
+    QCOMPARE(transport.calls, 1);
+    QCOMPARE(transport.descriptor, file->handle());
+    installer.openFlatpak(file);
+    QCOMPARE(transport.calls, 1);
+    emit transport.exited(999, 0, QString());
+    transport.acknowledge();
+    QCOMPARE(results.count(), 0); // PID acknowledgment is not installation.
+    emit transport.exited(999, 0, QString());
+    QCOMPARE(results.count(), 0);
+    transport.finish();
+    QCOMPARE(results.count(), 1);
+    QVERIFY(results.last().at(0).toBool());
+
+    // A real child can exit before its PID reply reaches the app.
+    installer.openFlatpak(file);
+    transport.finish();
+    QCOMPARE(results.count(), 1);
+    transport.acknowledge();
+    QCOMPARE(results.count(), 2);
+    QVERIFY(results.last().at(0).toBool());
+}
+
+void AutoUpdateTest::directInstallerFailures()
+{
+    QTemporaryFile writable;
+    QVERIFY(writable.open());
+    writable.write("fixture");
+    writable.flush();
+    QSharedPointer<QFile> file(new QFile(writable.fileName()));
+    QVERIFY(file->open(QIODevice::ReadOnly));
+    FakeFlatpakHostTransport transport;
+    FlatpakInstaller installer(&transport, 30);
+    QSignalSpy results(&installer, &InstallerPortal::response);
+    installer.openFlatpak(QSharedPointer<QFile>());
+    QCOMPARE(transport.calls, 0);
+    QVERIFY(!results.last().at(0).toBool());
+    installer.openFlatpak(file);
+    emit transport.started(false, 0, false, QStringLiteral("AccessDenied"));
+    QVERIFY(!results.last().at(0).toBool());
+    QVERIFY(!installer.installationOutcomeUnknown());
+    installer.openFlatpak(file);
+    transport.acknowledge();
+    emit transport.exited(420, 256, QString(20000, QLatin1Char('x')));
+    QVERIFY(!results.last().at(0).toBool());
+    QVERIFY(results.last().at(1).toString().size() < 8500);
+    installer.openFlatpak(file);
+    transport.acknowledge();
+    transport.finish(15); // signalled, not a successful normal exit
+    QVERIFY(!results.last().at(0).toBool());
+    installer.openFlatpak(file);
+    transport.acknowledge();
+    QTRY_VERIFY(installer.installationOutcomeUnknown());
+    const int calls = transport.calls;
+    installer.openFlatpak(file);
+    QCOMPARE(transport.calls, calls);
+    QVERIFY(!results.last().at(0).toBool());
+
+    FakeFlatpakHostTransport lostTransport;
+    FlatpakInstaller lost(&lostTransport, 1000);
+    QSignalSpy lostResult(&lost, &InstallerPortal::response);
+    lost.openFlatpak(file);
+    emit lostTransport.connectionLost();
+    QVERIFY(lost.installationOutcomeUnknown());
+    QCOMPARE(lostResult.size(), 1);
+    lostTransport.acknowledge();
+    lostTransport.finish();
+    QCOMPARE(lostResult.size(), 1); // Late signals cannot invent success.
+}
+
+void AutoUpdateTest::oneClickInstall()
+{
+    const QByteArray payload = rollingPayload();
+    const QByteArray manifest = manifestForPayload(payload);
+    FakeNetworkAccessManager network;
+    FakeUpdateFileStore files;
+    files.loadResult.error = UpdateError::InvalidMetadata;
+    FakeSessionModeProvider desktop;
+    FakeFlatpakHostTransport transport;
+    FlatpakInstaller installer(&transport, 1000);
+    enqueueAvailableCheck(&network, manifest);
+    AutoUpdateChecker checker(&network, &files, &desktop, &installer);
+    checker.start();
+    QTRY_COMPARE(checker.state(), AutoUpdateChecker::Available);
+    QCOMPARE(transport.calls, 0);
+    network.enqueue(networkScript(payload));
+    enqueueUnchangedRefetch(&network, manifest);
+    checker.installUpdate();
+    checker.installUpdate();
+    QTRY_COMPARE(checker.state(), AutoUpdateChecker::HandingOff);
+    QCOMPARE(transport.calls, 1);
+    QCOMPARE(network.scripts.size(), 0);
+    transport.acknowledge();
+    QCOMPARE(checker.state(), AutoUpdateChecker::HandingOff);
+    checker.installUpdate();
+    checker.discardPendingUpdate();
+    QCOMPARE(transport.calls, 1);
+    QVERIFY(!checker.downloadedPath().isEmpty());
+    transport.finish();
+    QCOMPARE(checker.state(), AutoUpdateChecker::Installed);
+    QVERIFY(checker.downloadedPath().isEmpty());
+    const int requests = network.requests.size();
+    checker.checkNow();
+    checker.retry();
+    checker.installUpdate();
+    QCOMPARE(checker.state(), AutoUpdateChecker::Installed);
+    QCOMPARE(network.requests.size(), requests);
+    QCOMPARE(transport.calls, 1);
+}
+
+void AutoUpdateTest::installRequiresExplicitAction()
+{
+    const QByteArray payload = rollingPayload();
+    const QByteArray manifest = manifestForPayload(payload);
+    for (bool gaming : {false, true}) {
+        FakeNetworkAccessManager network;
+        FakeUpdateFileStore files;
+        files.loadResult.error = UpdateError::InvalidMetadata;
+        FakeSessionModeProvider mode;
+        if (gaming) mode.value = SteamDeckSession::Gaming;
+        FakeFlatpakHostTransport transport;
+        FlatpakInstaller installer(&transport, 1000);
+        enqueueAvailableCheck(&network, manifest);
+        AutoUpdateChecker checker(&network, &files, &mode, &installer);
+        checker.start();
+        QTRY_COMPARE(checker.state(), AutoUpdateChecker::Available);
+        network.enqueue(networkScript(payload));
+        enqueueUnchangedRefetch(&network, manifest);
+        if (gaming) checker.installUpdate();
+        else checker.downloadUpdate();
+        QTRY_COMPARE(checker.state(), gaming ? AutoUpdateChecker::ReadyForDesktop
+                                           : AutoUpdateChecker::ReadyToHandOff);
+        QCOMPARE(transport.calls, 0);
+    }
+}
+
+void AutoUpdateTest::invalidDownloadNeverInstalls()
+{
+    const QByteArray payload = rollingPayload();
+    const QByteArray manifest = manifestForPayload(payload);
+    FakeNetworkAccessManager network;
+    FakeUpdateFileStore files;
+    files.loadResult.error = UpdateError::InvalidMetadata;
+    FakeSessionModeProvider mode;
+    FakeFlatpakHostTransport transport;
+    FlatpakInstaller installer(&transport, 1000);
+    enqueueAvailableCheck(&network, manifest);
+    AutoUpdateChecker checker(&network, &files, &mode, &installer);
+    checker.start();
+    QTRY_COMPARE(checker.state(), AutoUpdateChecker::Available);
+    network.enqueue(networkScript(QByteArray(payload.size(), 'e')));
+    checker.installUpdate();
+    QTRY_COMPARE(checker.state(), AutoUpdateChecker::VerificationError);
+    QCOMPARE(transport.calls, 0);
+    // Cancel clears intent; the next explicit download-only action stays ready.
+    enqueueAvailableCheck(&network, manifest);
+    checker.checkNow();
+    QTRY_COMPARE(checker.state(), AutoUpdateChecker::Available);
+    NetworkScript stall = networkScript(payload);
+    stall.stall = true;
+    network.enqueue(stall);
+    checker.installUpdate();
+    checker.cancel();
+    QCOMPARE(checker.state(), AutoUpdateChecker::Cancelled);
+    enqueueAvailableCheck(&network, manifest);
+    checker.checkNow();
+    QTRY_COMPARE(checker.state(), AutoUpdateChecker::Available);
+    network.enqueue(networkScript(payload));
+    enqueueUnchangedRefetch(&network, manifest);
+    checker.downloadUpdate();
+    QTRY_COMPARE(checker.state(), AutoUpdateChecker::ReadyToHandOff);
+    QCOMPARE(transport.calls, 0);
+}
+
+void AutoUpdateTest::restoredInstallAndRetry()
+{
+    const QByteArray payload = rollingPayload();
+    const QByteArray manifest = manifestForPayload(payload);
+    FakeNetworkAccessManager network;
+    FakeUpdateFileStore files;
+    files.loadResult.error = UpdateError::InvalidMetadata;
+    FakeSessionModeProvider mode;
+    FakeFlatpakHostTransport transport;
+    FlatpakInstaller installer(&transport, 1000);
+    enqueueAvailableCheck(&network, manifest);
+    AutoUpdateChecker checker(&network, &files, &mode, &installer);
+    checker.start();
+    QTRY_COMPARE(checker.state(), AutoUpdateChecker::Available);
+    network.enqueue(networkScript(payload));
+    enqueueUnchangedRefetch(&network, manifest);
+    checker.downloadUpdate();
+    QTRY_COMPARE(checker.state(), AutoUpdateChecker::ReadyToHandOff);
+    // Simulate a fresh app opening a persisted download: verification alone
+    // must not start an installer, even with the direct installer configured.
+    files.loadResult.ok = true;
+    files.loadResult.value = files.saved;
+    {
+        FakeNetworkAccessManager restoreNetwork;
+        FakeFlatpakHostTransport restoreTransport;
+        FlatpakInstaller restoreInstaller(&restoreTransport, 1000);
+        enqueueUnchangedRefetch(&restoreNetwork, manifest);
+        AutoUpdateChecker restored(&restoreNetwork, &files, &mode, &restoreInstaller);
+        restored.start();
+        QTRY_COMPARE(restored.state(), AutoUpdateChecker::ReadyToHandOff);
+        QCOMPARE(restoreTransport.calls, 0);
+    }
+    const int restoredReads = files.reopenCalls;
+    enqueueUnchangedRefetch(&network, manifest);
+    checker.installUpdate();
+    QTRY_COMPARE(checker.state(), AutoUpdateChecker::HandingOff);
+    QCOMPARE(files.reopenCalls, restoredReads + 1);
+    transport.acknowledge();
+    transport.finish(256);
+    QCOMPARE(checker.state(), AutoUpdateChecker::HandOffError);
+    QVERIFY(!checker.downloadedPath().isEmpty());
+    enqueueUnchangedRefetch(&network, manifest);
+    checker.retry();
+    QTRY_COMPARE(checker.state(), AutoUpdateChecker::HandingOff);
+    QCOMPARE(files.reopenCalls, restoredReads + 2);
+    QCOMPARE(transport.calls, 2);
+    emit transport.connectionLost();
+    QCOMPARE(checker.state(), AutoUpdateChecker::InstallationUnknown);
+    const int requests = network.requests.size();
+    checker.retry();
+    checker.checkNow();
+    checker.discardPendingUpdate();
+    checker.installUpdate();
+    QCOMPARE(network.requests.size(), requests);
+    QCOMPARE(transport.calls, 2);
+    QVERIFY(!checker.downloadedPath().isEmpty());
 }
 
 void AutoUpdateTest::desktopPortal()

@@ -155,6 +155,8 @@ ApplicationWindow {
                AutoUpdateChecker.state === AutoUpdateChecker.ReadyToHandOff ||
                AutoUpdateChecker.state === AutoUpdateChecker.HandingOff ||
                AutoUpdateChecker.state === AutoUpdateChecker.HandOffRequested ||
+               AutoUpdateChecker.state === AutoUpdateChecker.Installed ||
+               AutoUpdateChecker.state === AutoUpdateChecker.InstallationUnknown ||
                AutoUpdateChecker.state === AutoUpdateChecker.DownloadError ||
                AutoUpdateChecker.state === AutoUpdateChecker.VerificationError ||
                AutoUpdateChecker.state === AutoUpdateChecker.RestoreError ||
@@ -274,7 +276,7 @@ ApplicationWindow {
                     color: window.ui.bannerMuted
                     elide: Label.ElideRight
                     text: AutoUpdateChecker.rollingInstallSupported
-                          ? qsTr("Downloaded and verified before it installs. The app restarts to finish.")
+                          ? qsTr("Downloaded and verified before it installs. Reopen the app after installation.")
                           : qsTr("Version %1 is on the releases page.").arg(AutoUpdateChecker.availableBuild)
                 }
             }
@@ -684,8 +686,12 @@ ApplicationWindow {
                     }
                 }
 
-                ToolTip.text: qsTr("Update available for Vibertemis: Version %1")
-                                  .arg(AutoUpdateChecker.availableBuild)
+                ToolTip.text: AutoUpdateChecker.state === AutoUpdateChecker.Installed
+                              ? qsTr("Update installed. Reopen the app.")
+                              : AutoUpdateChecker.state === AutoUpdateChecker.InstallationUnknown
+                                ? qsTr("Check installation status")
+                                : qsTr("Update available for Vibertemis: Version %1")
+                                    .arg(AutoUpdateChecker.availableBuild)
 
                 Component.onCompleted: {
                     AutoUpdateChecker.start()

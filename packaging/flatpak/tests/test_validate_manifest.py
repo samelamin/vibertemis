@@ -186,9 +186,16 @@ class ManifestValidatorTests(unittest.TestCase):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, manifest["finish-args"])
         serialized = json.dumps(manifest)
-        for forbidden in ("flatpak-spawn", "org.freedesktop.Flatpak"):
+        for forbidden in ("flatpak-spawn",):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, serialized)
+
+    def test_direct_installer_permission_is_explicit_and_documented(self):
+        manifest = json.loads(TRACKED_MANIFEST.read_text(encoding="utf-8"))
+        self.assertEqual(manifest["finish-args"].count("--talk-name=org.freedesktop.Flatpak"), 1)
+        guide = (TRACKED_MANIFEST.parents[2] / "docs/STEAM_DECK_QUICK_START.md").read_text()
+        self.assertIn("broad permission to run host commands", guide)
+        self.assertIn("manual fallback below once", guide)
 
     def test_ci_manifest_preparer_is_deterministic_and_preserves_input(self):
         manifest = json.loads(TRACKED_MANIFEST.read_text(encoding="utf-8"))
@@ -600,7 +607,7 @@ class ManifestValidatorTests(unittest.TestCase):
             "/app/libexec/tst_refreshrate"
         )
         bundle_command = (
-            'flatpak build-bundle flatpak-repo "artemis-flatpak-$VERSION.flatpak" '
+            'flatpak build-bundle --runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo flatpak-repo "artemis-flatpak-$VERSION.flatpak" '
             "com.artemisdesktop.ArtemisDesktopDev"
         )
 

@@ -21,6 +21,9 @@ public:
     explicit InstallerPortal(QObject *parent = nullptr);
     ~InstallerPortal() override;
 
+    virtual bool installsDirectly() const { return false; }
+    virtual bool installationOutcomeUnknown() const { return false; }
+
     virtual void openFlatpak(
         const QSharedPointer<QFile> &verifiedFile) = 0;
 

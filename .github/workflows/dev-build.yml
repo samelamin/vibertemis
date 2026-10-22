@@ -250,7 +250,11 @@ jobs:
           cd build/tests-autoupdate
           qmake6 ../../tests/autoupdate/autoupdate.pro
           make -j"$(sysctl -n hw.logicalcpu 2>/dev/null || nproc)"
-          QT_QPA_PLATFORM=offscreen ./tst_autoupdate
+          if [ "$(uname -s)" = Linux ]; then
+            dbus-run-session -- env QT_QPA_PLATFORM=offscreen VIBERTEMIS_TEST_PRIVATE_DBUS=1 ./tst_autoupdate
+          else
+            QT_QPA_PLATFORM=offscreen ./tst_autoupdate
+          fi
 
       - name: Build and run diagnostics tests
         run: |
@@ -1582,10 +1586,25 @@ jobs:
         assert data["version"] == os.environ["EXPECTED_VERSION"]
         assert data["internallyConsistent"] is True
         PY
-        flatpak build-bundle flatpak-repo "artemis-flatpak-$VERSION.flatpak" com.artemisdesktop.ArtemisDesktopDev
+        flatpak build-bundle --runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo flatpak-repo "artemis-flatpak-$VERSION.flatpak" com.artemisdesktop.ArtemisDesktopDev
+
+    - name: Exercise the updater install command
+      env:
+        VERSION: ${{ needs.setup-version.outputs.version }}
+      run: |
+        # Isolated user installation; the KDE runtime is already installed system-wide.
+        # The same read-only fd and argv as the application, without a desktop handler.
+        export XDG_DATA_HOME="$RUNNER_TEMP/vibertemis-updater-smoke"
+        flatpak install --user --or-update --noninteractive --bundle /proc/self/fd/3 \
+          3<"artemis-flatpak-$VERSION.flatpak"
+        flatpak info --user --show-commit com.artemisdesktop.ArtemisDesktopDev
+        # A retried completed transaction must be harmless.
+        flatpak install --user --or-update --noninteractive --bundle /proc/self/fd/3 \
+          3<"artemis-flatpak-$VERSION.flatpak"
 
     - name: Verify Flatpak build result
       run: |
+        flatpak build flatpak-build env QT_QPA_PLATFORM=offscreen /app/libexec/tst_autoupdate
         flatpak build flatpak-build /app/libexec/tst_virtualdisplay
         flatpak build flatpak-build env VIBERTEMIS_LIFECYCLE_PROBE=/app/libexec/lifecycle_probe python3 /app/libexec/test_process_lifecycle.py
         flatpak build flatpak-build /app/libexec/artemis-codec-probe

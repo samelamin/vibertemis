@@ -232,6 +232,7 @@ SOURCES += \
     backend/autoupdatechecker.cpp \
     backend/buildinfo.cpp \
     backend/desktopinstallerportal.cpp \
+    backend/flatpakinstaller.cpp \
     backend/diagnosticreporter.cpp \
     backend/logscrubber.cpp \
     backend/pendingupdate.cpp \
@@ -286,6 +287,7 @@ HEADERS += \
     backend/autoupdatechecker.h \
     backend/buildinfo.h \
     backend/desktopinstallerportal.h \
+    backend/flatpakinstaller.h \
     backend/diagnosticreporter.h \
     backend/logscrubber.h \
     backend/pendingupdate.h \

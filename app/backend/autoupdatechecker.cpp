@@ -2,6 +2,7 @@
 
 #include "buildinfo.h"
 #include "desktopinstallerportal.h"
+#include "flatpakinstaller.h"
 #include "releaseversionselector.h"
 #include "updatestatemachine.h"
 
@@ -81,7 +82,7 @@ AutoUpdateChecker::AutoUpdateChecker(QObject *parent) :
 {
     m_OwnedFiles.reset(new PendingUpdateStore);
     m_OwnedSession.reset(new EnvironmentSessionModeProvider);
-    m_OwnedPortal.reset(new DesktopInstallerPortal);
+    m_OwnedPortal.reset(new FlatpakInstaller);
     m_Files = m_OwnedFiles.data();
     m_Session = m_OwnedSession.data();
     m_Portal = m_OwnedPortal.data();
@@ -146,7 +147,7 @@ AutoUpdateChecker::AutoUpdateChecker(QNetworkAccessManager *network,
     Q_ASSERT(m_Files);
     Q_ASSERT(m_Session);
     if (!m_Portal) {
-        m_OwnedPortal.reset(new DesktopInstallerPortal);
+        m_OwnedPortal.reset(new FlatpakInstaller);
         m_Portal = m_OwnedPortal.data();
     }
     initialize();
@@ -190,9 +191,20 @@ void AutoUpdateChecker::initialize()
         }
         if (accepted) {
             clearError();
-            applyTransition(UpdateStateMachine::HandOffAccepted);
+            if (m_Portal->installsDirectly()) {
+                // Only a successful installer exit reaches this state.
+                m_Files->clear(true);
+                m_VerifiedFile.reset();
+                m_DownloadedPath.clear();
+                emit downloadedPathChanged();
+                applyTransition(UpdateStateMachine::InstallCompleted);
+            } else {
+                applyTransition(UpdateStateMachine::HandOffAccepted);
+            }
         } else {
-            applyTransition(UpdateStateMachine::HandOffFailed);
+            applyTransition(m_Portal->installationOutcomeUnknown()
+                ? UpdateStateMachine::InstallOutcomeUnknown
+                : UpdateStateMachine::HandOffFailed);
             setError(UpdateError::PortalFailure,
                      message.isEmpty()
                         ? QStringLiteral("The installer request failed.")
@@ -302,6 +314,10 @@ void AutoUpdateChecker::setStateDirect(State state)
         return;
     }
     m_State = state;
+    if (state == Checking || state == Cancelled || state == Installed
+            || state == InstallationUnknown) {
+        m_InstallAfterVerification = false;
+    }
     emit stateChanged();
 }
 
@@ -318,6 +334,7 @@ void AutoUpdateChecker::clearError()
 void AutoUpdateChecker::setError(UpdateError error, const QString &message,
                                  RetryOrigin origin)
 {
+    m_InstallAfterVerification = false;
     m_LastError = error;
     m_ErrorMessage = message;
     m_RetryOrigin = origin;
@@ -478,6 +495,18 @@ void AutoUpdateChecker::beginRestoration(const PendingUpdateRecord &record)
     beginRevalidation(true);
 }
 
+void AutoUpdateChecker::installUpdate()
+{
+    if (!rollingInstallSupported() || (m_State != Available && m_State != ReadyToHandOff)) return;
+    // An explicit Update action is the only source of automatic install intent.
+    // Startup restoration and background checks never set this flag.
+    m_InstallAfterVerification = m_Portal->installsDirectly()
+        && m_Session->mode() == SteamDeckSession::Desktop;
+    if (m_State == Available) downloadUpdate();
+    else if (m_InstallAfterVerification) retry(); // Revalidate saved file/release.
+    else openInstaller();
+}
+
 void AutoUpdateChecker::downloadUpdate()
 {
     if (m_State != Available || m_Reply || !rollingInstallSupported()) {
@@ -602,6 +631,8 @@ void AutoUpdateChecker::retry()
             return;
         }
         clearError();
+        m_InstallAfterVerification = m_Portal->installsDirectly()
+            && m_Session->mode() == SteamDeckSession::Desktop;
         m_HandOffRetry = true;
         m_RevalidatingPersistedCandidate = true;
         beginRevalidation(false);
@@ -1315,7 +1346,11 @@ void AutoUpdateChecker::finishRevalidation()
         m_Session->mode() == SteamDeckSession::Desktop
         ? UpdateStateMachine::VerificationPassedDesktop
         : UpdateStateMachine::VerificationPassedNonDesktop;
-    applyTransition(passed);
+    const bool installRequested = m_InstallAfterVerification;
+    m_InstallAfterVerification = false;
+    if (applyTransition(passed) && installRequested && m_State == ReadyToHandOff) {
+        openInstaller();
+    }
 }
 
 void AutoUpdateChecker::saveVerifiedPending()

@@ -1,3 +1,15 @@
+> **Superseded installer contract (2026-10-22):** The OpenURI/Discover handoff
+> described below is historical. The rolling Dev build now uses
+> `org.freedesktop.Flatpak.Development.HostCommand` with a fixed user-install
+> argv and the verified descriptor, reporting Installed only after a successful
+> child exit. Explicit Update downloads, verifies and installs in Desktop Mode;
+> background checks/restoration do not install. The Dev manifest grants broad
+> host-command D-Bus access, superseding the old no-host-command constraint.
+> Unknown completion disables retry until reopening. See
+> [current Steam Deck guide](../../STEAM_DECK_QUICK_START.md) for the current flow.
+> Agy Gemini 4 Argon (High) approved the design with FD, exit-status, diagnostic,
+> runtime-source and retry hardening; Codex incorporated those requirements.
+
 # Steam Deck quick start and safe in-app updater design
 
 Date: 2026-07-23

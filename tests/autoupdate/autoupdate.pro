@@ -24,16 +24,19 @@ SOURCES += \
     $$PWD/../../app/backend/releaseversionselector.cpp \
     $$PWD/../../app/backend/buildinfo.cpp \
     $$PWD/../../app/backend/desktopinstallerportal.cpp \
+    $$PWD/../../app/backend/flatpakinstaller.cpp \
     $$PWD/../../app/backend/pendingupdate.cpp \
     $$PWD/../../app/backend/rollingupdateparser.cpp \
     $$PWD/../../app/backend/steamdecksession.cpp \
     $$PWD/../../app/backend/updatestatemachine.cpp
 
 HEADERS += \
+    $$PWD/flatpakdbusfixture.h \
     $$PWD/../../app/backend/autoupdatechecker.h \
     $$PWD/../../app/backend/releaseversionselector.h \
     $$PWD/../../app/backend/buildinfo.h \
     $$PWD/../../app/backend/desktopinstallerportal.h \
+    $$PWD/../../app/backend/flatpakinstaller.h \
     $$PWD/../../app/backend/pendingupdate.h \
     $$PWD/../../app/backend/updateresult.h \
     $$PWD/../../app/backend/rollingupdateparser.h \

@@ -75,6 +75,8 @@ UpdateResult<AutoUpdateChecker::State> UpdateStateMachine::reduce(
         if (event == E::Cancel) return transition(S::Cancelled);
         break;
     case S::HandingOff:
+        if (event == E::InstallCompleted) return transition(S::Installed);
+        if (event == E::InstallOutcomeUnknown) return transition(S::InstallationUnknown);
         if (event == E::HandOffAccepted) return transition(S::HandOffRequested);
         if (event == E::HandOffFailed) return transition(S::HandOffError);
         break;
@@ -99,6 +101,11 @@ UpdateResult<AutoUpdateChecker::State> UpdateStateMachine::reduce(
         if (event == E::Retry) return transition(S::RestoringPending);
         if (event == E::BeginCheck) return transition(S::Checking);
         if (event == E::Cancel) return transition(S::Cancelled);
+        break;
+    case S::Installed:
+    case S::InstallationUnknown:
+        // The running sandbox still contains the old app. Rechecking it would
+        // offer the same update again (or duplicate an unobserved transaction).
         break;
     case S::Cancelled:
         if (event == E::BeginCheck) return transition(S::Checking);

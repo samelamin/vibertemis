@@ -135,16 +135,32 @@ source commit. It does not interrupt a stream or open a dialog by itself.
 1. Open Vibertemis and activate the update button, or use
    **Settings > Vibertemis Features > Check for updates**.
 2. Review the current build, available build, and download size.
-3. Choose **Download update**. Vibertemis downloads the exact release asset to
-   Downloads and verifies its recorded byte size and SHA-256.
-4. In Gaming Mode, the verified file is retained and Vibertemis asks you to
-   switch to Desktop Mode. It does not try to install from Gaming Mode.
-5. Reopen Vibertemis in Desktop Mode. The app refetches the release information
-   and reverifies the same file before enabling **Open installer**.
-6. Choose **Open installer**, review the request in Discover, and confirm the
-   update there. Vibertemis reports only that the installer was requested; it
-   never claims Discover completed the installation.
-7. Close Vibertemis, finish the update in Discover, and relaunch it.
+3. Choose **Update**. In Desktop Mode, Vibertemis downloads, verifies, and
+   installs the update directly. There is no app chooser or Discover step.
+4. Wait for **Update installed**, then close and reopen Vibertemis to use the
+   new build. An installation error shows the Flatpak error and a **Retry**
+   action; Retry rechecks the saved bundle before installing it.
+5. In Gaming Mode, the verified download is retained. Switch to Desktop Mode
+   and reopen Vibertemis, then choose **Install update**. Reopening the app alone
+   never starts an installation.
+
+The rolling Steam Deck package grants `org.freedesktop.Flatpak` D-Bus access
+for this flow. This is **broad permission to run host commands**, not an
+install-only sandbox permission. Vibertemis uses it only to run the fixed,
+per-user Flatpak installer with the verified bundle descriptor, without a shell
+or `sudo`. The application must be trusted with that host access. Other package
+manifests do not receive this permission. A repository-backed update portal
+cannot install the standalone GitHub bundle used by this release channel.
+
+Closing Vibertemis does not cancel a started Flatpak transaction. If the app
+loses contact with the installer, it reports an unknown outcome and disables
+retry in that process. Wait for the transaction to finish, reopen Vibertemis,
+and check the installed build before trying again.
+
+**Updating from an older broken updater:** use the manual fallback below once
+(or repeat the first-install block). Close and reopen Vibertemis afterward so
+the new code and installer permission take effect. Future updates use the
+in-app **Update** action.
 
 Print the build identity before or after an update with:
 
@@ -158,7 +174,9 @@ verified in-app flow or repeat the first-install block.
 
 ## If Discover does not open: manual fallback
 
-Switch to Desktop Mode and reopen the update dialog. Choose **Copy manual
+For older versions that show **Open installer** but no Discover option, or
+when an installation fails, switch to Desktop Mode and reopen the update
+dialog. Choose **Copy manual
 command** only after the dialog says the download is verified. Paste that exact
 command into Konsole. It has this quoted form:
 
