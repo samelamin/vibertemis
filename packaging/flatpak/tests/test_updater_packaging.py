@@ -412,6 +412,21 @@ class UpdaterQmlContractTests(unittest.TestCase):
             self.assertNotIn(f"AutoUpdateChecker.{busy}", manual)
         self.assertNotIn("updated successfully", self.dialog.lower())
 
+    def test_available_copy_offers_gaming_or_desktop_not_desktop_only(self):
+        self.assertRegex(
+            self.dialog,
+            re.compile(
+                r"case\s+AutoUpdateChecker\.Available:[\s\S]{0,400}"
+                r"rollingInstallSupported[\s\S]{0,400}"
+                r"installs build %1 in Gaming or Desktop Mode\.",
+                re.DOTALL,
+            ),
+        )
+        self.assertNotIn(
+            "installs build %1 in Desktop Mode.",
+            self.dialog,
+        )
+
     def test_manual_command_uses_only_the_verified_downloads_path(self):
         self.assertNotIn("property string manualCommand", self.dialog)
         self.assertNotIn("AutoUpdateChecker.downloadedPath", self.dialog)
@@ -479,6 +494,16 @@ class UpdaterQmlContractTests(unittest.TestCase):
             self.dialog,
             r"onAboutToHide:\s*\{[\s\S]{0,300}"
             r"(?:previousFocusItem|stackView)\.forceActiveFocus",
+        )
+        # A read-only command field must not take tab focus from the buttons.
+        self.assertRegex(
+            self.dialog,
+            re.compile(
+                r"id:\s*manualCommandField[\s\S]{0,300}"
+                r"readOnly:\s*true[\s\S]{0,200}"
+                r"activeFocusOnTab:\s*false",
+                re.DOTALL,
+            ),
         )
 
     def test_workflow_sets_safe_native_identity_defaults(self):

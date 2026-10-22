@@ -192,6 +192,7 @@ private:
     void parseStringToVersionQuad(QString &string, QVector<int> &version);
     int compareVersion(QVector<int> &version1, QVector<int> &version2);
     bool supportsStableCheck() const;
+    bool canInstallInCurrentSession() const;
     QString rateLimitMessage(QNetworkReply *reply) const;
 
     State m_State;

@@ -144,7 +144,7 @@ NavigableDialog {
             return qsTr("No newer update is available.")
         case AutoUpdateChecker.Available:
             return AutoUpdateChecker.rollingInstallSupported ?
-                       qsTr("Update downloads, verifies, and installs build %1 in Desktop Mode.").arg(AutoUpdateChecker.availableBuild) :
+                       qsTr("Update downloads, verifies, and installs build %1 in Gaming or Desktop Mode.").arg(AutoUpdateChecker.availableBuild) :
                        qsTr("Version %1 is available on the release page.").arg(AutoUpdateChecker.availableBuild)
         case AutoUpdateChecker.Downloading:
             return qsTr("The Flatpak is being saved to your Downloads folder.")
@@ -378,6 +378,8 @@ NavigableDialog {
             Layout.fillWidth: true
             visible: updateDialog.manualCommandAvailable()
             readOnly: true
+            // Read-only text must not trap controller focus on the buttons.
+            activeFocusOnTab: false
             text: AutoUpdateChecker.manualInstallCommand
             selectByMouse: true
         }

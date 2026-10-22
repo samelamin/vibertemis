@@ -9,6 +9,22 @@
 > [current Steam Deck guide](../../STEAM_DECK_QUICK_START.md) for the current flow.
 > Agy Gemini 4 Argon (High) approved the design with FD, exit-status, diagnostic,
 > runtime-source and retry hardening; Codex incorporated those requirements.
+>
+> **Superseded Desktop-only session rule (2026-10-22):** The direct installer
+> needs no desktop session, so the same explicit **Update** action also installs
+> in Gaming Mode. One shared `canInstallInCurrentSession()` predicate now gates
+> install intent, `HandOffError` retry intent, `finishRevalidation()` readiness
+> and the final `openInstaller()` dispatch: Desktop is install-capable for both
+> the direct installer and the legacy portal handoff, Gaming only for the direct
+> installer, and an unclassified session never installs and falls back to
+> `ReadyForDesktop`. The historical `VerificationPassedDesktop` event therefore
+> means "install-capable session", not "Desktop Mode". Everything else is
+> unchanged: one-shot explicit intent, startup/check/restore never install,
+> file and release revalidation before every install, verified download
+> preservation, and the terminal success/unknown protections. The legacy portal
+> handoff still refuses Gaming and Unknown sessions. No physical Deck was
+> available for this change, so hardware validation of a Gaming Mode install
+> remains outstanding.
 
 # Steam Deck quick start and safe in-app updater design
 

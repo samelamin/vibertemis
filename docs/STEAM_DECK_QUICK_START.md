@@ -135,14 +135,29 @@ source commit. It does not interrupt a stream or open a dialog by itself.
 1. Open Vibertemis and activate the update button, or use
    **Settings > Vibertemis Features > Check for updates**.
 2. Review the current build, available build, and download size.
-3. Choose **Update**. In Desktop Mode, Vibertemis downloads, verifies, and
-   installs the update directly. There is no app chooser or Discover step.
+3. Choose **Update**. In Gaming Mode and in Desktop Mode, Vibertemis
+   downloads, verifies, and installs the update directly. There is no app
+   chooser, Discover step, or Desktop Mode requirement.
 4. Wait for **Update installed**, then close and reopen Vibertemis to use the
-   new build. An installation error shows the Flatpak error and a **Retry**
-   action; Retry rechecks the saved bundle before installing it.
-5. In Gaming Mode, the verified download is retained. Switch to Desktop Mode
-   and reopen Vibertemis, then choose **Install update**. Reopening the app alone
-   never starts an installation.
+   new build. A live stream is never stopped by an update: the running process
+   keeps the deployment it started with until you close and reopen it. An
+   installation error shows the Flatpak error and a **Retry** action; Retry
+   rechecks the saved bundle before installing it.
+5. If Vibertemis cannot classify the session, the verified download is kept and
+   the dialog asks you to switch to Desktop Mode. Switch, reopen Vibertemis,
+   then choose **Install update**. Reopening the app alone never starts an
+   installation, and an older build that still shows **Open installer** behaves
+   the same way.
+
+A Gaming Mode installation is the same verified operation: the fixed per-user
+Flatpak command runs while the app is running in Gaming Mode, and the result is
+reported only after the installer itself exits successfully. Nothing is
+installed in the background. Startup, periodic checks, and restoration of an
+earlier download never install; only an explicit **Update**, **Retry**, or
+**Install update** action does.
+
+Automated tests cover the packaged Flatpak upgrade path; a real Gaming Mode
+installation still needs testing on a Deck.
 
 The rolling Steam Deck package grants `org.freedesktop.Flatpak` D-Bus access
 for this flow. This is **broad permission to run host commands**, not an
@@ -157,9 +172,10 @@ loses contact with the installer, it reports an unknown outcome and disables
 retry in that process. Wait for the transaction to finish, reopen Vibertemis,
 and check the installed build before trying again.
 
-**Updating from an older broken updater:** use the manual fallback below once
-(or repeat the first-install block). Close and reopen Vibertemis afterward so
-the new code and installer permission take effect. Future updates use the
+**Updating from an older broken updater:** an older build can only install in
+Desktop Mode. Use the manual fallback below once in Desktop Mode (or repeat the
+first-install block). Close and reopen Vibertemis afterward so the new code and
+installer permission take effect. Future updates work in both modes and use the
 in-app **Update** action.
 
 Print the build identity before or after an update with:
@@ -176,9 +192,9 @@ verified in-app flow or repeat the first-install block.
 
 For older versions that show **Open installer** but no Discover option, or
 when an installation fails, switch to Desktop Mode and reopen the update
-dialog. Choose **Copy manual
-command** only after the dialog says the download is verified. Paste that exact
-command into Konsole. It has this quoted form:
+dialog. Run this manual fallback in Desktop Mode using Konsole. Choose
+**Copy manual command** only after the dialog says the download is verified.
+Paste that exact command into Konsole. It has this quoted form:
 
 ```bash
 set -euo pipefail

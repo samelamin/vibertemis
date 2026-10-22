@@ -499,9 +499,11 @@ void AutoUpdateChecker::installUpdate()
 {
     if (!rollingInstallSupported() || (m_State != Available && m_State != ReadyToHandOff)) return;
     // An explicit Update action is the only source of automatic install intent.
-    // Startup restoration and background checks never set this flag.
+    // Startup restoration and background checks never set this flag. The legacy
+    // portal handoff is never auto-launched, so the direct installer stays part
+    // of the condition instead of relying on the session predicate alone.
     m_InstallAfterVerification = m_Portal->installsDirectly()
-        && m_Session->mode() == SteamDeckSession::Desktop;
+        && canInstallInCurrentSession();
     if (m_State == Available) downloadUpdate();
     else if (m_InstallAfterVerification) retry(); // Revalidate saved file/release.
     else openInstaller();
@@ -632,7 +634,7 @@ void AutoUpdateChecker::retry()
         }
         clearError();
         m_InstallAfterVerification = m_Portal->installsDirectly()
-            && m_Session->mode() == SteamDeckSession::Desktop;
+            && canInstallInCurrentSession();
         m_HandOffRetry = true;
         m_RevalidatingPersistedCandidate = true;
         beginRevalidation(false);
@@ -676,8 +678,9 @@ void AutoUpdateChecker::discardPendingUpdate()
 
 void AutoUpdateChecker::openInstaller()
 {
-    if (m_State != ReadyToHandOff
-            || m_Session->mode() != SteamDeckSession::Desktop) {
+    // Final dispatch guard: readiness was computed earlier, so the session is
+    // re-checked here and an install-capable session is required right now.
+    if (m_State != ReadyToHandOff || !canInstallInCurrentSession()) {
         return;
     }
     if (!applyTransition(UpdateStateMachine::BeginHandOff)) {
@@ -1342,8 +1345,12 @@ void AutoUpdateChecker::finishRevalidation()
         }
     }
 
+    // VerificationPassedDesktop is the historical event name for an
+    // install-capable session. Gaming Mode is install-capable for the direct
+    // installer; the legacy portal handoff and an unclassified session keep
+    // the ReadyForDesktop fallback.
     const UpdateStateMachine::Event passed =
-        m_Session->mode() == SteamDeckSession::Desktop
+        canInstallInCurrentSession()
         ? UpdateStateMachine::VerificationPassedDesktop
         : UpdateStateMachine::VerificationPassedNonDesktop;
     const bool installRequested = m_InstallAfterVerification;
@@ -1394,6 +1401,17 @@ QString AutoUpdateChecker::rateLimitMessage(QNetworkReply *reply) const
 bool AutoUpdateChecker::supportsStableCheck() const
 {
     return m_Policy->stableCheckSupported();
+}
+
+bool AutoUpdateChecker::canInstallInCurrentSession() const
+{
+    // The direct installer runs one fixed per-user Flatpak command with no
+    // shell, chooser, or desktop session, so Gaming Mode can install too. The
+    // legacy portal handoff needs a real desktop session, and a session that
+    // cannot be classified never installs.
+    const SteamDeckSession::Mode mode = m_Session->mode();
+    return mode == SteamDeckSession::Desktop
+        || (mode == SteamDeckSession::Gaming && m_Portal->installsDirectly());
 }
 
 void AutoUpdateChecker::parseStringToVersionQuad(QString &string,

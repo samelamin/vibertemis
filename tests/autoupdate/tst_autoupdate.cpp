@@ -521,9 +521,15 @@ private slots:
     void directInstallerDbusContract();
     void directInstallerLifecycle();
     void directInstallerFailures();
+    void oneClickInstall_data();
     void oneClickInstall();
+    void installRequiresExplicitAction_data();
     void installRequiresExplicitAction();
+    void unknownSessionNeverInstalls();
+    void sessionModeChangeBeforeReadinessBlocksInstall();
+    void sessionModeChangeAfterReadinessBlocksDispatch();
     void invalidDownloadNeverInstalls();
+    void restoredInstallAndRetry_data();
     void restoredInstallAndRetry();
     void rollingReleaseDoesNotMaskVersionedRelease();
     void normalFirstReleaseIsSelected();
@@ -778,6 +784,30 @@ static void enqueueUnchangedRefetch(FakeNetworkAccessManager *network,
     network->enqueue(networkScript(validGitHubReleaseJson()));
     network->enqueue(networkScript(manifest));
     network->enqueue(networkScript(lightweightTagJson()));
+}
+
+// A verified file on disk plus the matching pending record, so restoration and
+// revalidation start from a session that is already install-capable.
+static PendingUpdateRecord persistedPendingRecord(
+    FakeUpdateFileStore *files, const QByteArray &payload,
+    const RollingUpdateCandidate &candidate)
+{
+    const QString path =
+        files->root.path() + QStringLiteral("/pending.flatpak");
+    QFile payloadFile(path);
+    if (!payloadFile.open(QIODevice::WriteOnly)
+            || payloadFile.write(payload) != payload.size()) {
+        return PendingUpdateRecord();
+    }
+    payloadFile.close();
+    PendingUpdateRecord record;
+    record.canonicalPath = path;
+    record.candidate = candidate;
+    record.verifiedSize = candidate.flatpak.size;
+    record.verifiedSha256 = candidate.flatpak.sha256;
+    files->loadResult.ok = true;
+    files->loadResult.value = record;
+    return record;
 }
 
 static QByteArray validGitHubReleaseJson()
@@ -2474,18 +2504,27 @@ void AutoUpdateTest::directInstallerFailures()
     QCOMPARE(lostResult.size(), 1); // Late signals cannot invent success.
 }
 
+void AutoUpdateTest::oneClickInstall_data()
+{
+    QTest::addColumn<int>("mode");
+    QTest::newRow("desktop") << int(SteamDeckSession::Desktop);
+    QTest::newRow("gaming") << int(SteamDeckSession::Gaming);
+}
+
 void AutoUpdateTest::oneClickInstall()
 {
+    QFETCH(int, mode);
     const QByteArray payload = rollingPayload();
     const QByteArray manifest = manifestForPayload(payload);
     FakeNetworkAccessManager network;
     FakeUpdateFileStore files;
     files.loadResult.error = UpdateError::InvalidMetadata;
-    FakeSessionModeProvider desktop;
+    FakeSessionModeProvider session;
+    session.value = static_cast<SteamDeckSession::Mode>(mode);
     FakeFlatpakHostTransport transport;
     FlatpakInstaller installer(&transport, 1000);
     enqueueAvailableCheck(&network, manifest);
-    AutoUpdateChecker checker(&network, &files, &desktop, &installer);
+    AutoUpdateChecker checker(&network, &files, &session, &installer);
     checker.start();
     QTRY_COMPARE(checker.state(), AutoUpdateChecker::Available);
     QCOMPARE(transport.calls, 0);
@@ -2514,30 +2553,188 @@ void AutoUpdateTest::oneClickInstall()
     QCOMPARE(transport.calls, 1);
 }
 
+void AutoUpdateTest::installRequiresExplicitAction_data()
+{
+    QTest::addColumn<int>("mode");
+    QTest::newRow("desktop") << int(SteamDeckSession::Desktop);
+    QTest::newRow("gaming") << int(SteamDeckSession::Gaming);
+}
+
 void AutoUpdateTest::installRequiresExplicitAction()
+{
+    QFETCH(int, mode);
+    const QByteArray payload = rollingPayload();
+    const QByteArray manifest = manifestForPayload(payload);
+    FakeNetworkAccessManager network;
+    FakeUpdateFileStore files;
+    files.loadResult.error = UpdateError::InvalidMetadata;
+    FakeSessionModeProvider session;
+    session.value = static_cast<SteamDeckSession::Mode>(mode);
+    FakeFlatpakHostTransport transport;
+    FlatpakInstaller installer(&transport, 1000);
+    enqueueAvailableCheck(&network, manifest);
+    AutoUpdateChecker checker(&network, &files, &session, &installer);
+    checker.start();
+    QTRY_COMPARE(checker.state(), AutoUpdateChecker::Available);
+    network.enqueue(networkScript(payload));
+    enqueueUnchangedRefetch(&network, manifest);
+    // A download-only action never starts an installer, in either session.
+    checker.downloadUpdate();
+    QTRY_COMPARE(checker.state(), AutoUpdateChecker::ReadyToHandOff);
+    QCOMPARE(transport.calls, 0);
+}
+
+void AutoUpdateTest::unknownSessionNeverInstalls()
 {
     const QByteArray payload = rollingPayload();
     const QByteArray manifest = manifestForPayload(payload);
-    for (bool gaming : {false, true}) {
-        FakeNetworkAccessManager network;
-        FakeUpdateFileStore files;
-        files.loadResult.error = UpdateError::InvalidMetadata;
-        FakeSessionModeProvider mode;
-        if (gaming) mode.value = SteamDeckSession::Gaming;
-        FakeFlatpakHostTransport transport;
-        FlatpakInstaller installer(&transport, 1000);
-        enqueueAvailableCheck(&network, manifest);
-        AutoUpdateChecker checker(&network, &files, &mode, &installer);
-        checker.start();
-        QTRY_COMPARE(checker.state(), AutoUpdateChecker::Available);
-        network.enqueue(networkScript(payload));
-        enqueueUnchangedRefetch(&network, manifest);
-        if (gaming) checker.installUpdate();
-        else checker.downloadUpdate();
-        QTRY_COMPARE(checker.state(), gaming ? AutoUpdateChecker::ReadyForDesktop
-                                           : AutoUpdateChecker::ReadyToHandOff);
-        QCOMPARE(transport.calls, 0);
-    }
+    FakeNetworkAccessManager network;
+    FakeUpdateFileStore files;
+    files.loadResult.error = UpdateError::InvalidMetadata;
+    FakeSessionModeProvider session;
+    session.value = SteamDeckSession::Unknown;
+    FakeFlatpakHostTransport transport;
+    FlatpakInstaller installer(&transport, 1000);
+    enqueueAvailableCheck(&network, manifest);
+    AutoUpdateChecker checker(&network, &files, &session, &installer);
+    checker.start();
+    QTRY_COMPARE(checker.state(), AutoUpdateChecker::Available);
+    network.enqueue(networkScript(payload));
+    enqueueUnchangedRefetch(&network, manifest);
+    // An unclassified session downloads and verifies, then keeps the verified
+    // file for Desktop Mode instead of starting an installer.
+    checker.installUpdate();
+    QTRY_COMPARE(checker.state(), AutoUpdateChecker::ReadyForDesktop);
+    QCOMPARE(transport.calls, 0);
+    QVERIFY(!checker.downloadedPath().isEmpty());
+    QCOMPARE(files.saveCalls, 1);
+    const QString preserved = checker.downloadedPath();
+    const int requests = network.requests.size();
+    checker.installUpdate();
+    checker.openInstaller();
+    QCOMPARE(checker.state(), AutoUpdateChecker::ReadyForDesktop);
+    QCOMPARE(transport.calls, 0);
+    // Retry re-verifies the preserved file and still never installs.
+    enqueueUnchangedRefetch(&network, manifest);
+    checker.retry();
+    QCOMPARE(checker.state(), AutoUpdateChecker::Verifying);
+    QTRY_COMPARE(checker.state(), AutoUpdateChecker::ReadyForDesktop);
+    QCOMPARE(transport.calls, 0);
+    QCOMPARE(checker.downloadedPath(), preserved);
+    QVERIFY(QFileInfo::exists(preserved));
+    // The saved record survives for a later Desktop Mode run.
+    QCOMPARE(files.removePayloadCalls, 0);
+    QVERIFY(network.requests.size() > requests);
+}
+
+void AutoUpdateTest::sessionModeChangeBeforeReadinessBlocksInstall()
+{
+    const QByteArray payload = rollingPayload();
+    const QByteArray manifest = manifestForPayload(payload);
+    const RollingUpdateCandidate candidate = boundCandidateForPayload(payload);
+
+    // Direct installer: a session that stops being install-capable while a
+    // failed installation is being revalidated lands in ReadyForDesktop.
+    FakeNetworkAccessManager network;
+    FakeUpdateFileStore files;
+    const PendingUpdateRecord record = persistedPendingRecord(
+        &files, payload, candidate);
+    QVERIFY(!record.canonicalPath.isEmpty());
+    FakeSessionModeProvider session;
+    FakeFlatpakHostTransport transport;
+    FlatpakInstaller installer(&transport, 1000);
+    enqueueUnchangedRefetch(&network, manifest);
+    AutoUpdateChecker checker(&network, &files, &session, &installer);
+    checker.start();
+    QTRY_COMPARE(checker.state(), AutoUpdateChecker::ReadyToHandOff);
+    QCOMPARE(transport.calls, 0);
+    checker.openInstaller();
+    QCOMPARE(transport.calls, 1);
+    transport.acknowledge();
+    transport.finish(256);
+    QCOMPARE(checker.state(), AutoUpdateChecker::HandOffError);
+    enqueueUnchangedRefetch(&network, manifest);
+    checker.retry();
+    QCOMPARE(checker.state(), AutoUpdateChecker::Verifying);
+    // Intent was captured in Desktop Mode; the session stops being
+    // install-capable while the revalidation is still in flight.
+    session.value = SteamDeckSession::Unknown;
+    QTRY_COMPARE(checker.state(), AutoUpdateChecker::ReadyForDesktop);
+    QCOMPARE(transport.calls, 1);
+    QCOMPARE(checker.downloadedPath(), record.canonicalPath);
+    QCOMPARE(files.clearCalls, 0);
+
+    // Legacy portal handoff: Gaming Mode keeps the Desktop-only fallback.
+    FakeNetworkAccessManager legacyNetwork;
+    FakeUpdateFileStore legacyFiles;
+    const PendingUpdateRecord legacyRecord = persistedPendingRecord(
+        &legacyFiles, payload, candidate);
+    QVERIFY(!legacyRecord.canonicalPath.isEmpty());
+    FakeSessionModeProvider legacyDesktop;
+    FakeInstallerPortal legacyPortal;
+    enqueueUnchangedRefetch(&legacyNetwork, manifest);
+    AutoUpdateChecker legacyChecker(
+        &legacyNetwork, &legacyFiles, &legacyDesktop, &legacyPortal);
+    legacyChecker.start();
+    QTRY_COMPARE(legacyChecker.state(),
+                 AutoUpdateChecker::ReadyToHandOff);
+    legacyChecker.openInstaller();
+    QCOMPARE(legacyPortal.calls, 1);
+    legacyPortal.rejectResponse();
+    QCOMPARE(legacyChecker.state(), AutoUpdateChecker::HandOffError);
+    enqueueUnchangedRefetch(&legacyNetwork, manifest);
+    legacyChecker.retry();
+    QCOMPARE(legacyChecker.state(), AutoUpdateChecker::Verifying);
+    // The legacy handoff loses its desktop session mid-revalidation.
+    legacyDesktop.value = SteamDeckSession::Gaming;
+    QTRY_COMPARE(legacyChecker.state(),
+                 AutoUpdateChecker::ReadyForDesktop);
+    QCOMPARE(legacyPortal.calls, 1);
+    QCOMPARE(legacyChecker.downloadedPath(), legacyRecord.canonicalPath);
+}
+
+void AutoUpdateTest::sessionModeChangeAfterReadinessBlocksDispatch()
+{
+    const QByteArray payload = rollingPayload();
+    const QByteArray manifest = manifestForPayload(payload);
+    const RollingUpdateCandidate candidate = boundCandidateForPayload(payload);
+
+    FakeNetworkAccessManager network;
+    FakeUpdateFileStore files;
+    const PendingUpdateRecord record = persistedPendingRecord(
+        &files, payload, candidate);
+    QVERIFY(!record.canonicalPath.isEmpty());
+    FakeSessionModeProvider session;
+    FakeFlatpakHostTransport transport;
+    FlatpakInstaller installer(&transport, 1000);
+    enqueueUnchangedRefetch(&network, manifest);
+    AutoUpdateChecker checker(&network, &files, &session, &installer);
+    checker.start();
+    QTRY_COMPARE(checker.state(), AutoUpdateChecker::ReadyToHandOff);
+    QCOMPARE(transport.calls, 0);
+
+    // Readiness was reached in Desktop Mode; an unclassified session at final
+    // dispatch time is a no-op instead of a silent install.
+    session.value = SteamDeckSession::Unknown;
+    checker.openInstaller();
+    QCOMPARE(checker.state(), AutoUpdateChecker::ReadyToHandOff);
+    QCOMPARE(transport.calls, 0);
+    checker.installUpdate();
+    QCOMPARE(checker.state(), AutoUpdateChecker::ReadyToHandOff);
+    QCOMPARE(transport.calls, 0);
+    QVERIFY(checker.errorMessage().isEmpty());
+    QCOMPARE(checker.downloadedPath(), record.canonicalPath);
+
+    // Gaming Mode is install-capable again, so the same ready state installs.
+    session.value = SteamDeckSession::Gaming;
+    enqueueUnchangedRefetch(&network, manifest);
+    checker.installUpdate();
+    QTRY_COMPARE(checker.state(), AutoUpdateChecker::HandingOff);
+    QCOMPARE(transport.calls, 1);
+    transport.acknowledge();
+    transport.finish();
+    QCOMPARE(checker.state(), AutoUpdateChecker::Installed);
+    QVERIFY(checker.downloadedPath().isEmpty());
 }
 
 void AutoUpdateTest::invalidDownloadNeverInstalls()
@@ -2578,18 +2775,27 @@ void AutoUpdateTest::invalidDownloadNeverInstalls()
     QCOMPARE(transport.calls, 0);
 }
 
+void AutoUpdateTest::restoredInstallAndRetry_data()
+{
+    QTest::addColumn<int>("mode");
+    QTest::newRow("desktop") << int(SteamDeckSession::Desktop);
+    QTest::newRow("gaming") << int(SteamDeckSession::Gaming);
+}
+
 void AutoUpdateTest::restoredInstallAndRetry()
 {
+    QFETCH(int, mode);
     const QByteArray payload = rollingPayload();
     const QByteArray manifest = manifestForPayload(payload);
     FakeNetworkAccessManager network;
     FakeUpdateFileStore files;
     files.loadResult.error = UpdateError::InvalidMetadata;
-    FakeSessionModeProvider mode;
+    FakeSessionModeProvider session;
+    session.value = static_cast<SteamDeckSession::Mode>(mode);
     FakeFlatpakHostTransport transport;
     FlatpakInstaller installer(&transport, 1000);
     enqueueAvailableCheck(&network, manifest);
-    AutoUpdateChecker checker(&network, &files, &mode, &installer);
+    AutoUpdateChecker checker(&network, &files, &session, &installer);
     checker.start();
     QTRY_COMPARE(checker.state(), AutoUpdateChecker::Available);
     network.enqueue(networkScript(payload));
@@ -2605,7 +2811,7 @@ void AutoUpdateTest::restoredInstallAndRetry()
         FakeFlatpakHostTransport restoreTransport;
         FlatpakInstaller restoreInstaller(&restoreTransport, 1000);
         enqueueUnchangedRefetch(&restoreNetwork, manifest);
-        AutoUpdateChecker restored(&restoreNetwork, &files, &mode, &restoreInstaller);
+        AutoUpdateChecker restored(&restoreNetwork, &files, &session, &restoreInstaller);
         restored.start();
         QTRY_COMPARE(restored.state(), AutoUpdateChecker::ReadyToHandOff);
         QCOMPARE(restoreTransport.calls, 0);
@@ -2793,23 +2999,29 @@ void AutoUpdateTest::desktopPortal()
                  AutoUpdateChecker::ReadyForDesktop);
     }
 
-    FakeNetworkAccessManager changedSessionNetwork;
-    FakeUpdateFileStore changedSessionFiles;
-    pendingRecord(&changedSessionFiles);
-    FakeSessionModeProvider changedSession;
-    FakeInstallerPortal changedSessionPortal;
-    enqueueUnchangedRefetch(&changedSessionNetwork, manifest);
-    AutoUpdateChecker changedSessionChecker(
-        &changedSessionNetwork, &changedSessionFiles, &changedSession,
-        &changedSessionPortal);
-    changedSessionChecker.start();
-    QTRY_COMPARE(changedSessionChecker.state(),
+    // The legacy handoff still requires a desktop session at final dispatch,
+    // whichever mode the session has left.
+    for (SteamDeckSession::Mode mode :
+         {SteamDeckSession::Gaming, SteamDeckSession::Unknown}) {
+        FakeNetworkAccessManager changedSessionNetwork;
+        FakeUpdateFileStore changedSessionFiles;
+        pendingRecord(&changedSessionFiles);
+        FakeSessionModeProvider changedSession;
+        FakeInstallerPortal changedSessionPortal;
+        enqueueUnchangedRefetch(&changedSessionNetwork, manifest);
+        AutoUpdateChecker changedSessionChecker(
+            &changedSessionNetwork, &changedSessionFiles, &changedSession,
+            &changedSessionPortal);
+        changedSessionChecker.start();
+        QTRY_COMPARE(changedSessionChecker.state(),
+                     AutoUpdateChecker::ReadyToHandOff);
+        changedSession.value = mode;
+        changedSessionChecker.openInstaller();
+        changedSessionChecker.installUpdate();
+        QCOMPARE(changedSessionPortal.calls, 0);
+        QCOMPARE(changedSessionChecker.state(),
                  AutoUpdateChecker::ReadyToHandOff);
-    changedSession.value = SteamDeckSession::Gaming;
-    changedSessionChecker.openInstaller();
-    QCOMPARE(changedSessionPortal.calls, 0);
-    QCOMPARE(changedSessionChecker.state(),
-             AutoUpdateChecker::ReadyToHandOff);
+    }
 
     for (UpdateError hostile :
          {UpdateError::UnsafePath, UpdateError::DigestMismatch}) {
@@ -2903,6 +3115,8 @@ void AutoUpdateTest::persistedReadyPublisherChange()
     const RollingUpdateCandidate candidate =
         boundCandidateForPayload(payload);
 
+    // The direct installer is install-capable in both Desktop and Gaming
+    // Mode; only an unclassified session falls back to ReadyForDesktop.
     for (SteamDeckSession::Mode mode :
          {SteamDeckSession::Desktop, SteamDeckSession::Gaming}) {
         FakeNetworkAccessManager network;
@@ -2928,11 +3142,7 @@ void AutoUpdateTest::persistedReadyPublisherChange()
         enqueueUnchangedRefetch(&network, manifest);
         AutoUpdateChecker checker(&network, &files, &session);
         checker.start();
-        const AutoUpdateChecker::State readyState =
-            mode == SteamDeckSession::Desktop
-            ? AutoUpdateChecker::ReadyToHandOff
-            : AutoUpdateChecker::ReadyForDesktop;
-        QTRY_COMPARE(checker.state(), readyState);
+        QTRY_COMPARE(checker.state(), AutoUpdateChecker::ReadyToHandOff);
         QCOMPARE(files.reopenCalls, 1);
         QCOMPARE(files.clearCalls, 0);
 
@@ -3769,7 +3979,8 @@ void AutoUpdateTest::boundedNetwork()
     QCOMPARE(annotatedChecker.state(), AutoUpdateChecker::Checking);
 
     // Startup restoration refetches every binding before reopening the exact
-    // local file. Desktop alone becomes ReadyToHandOff.
+    // local file. Desktop and Gaming Mode are install-capable with the direct
+    // installer; an unclassified session keeps the Desktop-only fallback.
     FakeNetworkAccessManager restoreNetwork;
     FakeUpdateFileStore restoreFiles;
     const QString restorePath =
@@ -3803,7 +4014,7 @@ void AutoUpdateTest::boundedNetwork()
         &gamingNetwork, &gamingFiles, &gaming);
     gamingChecker.start();
     QTRY_COMPARE(gamingChecker.state(),
-                 AutoUpdateChecker::ReadyForDesktop);
+                 AutoUpdateChecker::ReadyToHandOff);
 
     FakeNetworkAccessManager unknownSessionNetwork;
     FakeUpdateFileStore unknownSessionFiles;
