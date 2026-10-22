@@ -1592,15 +1592,38 @@ jobs:
       env:
         VERSION: ${{ needs.setup-version.outputs.version }}
       run: |
-        # Isolated user installation; the KDE runtime is already installed system-wide.
-        # The same read-only fd and argv as the application, without a desktop handler.
+        # Make a distinct prior deployment, without depending on the mutable release.
+        cp -a flatpak-build "$RUNNER_TEMP/vibertemis-updater-fixture"
+        printf 'prior deployment\n' > "$RUNNER_TEMP/vibertemis-updater-fixture/files/updater-fixture"
+        flatpak build-export "$RUNNER_TEMP/vibertemis-updater-fixture-repo" "$RUNNER_TEMP/vibertemis-updater-fixture"
+        flatpak build-bundle "$RUNNER_TEMP/vibertemis-updater-fixture-repo" "$RUNNER_TEMP/vibertemis-updater-prior.flatpak" com.artemisdesktop.ArtemisDesktopDev
+
+        # Isolated user installation; KDE is already installed system-wide.
+        # Exercise exactly the application's argv and read-only descriptor.
         export XDG_DATA_HOME="$RUNNER_TEMP/vibertemis-updater-smoke"
+        export LC_ALL=C.UTF-8
+        flatpak install --user --or-update --noninteractive --bundle /proc/self/fd/3 \
+          3<"$RUNNER_TEMP/vibertemis-updater-prior.flatpak"
+        UPDATER_PRIOR_COMMIT="$(flatpak info --user --show-commit com.artemisdesktop.ArtemisDesktopDev)"
+        test -e "$(flatpak info --user --show-location com.artemisdesktop.ArtemisDesktopDev)/files/updater-fixture"
         flatpak install --user --or-update --noninteractive --bundle /proc/self/fd/3 \
           3<"artemis-flatpak-$VERSION.flatpak"
-        flatpak info --user --show-commit com.artemisdesktop.ArtemisDesktopDev
-        # A retried completed transaction must be harmless.
-        flatpak install --user --or-update --noninteractive --bundle /proc/self/fd/3 \
-          3<"artemis-flatpak-$VERSION.flatpak"
+        UPDATER_NEW_COMMIT="$(flatpak info --user --show-commit com.artemisdesktop.ArtemisDesktopDev)"
+        test "$UPDATER_PRIOR_COMMIT" != "$UPDATER_NEW_COMMIT"
+        UPDATER_LOCATION="$(flatpak info --user --show-location com.artemisdesktop.ArtemisDesktopDev)"
+        test ! -e "$UPDATER_LOCATION/files/updater-fixture"
+
+        # Some Flatpak versions reject an identical bundle even with --or-update.
+        # Accept only that specific rejection, and prove the deployment is intact.
+        if flatpak install --user --or-update --noninteractive --bundle /proc/self/fd/3 \
+            3<"artemis-flatpak-$VERSION.flatpak" > "$RUNNER_TEMP/vibertemis-updater-repeat.log" 2>&1; then
+          :
+        else
+          cat "$RUNNER_TEMP/vibertemis-updater-repeat.log"
+          grep -q 'already installed' "$RUNNER_TEMP/vibertemis-updater-repeat.log"
+        fi
+        test "$UPDATER_NEW_COMMIT" = "$(flatpak info --user --show-commit com.artemisdesktop.ArtemisDesktopDev)"
+        echo "Verified prior-deployment upgrade and harmless duplicate installation"
 
     - name: Verify Flatpak build result
       run: |
